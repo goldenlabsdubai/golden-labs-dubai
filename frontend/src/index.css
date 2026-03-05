@@ -1,0 +1,50 @@
+/* Theme: Golden Labs – gold & deep black (gldas.png) */
+:root {
+  --bg: #050508;
+  --surface: #0a0a0c;
+  --border: rgba(212, 175, 55, 0.2);
+  --text: #f5f5f5;
+  --text-muted: #b8a854;
+  --muted: #9a8f5c;
+  --accent: #d4af37;
+  --accent-bright: #e8c547;
+  --accent-dim: #b8960c;
+  --gold-glow: rgba(212, 175, 55, 0.25);
+  --success: #34d399;
+  --error: #f87171;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: "Syne", system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+  line-height: 1.5;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+  border: none;
+  outline: none;
+}
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+input {
+  font-family: inherit;
+  outline: none;
+}

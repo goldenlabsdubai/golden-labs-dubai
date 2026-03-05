@@ -1,0 +1,22 @@
+{
+  "name": "bots",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Universal auto trading bot (botId 1..5), custodial buy/sell.",
+  "scripts": {
+    "bot": "node universal-bot.js",
+    "bot1": "node universal-bot.js 1",
+    "bot2": "node universal-bot.js 2",
+    "bot3": "node universal-bot.js 3",
+    "bot4": "node universal-bot.js 4",
+    "bot5": "node universal-bot.js 5",
+    "all": "concurrently -n bot1,bot2 -c cyan,magenta \"npm:bot1\" \"npm:bot2\""
+  },
+  "dependencies": {
+    "dotenv": "^16.3.1",
+    "ethers": "^6.9.0"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  }
+}

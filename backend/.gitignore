@@ -1,0 +1,12 @@
+node_modules
+.vite
+dist
+coverage
+.env
+.env.local
+*.log
+*.map
+firebase-service-account.json
+*-service-account*.json
+keys/*.json
+uploads/

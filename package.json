@@ -1,0 +1,26 @@
+{
+  "name": "golden-labs-nft-subscription",
+  "version": "1.0.0",
+  "private": true,
+  "description": "NFT Subscription Trading Ecosystem",
+  "scripts": {
+    "nft:ipfs": "cd scripts/nft-ipfs && npm install && npm run generate-and-upload",
+    "nft:generate": "cd scripts/nft-ipfs && npm run generate",
+    "nft:upload": "cd scripts/nft-ipfs && npm run upload",
+    "dev:backend": "cd backend && npm run dev",
+    "dev:frontend": "cd frontend && npm run dev",
+    "dev:admin": "cd admin && npm run dev",
+    "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "build:contracts": "cd blockchain && npm run compile",
+    "build:frontend": "cd frontend && npm run build",
+    "install:all": "npm install && cd blockchain && npm install && cd ../backend && npm install && cd ../frontend && npm install && cd ../admin && npm install && cd ../telegram-bot && npm install",
+    "start:backend": "cd backend && npm start",
+    "start:telegram": "cd telegram-bot && npm start"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  },
+  "dependencies": {
+    "firebase": "^12.8.0"
+  }
+}

@@ -1,0 +1,53 @@
+# Dependencies
+node_modules/
+
+# Environment – never commit secrets
+.env
+.env.local
+.env.*.local
+.env.development
+.env.production
+.env.test
+!.env.example
+
+# Build outputs
+dist/
+build/
+.vite/
+.next/
+out/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# IDE / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+Thumbs.db
+
+# Testing
+coverage/
+.nyc_output/
+
+# Keys and secrets
+keys/*.json
+*-service-account*.json
+*.pem
+*.key
+
+# Uploads / temp
+uploads/
+tmp/
+temp/
+output/
+
+# Misc
+*.wasm
+*.map
+.locks/
