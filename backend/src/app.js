@@ -5,27 +5,20 @@ import "dotenv/config";
 import path from "path";
 import express from "express";
 import cors from "cors";
-import authRoutes from "./routes/auth.js";
-import userRoutes from "./routes/user.js";
-import publicUserRoutes from "./routes/publicUser.js";
-import subscriptionRoutes from "./routes/subscription.js";
-import mintRoutes from "./routes/mint.js";
-import marketplaceRoutes, { ipfsProxyHandler } from "./routes/marketplace.js";
-import referralRoutes from "./routes/referral.js";
-import reservePoolRoutes from "./routes/reservepool.js";
-import telegramRoutes from "./routes/telegram.js";
-import topSellersRoutes from "./routes/topSellers.js";
-import adminRoutes from "./routes/admin.js";
-import botControlRoutes from "./routes/botControl.js";
-import cronRoutes from "./routes/cron.js";
-import { authMiddleware, optionalAuthMiddleware } from "./middleware/auth.js";
-import { getFirestore } from "./config/firebase.js";
+
+// Derive FRONTEND_URL, BACKEND_URL, and CORS from PLATFORM_URL when set (EC2 / no domain – set URL once)
+const platformUrl = (process.env.PLATFORM_URL || "").trim().replace(/\/$/, "");
+if (platformUrl) {
+  process.env.FRONTEND_URL = process.env.FRONTEND_URL || platformUrl;
+  process.env.BACKEND_URL = process.env.BACKEND_URL || `${platformUrl}:${process.env.PORT || 3001}`;
+}
 
 const app = express();
 
 const allowedOrigins = Array.from(
   new Set(
     [
+      process.env.PLATFORM_URL || "",
       process.env.CORS_ORIGINS || "",
       process.env.FRONTEND_URL || "",
       "http://localhost:5173",
@@ -50,6 +43,22 @@ app.use(
   })
 );
 app.use(express.json());
+
+import authRoutes from "./routes/auth.js";
+import userRoutes from "./routes/user.js";
+import publicUserRoutes from "./routes/publicUser.js";
+import subscriptionRoutes from "./routes/subscription.js";
+import mintRoutes from "./routes/mint.js";
+import marketplaceRoutes, { ipfsProxyHandler } from "./routes/marketplace.js";
+import referralRoutes from "./routes/referral.js";
+import reservePoolRoutes from "./routes/reservepool.js";
+import telegramRoutes from "./routes/telegram.js";
+import topSellersRoutes from "./routes/topSellers.js";
+import adminRoutes from "./routes/admin.js";
+import botControlRoutes from "./routes/botControl.js";
+import cronRoutes from "./routes/cron.js";
+import { authMiddleware, optionalAuthMiddleware } from "./middleware/auth.js";
+import { getFirestore } from "./config/firebase.js";
 
 const uploadsPath = path.join(process.cwd(), "uploads");
 app.use("/uploads", express.static(uploadsPath));
