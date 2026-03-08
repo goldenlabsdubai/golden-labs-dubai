@@ -10,7 +10,8 @@ import cors from "cors";
 const platformUrl = (process.env.PLATFORM_URL || "").trim().replace(/\/$/, "");
 if (platformUrl) {
   process.env.FRONTEND_URL = process.env.FRONTEND_URL || platformUrl;
-  process.env.BACKEND_URL = process.env.BACKEND_URL || `${platformUrl}:${process.env.PORT || 3001}`;
+  // Always derive BACKEND_URL from PLATFORM_URL when set so avatar/upload URLs point to this server (not localhost)
+  process.env.BACKEND_URL = `${platformUrl}:${process.env.PORT || 3001}`;
 }
 
 const app = express();
