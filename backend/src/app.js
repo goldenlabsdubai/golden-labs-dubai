@@ -21,7 +21,10 @@ const allowedOrigins = Array.from(
     [
       process.env.PLATFORM_URL || "",
       process.env.CORS_ORIGINS || "",
+      process.env.ADMIN_PANEL_ORIGIN || "",
       process.env.FRONTEND_URL || "",
+      // Admin panel on same host, port 8080 (when PLATFORM_URL is set)
+      platformUrl ? `${platformUrl}:8080` : "",
       "http://localhost:5173",
       "http://localhost:5174",
       "https://golden-labs-frontend.vercel.app",

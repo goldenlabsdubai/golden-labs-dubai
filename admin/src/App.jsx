@@ -47,7 +47,7 @@ export default function App() {
     setError("");
     (async () => {
       try {
-        const { nonce } = await (await fetch(`${API}/auth/nonce/${address}`)).json();
+        const { nonce } = await (await fetch(`${API}/auth/admin-nonce/${address}`)).json();
         const message = new SiweMessage({
           domain: window.location.host,
           address,

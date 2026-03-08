@@ -1,7 +1,7 @@
 import { Router } from "express";
 import jwt from "jsonwebtoken";
 import { SiweMessage } from "siwe";
-import { verifyIdToken } from "../config/firebase.js";
+import { verifyIdToken, getFirestore } from "../config/firebase.js";
 import * as User from "../services/userFirestore.js";
 import { syncReferrerToChain } from "../services/referralContractSync.js";
 import { isAdminWallet, isConfiguredBotWallet } from "../services/botService.js";
@@ -62,14 +62,49 @@ router.get("/check/:wallet", async (req, res) => {
   }
 });
 
-// Get nonce for SIWE. For existing users we store nonce; for new users we only return a nonce (no DB create).
+// Get nonce for SIWE. For existing users we store nonce in users collection; for new users we only return a nonce (no DB create).
 router.get("/nonce/:wallet", async (req, res) => {
   try {
-    const wallet = req.params.wallet.toLowerCase();
+    const raw = req.params.wallet;
+    if (!raw || typeof raw !== "string") {
+      return res.status(400).json({ error: "Invalid wallet" });
+    }
+    const wallet = raw.trim().toLowerCase();
+    if (!wallet.startsWith("0x") || wallet.length !== 42) {
+      return res.status(400).json({ error: "Invalid wallet" });
+    }
     const nonce = Math.random().toString(36).slice(2);
     const user = await User.getUserByWallet(wallet);
     if (user) {
       await User.updateUser(user.id, { nonce });
+    }
+    res.json({ nonce });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Get nonce for admin SIWE. Stores nonce in Firestore admins collection only (separate from user nonce).
+router.get("/admin-nonce/:wallet", async (req, res) => {
+  try {
+    const raw = req.params.wallet;
+    if (!raw || typeof raw !== "string") {
+      return res.status(400).json({ error: "Invalid wallet" });
+    }
+    const wallet = raw.trim().toLowerCase();
+    if (!wallet.startsWith("0x") || wallet.length !== 42) {
+      return res.status(400).json({ error: "Invalid wallet" });
+    }
+    if (!(await isAdminWallet(wallet))) {
+      return res.status(403).json({ error: "Not an admin wallet" });
+    }
+    const nonce = Math.random().toString(36).slice(2);
+    const db = getFirestore();
+    if (db) {
+      await db.collection("admins").doc(wallet).set(
+        { nonce, updatedAt: new Date(), wallet },
+        { merge: true }
+      );
     }
     res.json({ nonce });
   } catch (e) {
