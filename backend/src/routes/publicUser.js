@@ -3,14 +3,26 @@ import * as User from "../services/userFirestore.js";
 
 const router = Router();
 
-function avatarToAbsoluteUrl(avatar) {
+export function avatarToAbsoluteUrl(avatar) {
   if (!avatar || typeof avatar !== "string") return null;
   const trimmed = avatar.trim();
   if (!trimmed) return null;
-  if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) return trimmed;
   const base = (process.env.BACKEND_URL || `http://localhost:${process.env.PORT || 3001}`).trim();
-  const baseUrl = base.startsWith("http://") || base.startsWith("https://") ? base : `http://${base}`;
-  return `${baseUrl.replace(/\/$/, "")}${trimmed.startsWith("/") ? "" : "/"}${trimmed}`;
+  const baseUrl = base.replace(/\/$/, "");
+  // Rewrite stored localhost URLs so they work when backend is deployed (EC2, Vercel, etc.)
+  if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+    try {
+      const u = new URL(trimmed);
+      if (u.hostname === "localhost" || u.hostname === "127.0.0.1") {
+        const pathPart = u.pathname + u.search;
+        return `${baseUrl}${pathPart}`;
+      }
+      return trimmed;
+    } catch {
+      return trimmed;
+    }
+  }
+  return `${baseUrl}${trimmed.startsWith("/") ? "" : "/"}${trimmed}`;
 }
 
 /** Public profile by username – no auth. Returns limited fields. */

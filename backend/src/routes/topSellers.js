@@ -6,6 +6,7 @@
 import { Router } from "express";
 import { getTopSellers, incrementUserTrades } from "../services/userFirestore.js";
 import { authMiddleware } from "../middleware/auth.js";
+import { avatarToAbsoluteUrl } from "./publicUser.js";
 
 const router = Router();
 
@@ -15,7 +16,11 @@ router.get("/", async (req, res) => {
     res.set("Pragma", "no-cache");
     const limit = Math.min(parseInt(req.query.limit, 10) || 10, 20);
     const list = await getTopSellers(limit);
-    res.json({ topSellers: list });
+    const topSellers = list.map((u) => ({
+      ...u,
+      avatar: avatarToAbsoluteUrl(u.avatar) ?? u.avatar,
+    }));
+    res.json({ topSellers });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
