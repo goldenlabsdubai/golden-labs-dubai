@@ -7,8 +7,9 @@ export function avatarToAbsoluteUrl(avatar) {
   if (!avatar || typeof avatar !== "string") return null;
   const trimmed = avatar.trim();
   if (!trimmed) return null;
-  const base = (process.env.BACKEND_URL || `http://localhost:${process.env.PORT || 3001}`).trim();
-  const baseUrl = base.replace(/\/$/, "");
+  const base = (process.env.BACKEND_URL || "").trim();
+  if (!base) return trimmed.startsWith("http") ? trimmed : `/${trimmed.replace(/^\//, "")}`;
+  const baseUrl = (base.startsWith("http://") || base.startsWith("https://") ? base : `http://${base}`).replace(/\/$/, "");
   // Rewrite stored localhost URLs so they work when backend is deployed (EC2, Vercel, etc.)
   if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
     try {

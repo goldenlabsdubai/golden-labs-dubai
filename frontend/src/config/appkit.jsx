@@ -17,7 +17,7 @@ const projectId =
 const metadata = {
   name: "Golden Labs",
   description: "Welcome! Subscribe, mint, trade & refer with friends & family.",
-  url: typeof window !== "undefined" ? window.location.origin : "http://localhost:5173",
+  url: import.meta.env.VITE_FRONTEND_URL || (typeof window !== "undefined" ? window.location.origin : ""),
   icons: ["https://avatars.githubusercontent.com/u/179229932"],
 };
 

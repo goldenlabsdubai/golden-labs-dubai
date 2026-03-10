@@ -6,16 +6,23 @@ import path from "path";
 import express from "express";
 import cors from "cors";
 
-// Derive FRONTEND_URL, BACKEND_URL, and CORS from PLATFORM_URL when set (EC2 / no domain – set URL once)
-const platformUrl = (process.env.PLATFORM_URL || "").trim().replace(/\/$/, "");
-if (platformUrl) {
-  process.env.FRONTEND_URL = process.env.FRONTEND_URL || platformUrl;
-  // Always derive BACKEND_URL from PLATFORM_URL when set so avatar/upload URLs point to this server (not localhost)
-  process.env.BACKEND_URL = `${platformUrl}:${process.env.PORT || 3001}`;
+// Backend public URL (for avatar/upload links). On Vercel use VERCEL_URL; else PLATFORM_URL or BACKEND_URL.
+const isVercel = Boolean(process.env.VERCEL);
+if (isVercel && process.env.VERCEL_URL) {
+  process.env.BACKEND_URL = `https://${process.env.VERCEL_URL}`.replace(/\/$/, "");
+} else {
+  const platformUrl = (process.env.PLATFORM_URL || "").trim().replace(/\/$/, "");
+  if (platformUrl) {
+    process.env.FRONTEND_URL = process.env.FRONTEND_URL || platformUrl;
+    process.env.BACKEND_URL = process.env.BACKEND_URL || `${platformUrl}:${process.env.PORT || 3001}`;
+  }
 }
 
 const app = express();
 
+// CORS: on Vercel with no origins configured, allow all origins so the app works without CORS env (Hobby plan).
+// When CORS_ORIGINS / FRONTEND_URL / ADMIN_PANEL_ORIGIN are set, only those origins are allowed.
+const platformUrl = (process.env.PLATFORM_URL || "").trim().replace(/\/$/, "");
 const allowedOrigins = Array.from(
   new Set(
     [
@@ -23,11 +30,7 @@ const allowedOrigins = Array.from(
       process.env.CORS_ORIGINS || "",
       process.env.ADMIN_PANEL_ORIGIN || "",
       process.env.FRONTEND_URL || "",
-      // Admin panel on same host, port 8080 (when PLATFORM_URL is set)
       platformUrl ? `${platformUrl}:8080` : "",
-      "http://localhost:5173",
-      "http://localhost:5174",
-      "https://golden-labs-frontend.vercel.app",
     ]
       .join(",")
       .split(",")
@@ -36,9 +39,12 @@ const allowedOrigins = Array.from(
   )
 );
 
+const usePermissiveCors = isVercel && allowedOrigins.length === 0;
+
 app.use(
   cors({
     origin(origin, callback) {
+      if (usePermissiveCors) return callback(null, true);
       if (!origin) return callback(null, true);
       if (allowedOrigins.includes(origin)) return callback(null, true);
       return callback(new Error(`CORS blocked for origin: ${origin}`));

@@ -15,7 +15,7 @@ const projectId =
 const metadata = {
   name: "Golden Labs Admin",
   description: "Admin panel for Golden Labs.",
-  url: typeof window !== "undefined" ? window.location.origin : "http://localhost:5174",
+  url: import.meta.env.VITE_ADMIN_URL || (typeof window !== "undefined" ? window.location.origin : ""),
   icons: ["https://avatars.githubusercontent.com/u/179229932"],
 };
 

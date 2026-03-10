@@ -10,27 +10,28 @@ import { isAdminWallet, isConfiguredBotWallet } from "../services/botService.js"
 
 const router = Router();
 
-/** Turn avatar path from Firestore into absolute URL so frontend can load from backend. Rewrites stored localhost URLs for deployed backend. */
+/** Turn avatar path from Firestore into absolute URL so frontend can load from backend. Rewrites stored localhost URLs for deployed backend. Set BACKEND_URL in .env. */
 function avatarToAbsoluteUrl(avatar) {
   if (!avatar || typeof avatar !== "string") return null;
   const trimmed = avatar.trim();
   if (!trimmed) return null;
-  let base = (process.env.BACKEND_URL || `http://localhost:${process.env.PORT || 3001}`).trim();
-  if (!base.startsWith("http://") && !base.startsWith("https://")) base = `http://${base}`;
-  base = base.replace(/\/$/, "");
+  const base = (process.env.BACKEND_URL || "").trim();
+  if (!base) return trimmed.startsWith("http") ? trimmed : `/${trimmed.replace(/^\//, "")}`;
+  let baseUrl = base.startsWith("http://") || base.startsWith("https://") ? base : `http://${base}`;
+  baseUrl = baseUrl.replace(/\/$/, "");
   if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
     try {
       const u = new URL(trimmed);
       if (u.hostname === "localhost" || u.hostname === "127.0.0.1") {
         const pathPart = u.pathname + u.search;
-        return `${base}${pathPart}`;
+        return `${baseUrl}${pathPart}`;
       }
       return trimmed;
     } catch {
       return trimmed;
     }
   }
-  return `${base}${trimmed.startsWith("/") ? "" : "/"}${trimmed}`;
+  return `${baseUrl}${trimmed.startsWith("/") ? "" : "/"}${trimmed}`;
 }
 
 /** Same shape as GET /me – used for profile response so frontend has full user from backend/Firestore. */
@@ -311,11 +312,11 @@ router.post("/avatar-upload", (req, res, next) => {
       if (user?.avatar) deleteOldAvatarFile(user.avatar);
     }
 
-    let baseUrl = (process.env.BACKEND_URL || `http://localhost:${process.env.PORT || 3001}`).trim();
-    if (!baseUrl.startsWith("http://") && !baseUrl.startsWith("https://")) baseUrl = `http://${baseUrl}`;
-    baseUrl = baseUrl.replace(/\/$/, "");
+    let baseUrl = (process.env.BACKEND_URL || "").trim();
+    if (baseUrl && !baseUrl.startsWith("http://") && !baseUrl.startsWith("https://")) baseUrl = `http://${baseUrl}`;
+    baseUrl = (baseUrl || "").replace(/\/$/, "");
     const filename = path.basename(req.file.path);
-    const avatarUrl = `${baseUrl}/uploads/avatars/${filename}`;
+    const avatarUrl = baseUrl ? `${baseUrl}/uploads/avatars/${filename}` : `/uploads/avatars/${filename}`;
     res.json({ avatar: avatarUrl });
   } catch (e) {
     console.error("Avatar upload error:", e.message, e.stack);
