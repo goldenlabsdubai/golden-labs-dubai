@@ -3,7 +3,6 @@ import { ethers } from "ethers";
 import { getFirestore } from "../config/firebase.js";
 import { authMiddleware } from "../middleware/auth.js";
 import * as BotService from "../services/botService.js";
-import { getBotRuntimeState, startBotProcess, stopBotProcess } from "../services/botProcessService.js";
 
 const router = Router();
 const SETTINGS_COLLECTION = "admin_settings";
@@ -75,17 +74,13 @@ async function getStoredContracts() {
   return addresses && typeof addresses === "object" ? addresses : {};
 }
 
-/** GET /api/admin/bots – list bots with config, running state, and on-chain stats. */
+/** GET /api/admin/bots – list bots with config, running state (Firestore), and on-chain stats. Bot start/stop is handled in the bots project. */
 router.get("/bots", async (req, res) => {
   try {
     const config = BotService.getBotConfig();
     const runningState = await BotService.getBotRunningState();
-    const runtimeState = isStateOnlyBotControlMode()
-      ? {}
-      : await getBotRuntimeState(config.map((b) => b.id)).catch(() => ({}));
     const settled = await Promise.allSettled(config.map((bot) => BotService.getBotStats(bot.address, { skipBuffer: true })));
     const bots = config.map((bot, index) => {
-      const runtimeRunning = runtimeState[bot.id] != null ? Boolean(runtimeState[bot.id]) : undefined;
       const firestoreRunning = Boolean(runningState[bot.id]);
       const resolved = settled[index];
       const stats = resolved.status === "fulfilled" ? resolved.value : emptyBotStats();
@@ -93,7 +88,7 @@ router.get("/bots", async (req, res) => {
         id: bot.id,
         address: bot.address,
         isConfigured: Boolean(bot.address),
-        running: runtimeRunning != null ? runtimeRunning : firestoreRunning,
+        running: firestoreRunning,
         totalTrades: stats.totalTrades,
         buyTrades: stats.buyTrades,
         sellTrades: stats.sellTrades,
@@ -113,7 +108,7 @@ router.get("/bots", async (req, res) => {
   }
 });
 
-/** PATCH /api/admin/bots/:id/start – set bot running = true. */
+/** PATCH /api/admin/bots/:id/start – set bot running = true in Firestore. Bots project applies this (e.g. PM2 start) on the server. */
 router.patch("/bots/:id/start", async (req, res) => {
   try {
     const id = String(req.params.id || "").trim();
@@ -121,21 +116,14 @@ router.patch("/bots/:id/start", async (req, res) => {
     if (!config.some((b) => b.id === id)) {
       return res.status(404).json({ error: "Bot not found" });
     }
-    if (!isStateOnlyBotControlMode()) {
-      await startBotProcess(id);
-    }
     await BotService.setBotRunning(id, true);
-    if (isStateOnlyBotControlMode()) {
-      return res.json({ ok: true, running: true, mode: "state_only" });
-    }
-    const runtimeState = await getBotRuntimeState([id]).catch(() => ({ [id]: true }));
-    res.json({ ok: true, running: Boolean(runtimeState[id]), mode: "pm2" });
+    res.json({ ok: true, running: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
-/** PATCH /api/admin/bots/:id/stop – set bot running = false. */
+/** PATCH /api/admin/bots/:id/stop – set bot running = false in Firestore. Bots project applies this (e.g. PM2 stop) on the server. */
 router.patch("/bots/:id/stop", async (req, res) => {
   try {
     const id = String(req.params.id || "").trim();
@@ -143,15 +131,8 @@ router.patch("/bots/:id/stop", async (req, res) => {
     if (!config.some((b) => b.id === id)) {
       return res.status(404).json({ error: "Bot not found" });
     }
-    if (!isStateOnlyBotControlMode()) {
-      await stopBotProcess(id);
-    }
     await BotService.setBotRunning(id, false);
-    if (isStateOnlyBotControlMode()) {
-      return res.json({ ok: true, running: false, mode: "state_only" });
-    }
-    const runtimeState = await getBotRuntimeState([id]).catch(() => ({ [id]: false }));
-    res.json({ ok: true, running: Boolean(runtimeState[id]), mode: "pm2" });
+    res.json({ ok: true, running: false });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

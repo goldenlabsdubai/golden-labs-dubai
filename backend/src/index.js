@@ -1,8 +1,6 @@
 import app from "./app.js";
 import { startReferralIndexer } from "./services/referralIndexer.js";
 import { startMarketplaceActivityIndexer } from "./services/marketplaceActivityIndexer.js";
-import { getBotConfig, getBotRunningState } from "./services/botService.js";
-import { syncBotProcessesWithState } from "./services/botProcessService.js";
 
 const PORT = process.env.PORT || 3001;
 
@@ -16,14 +14,4 @@ if (!process.env.VERCEL) {
 
   startReferralIndexer();
   startMarketplaceActivityIndexer();
-
-  (async () => {
-    try {
-      const botConfig = getBotConfig();
-      const runningState = await getBotRunningState();
-      await syncBotProcessesWithState(botConfig, runningState);
-    } catch (e) {
-      console.warn("Bot process startup sync failed:", e?.message);
-    }
-  })();
 }
