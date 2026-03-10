@@ -73,10 +73,17 @@ import { getFirestore } from "./config/firebase.js";
 const uploadsPath = path.join(process.cwd(), "uploads");
 app.use("/uploads", express.static(uploadsPath));
 
-if (!getFirestore()) {
-  console.warn("Firebase/Firestore not configured. Set FIREBASE_SERVICE_ACCOUNT_PATH or FIREBASE_SERVICE_ACCOUNT_JSON in backend/.env");
-}
+// Defer Firebase check so /api/health responds fast on Vercel (no wait for Firebase init on cold start)
+setImmediate(() => {
+  if (!getFirestore()) {
+    console.warn("Firebase/Firestore not configured. Set FIREBASE_SERVICE_ACCOUNT_PATH or FIREBASE_SERVICE_ACCOUNT_JSON in backend/.env");
+  }
+});
 
+app.get("/api/health", (_, res) => res.json({ ok: true }));
+// Root (and /api for Vercel rewrite of "/" -> "/api") – so visiting base URL returns something
+app.get("/", (_, res) => res.json({ api: "goldenlabs", health: "/api/health" }));
+app.get("/api", (_, res) => res.json({ api: "goldenlabs", health: "/api/health" }));
 app.use("/api/auth", authRoutes);
 app.use("/api/user/public", publicUserRoutes);
 app.use("/api/user", authMiddleware, userRoutes);
@@ -91,7 +98,5 @@ app.use("/api/top-sellers", topSellersRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/bot-control", botControlRoutes);
 app.use("/api/cron", cronRoutes);
-
-app.get("/api/health", (_, res) => res.json({ ok: true }));
 
 export default app;

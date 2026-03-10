@@ -11,19 +11,37 @@ let app = null;
 export function getFirebaseAdmin() {
   if (app) return app;
   const pathEnv = process.env.FIREBASE_SERVICE_ACCOUNT_PATH;
-  const json = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+  const jsonEnv = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
   const storageBucket = process.env.FIREBASE_STORAGE_BUCKET || undefined;
   const options = { storageBucket };
-  if (pathEnv) {
-    const resolved = path.isAbsolute(pathEnv) ? pathEnv : path.resolve(process.cwd(), pathEnv);
-    options.credential = admin.credential.cert(resolved);
-  } else if (json) {
-    try {
-      const key = typeof json === "string" ? JSON.parse(json) : json;
+
+  const tryParseJson = (raw) => {
+    if (raw == null || raw === "") return null;
+    const s = typeof raw === "string" ? raw.trim() : String(raw);
+    if (s.startsWith("{")) {
+      try {
+        return JSON.parse(s);
+      } catch (e) {
+        console.warn("Firebase: invalid JSON in credential env", e.message);
+        return null;
+      }
+    }
+    return null;
+  };
+
+  // Prefer explicit JSON env (Vercel: set FIREBASE_SERVICE_ACCOUNT_JSON to the stringified key)
+  let key = tryParseJson(jsonEnv);
+  if (key) {
+    options.credential = admin.credential.cert(key);
+  } else if (pathEnv) {
+    const pathVal = pathEnv.trim();
+    // If PATH was set to the JSON string by mistake (e.g. on Vercel), use it as JSON
+    key = tryParseJson(pathVal);
+    if (key) {
       options.credential = admin.credential.cert(key);
-    } catch (e) {
-      console.warn("Firebase: invalid FIREBASE_SERVICE_ACCOUNT_JSON", e.message);
-      return null;
+    } else {
+      const resolved = path.isAbsolute(pathVal) ? pathVal : path.resolve(process.cwd(), pathVal);
+      options.credential = admin.credential.cert(resolved);
     }
   } else {
     console.warn("Firebase: set FIREBASE_SERVICE_ACCOUNT_PATH or FIREBASE_SERVICE_ACCOUNT_JSON in .env");
