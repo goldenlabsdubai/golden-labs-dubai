@@ -38,6 +38,7 @@ const RELIST_SCAN_BATCH_SIZE = Number(process.env.BOT_RELIST_SCAN_BATCH_SIZE || 
 const RELIST_MAX_PER_RUN = Number(process.env.BOT_RELIST_MAX_PER_RUN || 3);
 const INTER_BOT_COOLDOWN_MS = Number(process.env.BOT_INTERBOT_COOLDOWN_MS || 24 * 60 * 60 * 1000);
 const USER_LISTING_MIN_AGE_MS = Number(process.env.BOT_USER_LISTING_MIN_AGE_MS || 60 * 60 * 1000);
+const POST_APPROVE_DELAY_MS = Number(process.env.BOT_POST_APPROVE_DELAY_MS || 2000);
 const RPC_POLLING_INTERVAL_MS = Number(process.env.BOT_RPC_POLLING_INTERVAL_MS || 12000);
 const BOT_TX_GAS_GWEI = Number(process.env.BOT_TX_GAS_GWEI || 3);
 const BOT_GAS_LIMIT_APPROVE = Number(process.env.BOT_GAS_LIMIT_APPROVE || 120000);
@@ -63,6 +64,7 @@ function resolveBotId() {
 
 const marketplaceAbi = [
   "function listings(uint256) view returns (address seller, uint256 tokenId, uint256 price, bool active)",
+  "function isBotTrader(address) view returns (bool)",
   "event Listed(uint256 indexed tokenId, address indexed seller, uint256 price)",
   "event Sold(uint256 indexed tokenId, address seller, address buyer, uint256 price)",
   "event ListingCancelled(uint256 indexed tokenId)",
@@ -76,6 +78,7 @@ const nftAbi = [
 ];
 const usdtAbi = [
   "function approve(address, uint256) returns (bool)",
+  "function allowance(address owner, address spender) view returns (uint256)",
   "function balanceOf(address) view returns (uint256)",
 ];
 
@@ -143,6 +146,7 @@ async function main() {
   const usdt = new ethers.Contract(USDT_ADDR, usdtAbi, wallet);
   let queue = Promise.resolve();
   let cachedEnabled = true;
+  let botTraderEligible = null;
   let lastControlFetchAt = 0;
   let hadControlError = false;
   let wasEnabled = false;
@@ -313,6 +317,9 @@ function txOverrides(kind = "default") {
     if (sellerAddr === self) return; // never buy own listing
     if (priceBn !== PRICES.PREFERRED_BUY && priceBn !== PRICES.DEFAULT) return;
 
+    const eligible = await ensureBotTraderEligibility();
+    if (!eligible) return; // skip without logging every time; already logged at startup
+
     // User listings: wait 60 min before buying so users can trade first.
     if (!sellerIsBot) {
       let firstSeen = listingTimestamps[tokenIdStr];
@@ -364,8 +371,27 @@ function txOverrides(kind = "default") {
         return;
       }
 
+      // Re-check listing right before any tx (avoid spending gas on approve if listing is gone)
+      const listingPreApprove = await marketplace.listings(tokenId);
+      if (!listingPreApprove?.active || (listingPreApprove.seller || "").toString().toLowerCase() !== sellerAddr || BigInt((listingPreApprove.price || 0).toString()) !== priceBn) {
+        return;
+      }
+
       const approveUsdtTx = await usdt.approve(MARKETPLACE_ADDR, priceBn, txOverrides("approve"));
       await approveUsdtTx.wait();
+      if (POST_APPROVE_DELAY_MS > 0) {
+        await new Promise((r) => setTimeout(r, POST_APPROVE_DELAY_MS));
+      }
+      const allowanceNow = await usdt.allowance(wallet.address, MARKETPLACE_ADDR);
+      if (allowanceNow < priceBn) {
+        console.log(`Bot ${botId}: USDT allowance not ready after approve, skip token ${tokenIdStr}`);
+        return;
+      }
+      const listingAgain = await marketplace.listings(tokenId);
+      if (!listingAgain?.active || BigInt((listingAgain.price || 0).toString()) !== priceBn) {
+        console.log(`Bot ${botId}: listing changed or sold, skip token ${tokenIdStr}`);
+        return;
+      }
       const buyTx = await marketplace.buy(tokenId, ethers.ZeroAddress, txOverrides("buy"));
       const buyReceipt = await buyTx.wait();
       console.log(`Bot ${botId}: bought token ${tokenIdStr} (${source})`);
@@ -585,6 +611,26 @@ function txOverrides(kind = "default") {
 
   console.log(`Bot ${botId} wallet: ${wallet.address}`);
   buildKnownBotWalletSet();
+
+  async function ensureBotTraderEligibility() {
+    if (botTraderEligible !== null) return botTraderEligible;
+    try {
+      botTraderEligible = await marketplace.isBotTrader(wallet.address);
+      if (!botTraderEligible) {
+        console.error(
+          `Bot ${botId}: wallet is NOT whitelisted as bot trader. ` +
+            `Marketplace will revert with "Subscribe to buy". ` +
+            `Contract owner must call: marketplace.addBotTrader("${wallet.address}")`
+        );
+      }
+      return botTraderEligible;
+    } catch (e) {
+      console.warn(`Bot ${botId}: could not check isBotTrader`, e?.message || e);
+      return false;
+    }
+  }
+  await ensureBotTraderEligibility();
+
   await hasAnyActiveUserListing(true).catch(() => {});
   const initialEnabled = await isBotEnabled(true);
   wasEnabled = Boolean(initialEnabled);

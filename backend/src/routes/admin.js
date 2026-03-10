@@ -83,7 +83,7 @@ router.get("/bots", async (req, res) => {
     const runtimeState = isStateOnlyBotControlMode()
       ? {}
       : await getBotRuntimeState(config.map((b) => b.id)).catch(() => ({}));
-    const settled = await Promise.allSettled(config.map((bot) => BotService.getBotStats(bot.address)));
+    const settled = await Promise.allSettled(config.map((bot) => BotService.getBotStats(bot.address, { skipBuffer: true })));
     const bots = config.map((bot, index) => {
       const runtimeRunning = runtimeState[bot.id] != null ? Boolean(runtimeState[bot.id]) : undefined;
       const firestoreRunning = Boolean(runningState[bot.id]);

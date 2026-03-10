@@ -46,9 +46,6 @@ export default function BotsPage({
         usdtBalance: "0",
         bnbBalance: "0",
         totalProfit: "0",
-        bufferPending: "0",
-        bufferReceived: "0",
-        bufferStatus: "none",
         nftHoldings: 0,
         isConfigured: false,
       }
@@ -121,19 +118,10 @@ export default function BotsPage({
                       <span>BNB Balance: {formatBnb(bot.bnbBalance)} BNB</span>
                       <img src={BNB_LOGO} alt="BNB" className="token-balance__icon" />
                     </span>
-                    <div className="bot-card__profit-box">
+                    <div className="bot-card__profit-box" style={{ textAlign: "center", alignSelf: "center" }}>
                       <span className="bot-card__profit bot-card__profit-item">
                         Profit: {formatUsdt(bot.totalProfit)} USDT{" "}
                         <img src={USDT_LOGO} alt="USDT" className="token-balance__icon" />
-                      </span>
-                      <span className="bot-card__separator" aria-hidden="true" />
-                      <span className="bot-card__profit bot-card__profit-item">
-                        Buffer:{" "}
-                        {bot.bufferStatus === "pending"
-                          ? <>Pending {formatUsdt(bot.bufferPending)} USDT <img src={USDT_LOGO} alt="USDT" className="token-balance__icon" /></>
-                          : bot.bufferStatus === "received"
-                            ? <>Paid {formatUsdt(bot.bufferReceived)} USDT <img src={USDT_LOGO} alt="USDT" className="token-balance__icon" /></>
-                            : "None"}
                       </span>
                     </div>
                   </div>

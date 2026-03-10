@@ -124,8 +124,10 @@ export async function setBotRunning(botId, running) {
   return state;
 }
 
-/** Get on-chain stats for one address: balances, buy/sell counts, total trades, total profit (USDT 6 decimals). */
-export async function getBotStats(address) {
+/** Get on-chain stats for one address: balances, buy/sell counts, total trades, total profit (USDT 6 decimals).
+ * Options: { skipBuffer: true } to skip Firestore buffer read (e.g. for admin panel to avoid quota). */
+export async function getBotStats(address, options = {}) {
+  const skipBuffer = Boolean(options?.skipBuffer);
   const rpcUrl = (process.env.BOT_STATS_RPC_URL || process.env.RPC_URL || "").trim();
   const usdtAddress = process.env.USDT_ADDRESS;
   const nftAddress = process.env.NFT_CONTRACT_ADDRESS;
@@ -146,14 +148,38 @@ export async function getBotStats(address) {
   }
   const addr = address.startsWith("0x") ? address : `0x${address}`;
   const provider = getProvider(rpcUrl);
-  const cacheKey = addr.toLowerCase();
+  const cacheKey = addr.toLowerCase() + (skipBuffer ? ":nobuf" : "");
   const now = Date.now();
   const cached = botStatsCache.get(cacheKey);
   if (cached && now - cached.ts < Math.max(2000, BOT_STATS_CACHE_TTL_MS)) {
     return cached.data;
   }
 
-    const [usdtBalance, bnbBalance, nftBalance, firestoreTrades, bufferStats] = await Promise.all([
+  const bufferPromise = skipBuffer
+    ? Promise.resolve({ bufferPending: "0", bufferReceived: "0", bufferStatus: "none" })
+    : withTimeoutFallback(
+        (async () => {
+          if (!marketplaceAddress) return { bufferPending: "0", bufferReceived: "0", bufferStatus: "none" };
+          const onChain = await getBufferStatsOnChain(provider, marketplaceAddress, nftAddress, addr).catch(() => ({
+            bufferPending: "0",
+            bufferReceived: "0",
+            bufferStatus: "none",
+            bufferAmount: null,
+          }));
+          const bufferAmount = onChain.bufferAmount ?? (await fetchBufferAmount(provider, marketplaceAddress).catch(() => null));
+          const bufferReceived = bufferAmount ? (await User.getBufferReceivedFromFirestore(addr, bufferAmount)) ?? "0" : "0";
+          const status = BigInt(onChain.bufferPending) > 0n ? "pending" : BigInt(bufferReceived) > 0n ? "received" : "none";
+          return { bufferPending: onChain.bufferPending, bufferReceived, bufferStatus: status };
+        })(),
+        Math.max(5000, BOT_BUFFER_READ_TIMEOUT_MS),
+        {
+          bufferPending: cached?.data?.bufferPending ?? "0",
+          bufferReceived: cached?.data?.bufferReceived ?? "0",
+          bufferStatus: cached?.data?.bufferStatus ?? "none",
+        }
+      );
+
+  const [usdtBalance, bnbBalance, nftBalance, firestoreTrades, bufferStats] = await Promise.all([
     withTimeoutFallback(
       usdtAddress ? getUsdtBalance(provider, usdtAddress, addr) : Promise.resolve("0"),
       Math.max(1500, BOT_BALANCE_READ_TIMEOUT_MS),
@@ -174,29 +200,7 @@ export async function getBotStats(address) {
       Math.max(2000, BOT_TRADES_READ_TIMEOUT_MS),
       null
     ),
-    withTimeoutFallback(
-      (async () => {
-        if (!marketplaceAddress) return { bufferPending: "0", bufferReceived: "0", bufferStatus: "none" };
-        // Pending: always from on-chain bufferOwedFor (authoritative, no block scan)
-        const onChain = await getBufferStatsOnChain(provider, marketplaceAddress, nftAddress, addr).catch(() => ({
-          bufferPending: "0",
-          bufferReceived: "0",
-          bufferStatus: "none",
-          bufferAmount: null,
-        }));
-        const bufferAmount = onChain.bufferAmount ?? (await fetchBufferAmount(provider, marketplaceAddress).catch(() => null));
-        // Received: from Firestore purchase history (no block scan)
-        const bufferReceived = bufferAmount ? (await User.getBufferReceivedFromFirestore(addr, bufferAmount)) ?? "0" : "0";
-        const status = BigInt(onChain.bufferPending) > 0n ? "pending" : BigInt(bufferReceived) > 0n ? "received" : "none";
-        return { bufferPending: onChain.bufferPending, bufferReceived, bufferStatus: status };
-      })(),
-      Math.max(5000, BOT_BUFFER_READ_TIMEOUT_MS),
-      {
-        bufferPending: cached?.data?.bufferPending ?? "0",
-        bufferReceived: cached?.data?.bufferReceived ?? "0",
-        bufferStatus: cached?.data?.bufferStatus ?? "none",
-      }
-    ),
+    bufferPromise,
   ]);
 
   const tradesAndProfit =
