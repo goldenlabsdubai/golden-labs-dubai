@@ -125,9 +125,12 @@ export async function setBotRunning(botId, running) {
 }
 
 /** Get on-chain stats for one address: balances, buy/sell counts, total trades, total profit (USDT 6 decimals).
- * Options: { skipBuffer: true } to skip Firestore buffer read (e.g. for admin panel to avoid quota). */
+ * Options:
+ *   - skipBuffer: true – skip Firestore buffer read (e.g. admin panel).
+ *   - tradesFromChainOnly: true – skip Firestore trades; use only on-chain Sold events (e.g. admin panel to avoid quota). */
 export async function getBotStats(address, options = {}) {
   const skipBuffer = Boolean(options?.skipBuffer);
+  const tradesFromChainOnly = Boolean(options?.tradesFromChainOnly);
   const rpcUrl = (process.env.BOT_STATS_RPC_URL || process.env.RPC_URL || "").trim();
   const usdtAddress = process.env.USDT_ADDRESS;
   const nftAddress = process.env.NFT_CONTRACT_ADDRESS;
@@ -148,7 +151,7 @@ export async function getBotStats(address, options = {}) {
   }
   const addr = address.startsWith("0x") ? address : `0x${address}`;
   const provider = getProvider(rpcUrl);
-  const cacheKey = addr.toLowerCase() + (skipBuffer ? ":nobuf" : "");
+  const cacheKey = addr.toLowerCase() + (skipBuffer ? ":nobuf" : "") + (tradesFromChainOnly ? ":chain" : "");
   const now = Date.now();
   const cached = botStatsCache.get(cacheKey);
   if (cached && now - cached.ts < Math.max(2000, BOT_STATS_CACHE_TTL_MS)) {
@@ -179,6 +182,15 @@ export async function getBotStats(address, options = {}) {
         }
       );
 
+  const firestoreTradesPromise =
+    tradesFromChainOnly
+      ? Promise.resolve(null)
+      : withTimeoutFallback(
+          User.getWalletTradeStatsFromActivity(addr),
+          Math.max(2000, BOT_TRADES_READ_TIMEOUT_MS),
+          null
+        );
+
   const [usdtBalance, bnbBalance, nftBalance, firestoreTrades, bufferStats] = await Promise.all([
     withTimeoutFallback(
       usdtAddress ? getUsdtBalance(provider, usdtAddress, addr) : Promise.resolve("0"),
@@ -195,11 +207,7 @@ export async function getBotStats(address, options = {}) {
       Math.max(5000, BOT_BALANCE_READ_TIMEOUT_MS),
       cached?.data?.nftBalance ?? 0
     ),
-    withTimeoutFallback(
-      User.getWalletTradeStatsFromActivity(addr),
-      Math.max(2000, BOT_TRADES_READ_TIMEOUT_MS),
-      null
-    ),
+    firestoreTradesPromise,
     bufferPromise,
   ]);
 

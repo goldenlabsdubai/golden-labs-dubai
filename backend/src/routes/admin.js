@@ -79,7 +79,11 @@ router.get("/bots", async (req, res) => {
   try {
     const config = BotService.getBotConfig();
     const runningState = await BotService.getBotRunningState();
-    const settled = await Promise.allSettled(config.map((bot) => BotService.getBotStats(bot.address, { skipBuffer: true })));
+    const settled = await Promise.allSettled(
+      config.map((bot) =>
+        BotService.getBotStats(bot.address, { skipBuffer: true, tradesFromChainOnly: true })
+      )
+    );
     const bots = config.map((bot, index) => {
       const firestoreRunning = Boolean(runningState[bot.id]);
       const resolved = settled[index];

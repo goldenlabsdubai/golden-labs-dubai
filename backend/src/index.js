@@ -7,9 +7,9 @@ const PORT = process.env.PORT || 3001;
 // Only run server + indexers when NOT on Vercel (serverless runs api/[[...path]].js)
 if (!process.env.VERCEL) {
   console.log("Starting backend...");
-  app.listen(PORT, () => {
-    console.log("Backend running at http://localhost:%s", PORT);
-    console.log("Health: http://localhost:%s/api/health", PORT);
+  app.listen(PORT, "0.0.0.0", () => {
+    console.log("Backend listening on 0.0.0.0:%s (accepts external connections)", PORT);
+    console.log("Health: http://<this-server-ip>:%s/api/health", PORT);
   });
 
   startReferralIndexer();

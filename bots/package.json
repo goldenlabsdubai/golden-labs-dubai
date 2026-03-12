@@ -10,7 +10,10 @@
     "bot3": "node universal-bot.js 3",
     "bot4": "node universal-bot.js 4",
     "bot5": "node universal-bot.js 5",
-    "all": "concurrently -n bot1,bot2 -c cyan,magenta \"npm:bot1\" \"npm:bot2\""
+    "all": "concurrently -n bot1,bot2 -c cyan,magenta \"npm:bot1\" \"npm:bot2\"",
+    "pm2:start": "pm2 start ecosystem.config.cjs",
+    "pm2:stop": "pm2 stop bot1 bot2",
+    "pm2:logs": "pm2 logs"
   },
   "dependencies": {
     "dotenv": "^16.3.1",

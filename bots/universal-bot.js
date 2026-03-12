@@ -202,10 +202,11 @@ async function main() {
     }
   }
 
-function pairKey(a, b) {
-  const x = String(a || "").toLowerCase();
-  const y = String(b || "").toLowerCase();
-  return [x, y].sort().join("|");
+/** Direction-specific cooldown: buyer|seller so each bot has its own 24h for buying from the other. */
+function interBotCooldownKey(buyer, seller) {
+  const x = String(buyer || "").toLowerCase();
+  const y = String(seller || "").toLowerCase();
+  return `${x}|${y}`;
 }
 
 function readInterBotCooldowns() {
@@ -336,7 +337,7 @@ function txOverrides(kind = "default") {
       }
     }
     if (sellerIsBot) {
-      const cooldownKey = pairKey(self, sellerAddr);
+      const cooldownKey = interBotCooldownKey(self, sellerAddr);
       const now = Date.now();
       const blockedUntil = Number(interBotCooldowns[cooldownKey] || 0);
       if (blockedUntil > now) {
@@ -412,7 +413,7 @@ function txOverrides(kind = "default") {
       await listTx.wait();
       console.log(`Bot ${botId}: relisted token ${tokenIdStr} at $40`);
       if (sellerIsBot) {
-        const cooldownKey = pairKey(self, sellerAddr);
+        const cooldownKey = interBotCooldownKey(self, sellerAddr);
         interBotCooldowns[cooldownKey] = Date.now() + Math.max(60_000, INTER_BOT_COOLDOWN_MS);
         writeInterBotCooldowns(interBotCooldowns);
       }
@@ -429,6 +430,7 @@ function txOverrides(kind = "default") {
       if (!Number.isFinite(totalMinted) || totalMinted <= 0) return;
 
       const batchSize = Math.max(1, Math.min(ACTIVE_SCAN_BATCH_SIZE, 200));
+      const allRows = [];
       for (let start = 1; start <= totalMinted; start += batchSize) {
         const end = Math.min(totalMinted, start + batchSize - 1);
         const tokenIds = Array.from({ length: end - start + 1 }, (_, idx) => start + idx);
@@ -445,7 +447,6 @@ function txOverrides(kind = "default") {
               .catch(() => null)
           )
         );
-
         for (const row of rows) {
           if (!row?.active) continue;
           const sellerAddr = (row.seller || "").toString().toLowerCase();
@@ -457,8 +458,24 @@ function txOverrides(kind = "default") {
               writeListingTimestamps(listingTimestamps);
             }
           }
-          await tryBuyAndRelist(row.tokenId, row.seller, row.price, source);
+          allRows.push(row);
         }
+      }
+      // Prefer oldest user listings first: sort by first-seen time ascending; bot listings after.
+      allRows.sort((a, b) => {
+        const aSeller = (a.seller || "").toString().toLowerCase();
+        const bSeller = (b.seller || "").toString().toLowerCase();
+        const aUser = aSeller && !knownBotWallets.has(aSeller);
+        const bUser = bSeller && !knownBotWallets.has(bSeller);
+        const aTs = listingTimestamps[a.tokenId.toString()] ?? Infinity;
+        const bTs = listingTimestamps[b.tokenId.toString()] ?? Infinity;
+        if (aUser && bUser) return aTs - bTs;
+        if (aUser && !bUser) return -1;
+        if (!aUser && bUser) return 1;
+        return 0;
+      });
+      for (const row of allRows) {
+        await tryBuyAndRelist(row.tokenId, row.seller, row.price, source);
       }
     } catch (e) {
       console.warn(`Bot ${botId}: active-listings sweep failed`, e?.message || e);
