@@ -373,7 +373,7 @@ export default function Marketplace() {
                   {user && (
                     <div className="marketplace-page__user-summary">
                       {user.avatar ? (
-                        <img src={user.avatar} alt="" className="marketplace-page__user-avatar" />
+                        <img src={getAvatarUrl(user.avatar)} alt="" className="marketplace-page__user-avatar" />
                       ) : (
                         <span className="marketplace-page__user-avatar marketplace-page__user-avatar--placeholder">@</span>
                       )}
