@@ -644,3 +644,16 @@ export async function addOwnedTokenId(wallet, tokenId) {
     await ref.set({ ...data, ownedTokenIds: arr, lastActivity: new Date() }, { merge: true });
   }
 }
+
+/** Read ownedTokenIds array for a wallet from Firestore. Used by /marketplace/my-assets to avoid scanning 1..totalMinted. */
+export async function getOwnedTokenIds(wallet) {
+  const db = getFirestore();
+  if (!db || !wallet) return [];
+  const id = docIdWallet(wallet);
+  if (!id) return [];
+  const doc = await db.collection(COLLECTION).doc(id).get();
+  if (!doc.exists) return [];
+  const data = doc.data() || {};
+  const arr = Array.isArray(data.ownedTokenIds) ? data.ownedTokenIds : [];
+  return arr.map((x) => String(x));
+}

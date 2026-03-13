@@ -183,11 +183,15 @@ router.get("/my-listings", async (req, res) => {
     } catch (_) {
       return res.json({ listings: [] });
     }
-    if (totalMinted === 0) return res.json({ listings: [] });
+    if (!Number.isFinite(totalMinted) || totalMinted === 0) return res.json({ listings: [] });
+    const maxTokens = Math.max(
+      1,
+      Math.min(Number(process.env.MARKETPLACE_MY_ASSETS_MAX_TOKENS || 1500), totalMinted)
+    );
 
     const listings = [];
     const BATCH = 50;
-    for (let start = 1; start <= totalMinted; start += BATCH) {
+    for (let start = 1; start <= maxTokens; start += BATCH) {
       const end = Math.min(start + BATCH - 1, totalMinted);
       const promises = [];
       for (let tokenId = start; tokenId <= end; tokenId++) {
@@ -229,7 +233,7 @@ const NFT_VIEW_ABI = [
   "function tokenURI(uint256 tokenId) view returns (string)",
 ];
 
-// My assets: tokenIds you "own" = in wallet (ownerOf) OR listed by you (active listing seller). Listed still = owner (can cancel).
+// My assets: tokenIds you "own" = tracked in Firestore ownedTokenIds, enriched from on-chain listing/metadata.
 router.get("/my-assets", async (req, res) => {
   try {
     const wallet = await getWalletForRequest(req);
@@ -239,66 +243,79 @@ router.get("/my-assets", async (req, res) => {
     const nftAddr = (process.env.NFT_CONTRACT_ADDRESS || "").trim();
     if (!marketAddr || !nftAddr) return res.json({ assets: [] });
 
+    // Read owned token ids from Firestore (single doc read, no 1..totalMinted scan)
+    const ownedTokenIds = await User.getOwnedTokenIds(wallet);
+    if (!Array.isArray(ownedTokenIds) || ownedTokenIds.length === 0) {
+      return res.json({ assets: [] });
+    }
+
     const provider = getProvider();
     const nftContract = new ethers.Contract(nftAddr, NFT_VIEW_ABI, provider);
     const marketContract = new ethers.Contract(marketAddr, MARKETPLACE_ABI, provider);
 
-    let totalMinted = 0;
-    try {
-      totalMinted = Number(await nftContract.totalMinted());
-    } catch (_) {
-      return res.json({ assets: [] });
-    }
-    if (totalMinted === 0) return res.json({ assets: [] });
+    const tokens = ownedTokenIds
+      .map((t) => Number(t))
+      .filter((n) => Number.isFinite(n) && n > 0);
 
-    const BATCH = 50;
+    if (tokens.length === 0) return res.json({ assets: [] });
+
+    const BATCH = 25;
     const assets = [];
-    for (let start = 1; start <= totalMinted; start += BATCH) {
-      const end = Math.min(start + BATCH - 1, totalMinted);
-      const promises = [];
-      for (let tokenId = start; tokenId <= end; tokenId++) {
-        promises.push(
-          Promise.all([
-            readWithRetry(
-              () => nftContract.ownerOf(tokenId).then((o) => String(o || "").toLowerCase()),
-              null
-            ),
-            readWithRetry(
-              () =>
-                marketContract
-                  .listings(tokenId)
-                  .then((l) => ({ active: !!l?.[3], seller: String(l?.[0] ?? "").toLowerCase(), price: l?.[2] })),
-              { active: false, seller: "", price: null }
-            ),
-            readWithRetry(
-              () => marketContract.saleCount(tokenId).then((c) => (c != null ? Number(c) : null)),
-              null
-            ),
-            readWithRetry(() => nftContract.tokenURI(tokenId), ""),
-          ]).then(([owner, listing, saleCount, tokenURI]) => {
-            const inWallet = owner === wallet;
-            const isListedByMe = listing.active && listing.seller === wallet;
-            if (!inWallet && !isListedByMe) return null;
-            const uri = ensureMetadataUri(tokenURI, tokenId);
-            const inferredFromListing = listing.price != null ? Number(listing.price) <= 20 * 10 ** 6 : false;
-            const isFirstSale = saleCount == null ? inferredFromListing : Number(saleCount) === 0;
-            const listPriceUsdt = isFirstSale ? 20 : 40;
-            const listPriceWei = isFirstSale ? "20000000" : "40000000";
-            return {
-              tokenId: String(tokenId),
-              saleCount: saleCount == null ? undefined : saleCount,
-              listPriceUsdt,
-              listPriceWei,
-              isListed: isListedByMe,
-              price: listing.price != null ? String(listing.price) : listPriceWei,
-              tokenURI: uri,
-            };
-          })
-        );
-      }
+    for (let start = 0; start < tokens.length; start += BATCH) {
+      const slice = tokens.slice(start, start + BATCH);
+      const promises = slice.map((tokenId) =>
+        Promise.all([
+          readWithRetry(
+            () =>
+              nftContract
+                .ownerOf(tokenId)
+                .then((o) => String(o || "").toLowerCase())
+                .catch(() => ""),
+            null
+          ),
+          readWithRetry(
+            () =>
+              marketContract
+                .listings(tokenId)
+                .then((l) => ({
+                  active: !!l?.[3],
+                  seller: String(l?.[0] ?? "").toLowerCase(),
+                  price: l?.[2],
+                })),
+            { active: false, seller: "", price: null }
+          ),
+          readWithRetry(
+            () => marketContract.saleCount(tokenId).then((c) => (c != null ? Number(c) : null)),
+            null
+          ),
+          readWithRetry(() => nftContract.tokenURI(tokenId), ""),
+        ]).then(([owner, listing, saleCount, tokenURI]) => {
+          const inWallet = owner === wallet;
+          const isListedByMe = listing.active && listing.seller === wallet;
+          if (!inWallet && !isListedByMe) return null;
+          const uri = ensureMetadataUri(tokenURI, tokenId);
+          const inferredFromListing =
+            listing.price != null ? Number(listing.price) <= 20 * 10 ** 6 : false;
+          const isFirstSale = saleCount == null ? inferredFromListing : Number(saleCount) === 0;
+          const listPriceUsdt = isFirstSale ? 20 : 40;
+          const listPriceWei = isFirstSale ? "20000000" : "40000000";
+          return {
+            tokenId: String(tokenId),
+            saleCount: saleCount == null ? undefined : saleCount,
+            listPriceUsdt,
+            listPriceWei,
+            isListed: isListedByMe,
+            price: listing.price != null ? String(listing.price) : listPriceWei,
+            tokenURI: uri,
+          };
+        })
+      );
       const batch = await Promise.all(promises);
-      batch.forEach((a) => { if (a) assets.push(a); });
+      batch.forEach((a) => {
+        if (a) assets.push(a);
+      });
     }
+
     res.json({ assets });
   } catch (e) {
     console.error("my-assets error:", e?.message || e);
@@ -319,11 +336,18 @@ router.get("/my-nfts", async (req, res) => {
     const marketContract = new ethers.Contract(marketAddr, MARKETPLACE_ABI, provider);
     let totalMinted = 0;
     try { totalMinted = Number(await nftContract.totalMinted()); } catch (_) { return res.json({ nfts: [] }); }
-    if (totalMinted === 0) return res.json({ nfts: [] });
+    if (!Number.isFinite(totalMinted) || totalMinted === 0) return res.json({ nfts: [] });
+    const maxTokens = Math.max(
+      1,
+      Math.min(Number(process.env.MARKETPLACE_MY_ASSETS_MAX_TOKENS || 1500), totalMinted)
+    );
+    const timeBudgetMs = Math.max(5000, Number(process.env.MARKETPLACE_MY_ASSETS_MAX_MS || 15000));
+    const startedAt = Date.now();
     const nfts = [];
     const BATCH = Math.max(10, Math.min(Number(process.env.MARKETPLACE_MY_ASSETS_BATCH || 25), 60));
-    for (let start = 1; start <= totalMinted; start += BATCH) {
-      const end = Math.min(start + BATCH - 1, totalMinted);
+    for (let start = 1; start <= maxTokens; start += BATCH) {
+      if (Date.now() - startedAt > timeBudgetMs) break;
+      const end = Math.min(start + BATCH - 1, maxTokens);
       const promises = [];
       for (let tokenId = start; tokenId <= end; tokenId++) {
         promises.push(
