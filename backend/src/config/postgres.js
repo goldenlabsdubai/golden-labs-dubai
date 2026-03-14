@@ -25,6 +25,7 @@ export function getPool() {
     database,
     user,
     password: password || undefined,
+    ssl: process.env.PGSSL !== "false" ? { rejectUnauthorized: false } : false,
     max: 10,
     idleTimeoutMillis: 30000,
     connectionTimeoutMillis: 10000,
