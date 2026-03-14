@@ -466,55 +466,21 @@ export async function getWalletTradeStatsFromActivity(wallet, maxRows = 5000) {
   }
 }
 
-/**
- * Buffer received amount from Firestore nft_purchases (no block scan).
- * Count = times wallet sold then token was resold (wallet got BufferPaid).
- * Pending comes from on-chain bufferOwedFor, not Firestore.
- */
-export async function getBufferReceivedFromFirestore(wallet, bufferAmount) {
-  const db = getFirestore();
-  if (!db || !wallet) return null;
-  const target = (wallet || "").toLowerCase();
-  if (!target.startsWith("0x")) return null;
-  const amount = bufferAmount != null ? BigInt(bufferAmount.toString()) : 0n;
-  if (amount <= 0n) return null;
-  try {
-    const snap = await db.collection(PURCHASES_COLLECTION).limit(5000).get();
-    const purchases = snap.docs.map((d) => d.data()).filter((x) => x?.tokenId);
-    const byTokenOrdered = {};
-    purchases.forEach((x) => {
-      const tid = String(x?.tokenId ?? "").trim();
-      if (!tid) return;
-      if (!byTokenOrdered[tid]) byTokenOrdered[tid] = [];
-      const block = Number(x?.blockNumber ?? 0) || 0;
-      const ts = (x?.createdAt?.toDate?.() ?? x?.createdAt)?.getTime?.() ?? 0;
-      byTokenOrdered[tid].push({
-        seller: (x?.seller ?? "").toLowerCase(),
-        order: block || ts,
-      });
-    });
-    let receivedCount = 0;
-    Object.keys(byTokenOrdered).forEach((tid) => {
-      const list = byTokenOrdered[tid].sort((a, b) => a.order - b.order);
-      for (let i = 0; i < list.length - 1; i++) {
-        if (list[i].seller === target) receivedCount++;
-      }
-    });
-    return (BigInt(receivedCount) * amount).toString();
-  } catch (e) {
-    console.warn("getBufferReceivedFromFirestore error:", e?.message || e);
-    return null;
-  }
-}
-
-/** Get activities for a wallet, newest first. Returns successful activity only: subscription, mint, buy, sell. Failed transactions are excluded. */
-export async function getActivities(wallet, limit = 50, offset = 0) {
+/** Get recent activities for a wallet, newest first. Returns successful activity only: subscription, mint, buy, sell.
+ * Uses Firestore limit (default 10, max 20) to avoid large reads. Requires composite index: user_activities (wallet asc, createdAt desc). */
+export async function getActivities(wallet, limit = 10, offset = 0) {
   const db = getFirestore();
   if (!db || !wallet) return { activities: [], total: 0 };
   const w = (wallet || "").toLowerCase();
   if (!w) return { activities: [], total: 0 };
+  const safeLimit = Math.min(Math.max(1, Number(limit) || 10), 20);
   try {
-    const snap = await db.collection(ACTIVITIES_COLLECTION).where("wallet", "==", w).limit(500).get();
+    const q = db
+      .collection(ACTIVITIES_COLLECTION)
+      .where("wallet", "==", w)
+      .orderBy("createdAt", "desc")
+      .limit(safeLimit);
+    const snap = await q.get();
     const docs = snap.docs.map((d) => {
       const x = d.data();
       const createdAt = x.createdAt?.toDate?.() ?? x.createdAt;
@@ -531,13 +497,57 @@ export async function getActivities(wallet, limit = 50, offset = 0) {
       };
     });
     const onlySuccess = docs.filter((d) => isSuccessActivityType(d.type));
-    onlySuccess.sort((a, b) => (b._ts || 0) - (a._ts || 0));
     const total = onlySuccess.length;
-    const activities = onlySuccess.slice(offset, offset + limit).map(({ _ts, ...rest }) => rest);
+    const activities = onlySuccess.slice(Number(offset) || 0, (Number(offset) || 0) + safeLimit).map(({ _ts, ...rest }) => rest);
     return { activities, total };
   } catch (e) {
     console.warn("getActivities error:", e?.message || e);
     return { activities: [], total: 0 };
+  }
+}
+
+/** Get only activities newer than since (for prepending new activity without re-fetching all). since = ISO date string or ms.
+ * Requires composite index: user_activities (wallet asc, createdAt desc). */
+export async function getActivitiesSince(wallet, since, limit = 10) {
+  const db = getFirestore();
+  if (!db || !wallet || since == null) return { activities: [] };
+  const w = (wallet || "").toLowerCase();
+  if (!w) return { activities: [] };
+  let sinceDate;
+  if (typeof since === "number" && Number.isFinite(since)) sinceDate = new Date(since);
+  else if (typeof since === "string") sinceDate = new Date(since);
+  else return { activities: [] };
+  if (Number.isNaN(sinceDate.getTime())) return { activities: [] };
+  const safeLimit = Math.min(Math.max(1, Number(limit) || 10), 20);
+  try {
+    const { Timestamp } = await import("firebase-admin/firestore");
+    const sinceTs = Timestamp.fromDate(sinceDate);
+    const q = db
+      .collection(ACTIVITIES_COLLECTION)
+      .where("wallet", "==", w)
+      .orderBy("createdAt", "desc")
+      .endBefore(sinceTs)
+      .limit(safeLimit);
+    const snap = await q.get();
+    const docs = snap.docs.map((d) => {
+      const x = d.data();
+      const createdAt = x.createdAt?.toDate?.() ?? x.createdAt;
+      const txHashRaw = x.txHash;
+      const txHash = (typeof txHashRaw === "string" && txHashRaw.trim()) ? txHashRaw.trim() : null;
+      return {
+        id: d.id,
+        type: x.type,
+        tokenId: x.tokenId ?? null,
+        price: x.price ?? null,
+        txHash,
+        createdAt: createdAt instanceof Date ? createdAt.toISOString() : (createdAt ?? null),
+      };
+    });
+    const onlySuccess = docs.filter((d) => isSuccessActivityType(d.type));
+    return { activities: onlySuccess };
+  } catch (e) {
+    console.warn("getActivitiesSince error:", e?.message || e);
+    return { activities: [] };
   }
 }
 

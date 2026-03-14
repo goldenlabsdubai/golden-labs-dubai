@@ -37,9 +37,6 @@ function emptyBotStats() {
     bnbBalance: "0",
     totalProfit: "0",
     nftBalance: 0,
-    bufferPending: "0",
-    bufferReceived: "0",
-    bufferStatus: "none",
   };
 }
 
@@ -81,7 +78,7 @@ router.get("/bots", async (req, res) => {
     const runningState = await BotService.getBotRunningState();
     const settled = await Promise.allSettled(
       config.map((bot) =>
-        BotService.getBotStats(bot.address, { skipBuffer: true, tradesFromChainOnly: true })
+        BotService.getBotStats(bot.address, { tradesFromChainOnly: true })
       )
     );
     const bots = config.map((bot, index) => {
@@ -99,9 +96,6 @@ router.get("/bots", async (req, res) => {
         usdtBalance: stats.usdtBalance,
         bnbBalance: stats.bnbBalance,
         totalProfit: stats.totalProfit,
-        bufferPending: stats.bufferPending,
-        bufferReceived: stats.bufferReceived,
-        bufferStatus: stats.bufferStatus,
         nftHoldings: stats.nftBalance,
         statsError: resolved.status === "rejected" ? (resolved.reason?.message || "Stats unavailable") : "",
       };

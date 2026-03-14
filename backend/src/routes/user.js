@@ -113,7 +113,12 @@ router.get("/activity", async (req, res) => {
     if (!user) return res.status(404).json({ error: "User not found" });
     const wallet = (user.wallet || req.wallet || "").toLowerCase();
     if (!wallet) return res.status(400).json({ error: "Wallet required" });
-    const limit = Math.min(Math.max(1, parseInt(req.query.limit, 10) || 10), 100);
+    const since = req.query.since != null ? req.query.since : null;
+    if (since !== null && since !== "") {
+      const { activities } = await User.getActivitiesSince(wallet, since, 10);
+      return res.json({ activities, total: null });
+    }
+    const limit = Math.min(Math.max(1, parseInt(req.query.limit, 10) || 10), 20);
     const offset = Math.max(0, parseInt(req.query.offset, 10) || 0);
     const { activities, total } = await User.getActivities(wallet, limit, offset);
     res.json({ activities, total });
@@ -141,7 +146,6 @@ router.get("/me", async (req, res) => {
       // Status is always read on-chain from Subscription contract using (connected) wallet address
       const { hasSubscribed, isSuspended, hasMinted, buyCount, subscriptionKnown, mintKnown } =
         await getOnChainUserStatus(walletForChain);
-      const tradeCountFromActivity = await User.getTradeCountFromActivity(wallet);
       const updates = {};
       const early = ["CONNECTED", "REGISTERED", "PROFILE_SET"];
       const later = ["SUBSCRIBED", "MINTED", "ACTIVE_TRADER", "SUSPENDED"];
@@ -167,7 +171,7 @@ router.get("/me", async (req, res) => {
         updates.state = "ACTIVE_TRADER";
       }
       const currentTrades = user.totalTrades ?? 0;
-      const maxTrades = Math.max(buyCount, currentTrades, tradeCountFromActivity);
+      const maxTrades = Math.max(buyCount, currentTrades);
       if (maxTrades > currentTrades) updates.totalTrades = maxTrades;
       if (Object.keys(updates).length > 0) {
         updates.lastActivity = new Date();

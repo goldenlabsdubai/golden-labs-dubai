@@ -71,8 +71,8 @@ export default function Dashboard() {
   const [insufficientBalanceType, setInsufficientBalanceType] = useState(null);
   const [activities, setActivities] = useState([]);
   const [activityTotal, setActivityTotal] = useState(0);
-  const [activityPage, setActivityPage] = useState(1);
   const [loadingActivities, setLoadingActivities] = useState(false);
+  const activitiesRef = useRef([]);
   const menuRef = useRef(null);
   const cardMenuRef = useRef(null);
   const publicClient = usePublicClient();
@@ -135,22 +135,34 @@ export default function Dashboard() {
   }, [token]);
 
   const ACTIVITY_PAGE_SIZE = 10;
-  const fetchActivities = (page = 1) => {
+  const fetchActivities = () => {
     if (!token) return;
     setLoadingActivities(true);
-    const offset = (page - 1) * ACTIVITY_PAGE_SIZE;
-    fetch(`${API}/user/activity?limit=${ACTIVITY_PAGE_SIZE}&offset=${offset}`, { headers: { Authorization: `Bearer ${token}` } })
+    fetch(`${API}/user/activity?limit=${ACTIVITY_PAGE_SIZE}&offset=0`, { headers: { Authorization: `Bearer ${token}` } })
       .then((r) => r.json())
       .then((d) => {
         setActivities(d.activities || []);
-        setActivityTotal(d.total ?? 0);
+        setActivityTotal(d.total ?? (d.activities?.length ?? 0));
       })
       .catch(() => { setActivities([]); setActivityTotal(0); })
       .finally(() => setLoadingActivities(false));
   };
+  const fetchNewActivitiesOnly = (since) => {
+    if (!token || since == null) return;
+    fetch(`${API}/user/activity?since=${encodeURIComponent(since)}`, { headers: { Authorization: `Bearer ${token}` } })
+      .then((r) => r.json())
+      .then((d) => {
+        const newOnes = d.activities || [];
+        if (newOnes.length > 0) setActivities((prev) => [...newOnes, ...prev].slice(0, ACTIVITY_PAGE_SIZE));
+      })
+      .catch(() => {});
+  };
   useEffect(() => {
-    if (token && activeTab === "Activity") fetchActivities(activityPage);
-  }, [token, activeTab, activityPage]);
+    activitiesRef.current = activities;
+  }, [activities]);
+  useEffect(() => {
+    if (token && activeTab === "Activity") fetchActivities();
+  }, [token, activeTab]);
 
   const refetchData = () => {
     if (!token) return;
@@ -168,6 +180,15 @@ export default function Dashboard() {
   const refetchDataRef = useRef(refetchData);
   refetchDataRef.current = refetchData;
 
+  const refetchActivityIfOnTab = () => {
+    if (activeTab !== "Activity") return;
+    const first = activitiesRef.current[0]?.createdAt;
+    if (first) fetchNewActivitiesOnly(first);
+    else fetchActivities();
+  };
+  const refetchActivityIfOnTabRef = useRef(refetchActivityIfOnTab);
+  refetchActivityIfOnTabRef.current = refetchActivityIfOnTab;
+
   // Live updates: refetch when anyone lists, buys, or cancels on-chain
   useWatchContractEvent({
     address: marketplaceAddressNormalized || undefined,
@@ -179,7 +200,10 @@ export default function Dashboard() {
     address: marketplaceAddressNormalized || undefined,
     abi: MARKETPLACE_ABI,
     eventName: "Sold",
-    onLogs: () => refetchDataRef.current?.(),
+    onLogs: () => {
+      refetchDataRef.current?.();
+      refetchActivityIfOnTabRef.current?.();
+    },
   });
   useWatchContractEvent({
     address: marketplaceAddressNormalized || undefined,
@@ -544,7 +568,7 @@ export default function Dashboard() {
                   <>
                     <div className="profile-hub__activity-wrap">
                       <p className="profile-hub__activity-heading">
-                        Recent activity ({Math.min((activityPage - 1) * ACTIVITY_PAGE_SIZE + 1, activityTotal)}–{Math.min(activityPage * ACTIVITY_PAGE_SIZE, activityTotal)} of {activityTotal})
+                        Recent activity ({activities.length} of {activityTotal > 0 ? activityTotal : activities.length})
                       </p>
                       <div className="profile-hub__activity-table-wrap">
                         <table className="profile-hub__activity-table">
@@ -613,29 +637,6 @@ export default function Dashboard() {
                         </table>
                       </div>
                     </div>
-                    {activityTotal > ACTIVITY_PAGE_SIZE && (
-                      <div className="profile-hub__activity-pagination">
-                        <button
-                          type="button"
-                          className="profile-hub__activity-page-btn"
-                          disabled={activityPage <= 1 || loadingActivities}
-                          onClick={() => setActivityPage((p) => Math.max(1, p - 1))}
-                        >
-                          Previous
-                        </button>
-                        <span className="profile-hub__activity-page-info">
-                          {Math.min((activityPage - 1) * ACTIVITY_PAGE_SIZE + 1, activityTotal)}–{Math.min(activityPage * ACTIVITY_PAGE_SIZE, activityTotal)} of {activityTotal}
-                        </span>
-                        <button
-                          type="button"
-                          className="profile-hub__activity-page-btn"
-                          disabled={activityPage * ACTIVITY_PAGE_SIZE >= activityTotal || loadingActivities}
-                          onClick={() => setActivityPage((p) => p + 1)}
-                        >
-                          Next
-                        </button>
-                      </div>
-                    )}
                   </>
                 )}
               </div>

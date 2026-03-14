@@ -15,8 +15,6 @@ const ADMINS_COLLECTION = "admins";
 const BOT_STATS_CACHE_TTL_MS = Number(process.env.BOT_STATS_CACHE_TTL_MS || 20000);
 const BOT_BALANCE_READ_TIMEOUT_MS = Number(process.env.BOT_BALANCE_READ_TIMEOUT_MS || 12000);
 const BOT_TRADES_READ_TIMEOUT_MS = Number(process.env.BOT_TRADES_READ_TIMEOUT_MS || 8000);
-const BOT_BUFFER_READ_TIMEOUT_MS = Number(process.env.BOT_BUFFER_READ_TIMEOUT_MS || 18000);
-const BOT_BUFFER_SCAN_BATCH = Number(process.env.BOT_BUFFER_SCAN_BATCH || 40);
 const SELLER_PROFIT_BPS = 120n;
 const SELLER_BASE_DIVISOR = 2n;
 const providerByRpc = new Map();
@@ -126,10 +124,8 @@ export async function setBotRunning(botId, running) {
 
 /** Get on-chain stats for one address: balances, buy/sell counts, total trades, total profit (USDT 6 decimals).
  * Options:
- *   - skipBuffer: true – skip Firestore buffer read (e.g. admin panel).
  *   - tradesFromChainOnly: true – skip Firestore trades; use only on-chain Sold events (e.g. admin panel to avoid quota). */
 export async function getBotStats(address, options = {}) {
-  const skipBuffer = Boolean(options?.skipBuffer);
   const tradesFromChainOnly = Boolean(options?.tradesFromChainOnly);
   const rpcUrl = (process.env.BOT_STATS_RPC_URL || process.env.RPC_URL || "").trim();
   const usdtAddress = process.env.USDT_ADDRESS;
@@ -144,43 +140,16 @@ export async function getBotStats(address, options = {}) {
       buyTrades: 0,
       sellTrades: 0,
       totalProfit: "0",
-      bufferPending: "0",
-      bufferReceived: "0",
-      bufferStatus: "none",
     };
   }
   const addr = address.startsWith("0x") ? address : `0x${address}`;
   const provider = getProvider(rpcUrl);
-  const cacheKey = addr.toLowerCase() + (skipBuffer ? ":nobuf" : "") + (tradesFromChainOnly ? ":chain" : "");
+  const cacheKey = addr.toLowerCase() + (tradesFromChainOnly ? ":chain" : "");
   const now = Date.now();
   const cached = botStatsCache.get(cacheKey);
   if (cached && now - cached.ts < Math.max(2000, BOT_STATS_CACHE_TTL_MS)) {
     return cached.data;
   }
-
-  const bufferPromise = skipBuffer
-    ? Promise.resolve({ bufferPending: "0", bufferReceived: "0", bufferStatus: "none" })
-    : withTimeoutFallback(
-        (async () => {
-          if (!marketplaceAddress) return { bufferPending: "0", bufferReceived: "0", bufferStatus: "none" };
-          const onChain = await getBufferStatsOnChain(provider, marketplaceAddress, nftAddress, addr).catch(() => ({
-            bufferPending: "0",
-            bufferReceived: "0",
-            bufferStatus: "none",
-            bufferAmount: null,
-          }));
-          const bufferAmount = onChain.bufferAmount ?? (await fetchBufferAmount(provider, marketplaceAddress).catch(() => null));
-          const bufferReceived = bufferAmount ? (await User.getBufferReceivedFromFirestore(addr, bufferAmount)) ?? "0" : "0";
-          const status = BigInt(onChain.bufferPending) > 0n ? "pending" : BigInt(bufferReceived) > 0n ? "received" : "none";
-          return { bufferPending: onChain.bufferPending, bufferReceived, bufferStatus: status };
-        })(),
-        Math.max(5000, BOT_BUFFER_READ_TIMEOUT_MS),
-        {
-          bufferPending: cached?.data?.bufferPending ?? "0",
-          bufferReceived: cached?.data?.bufferReceived ?? "0",
-          bufferStatus: cached?.data?.bufferStatus ?? "none",
-        }
-      );
 
   const firestoreTradesPromise =
     tradesFromChainOnly
@@ -191,7 +160,7 @@ export async function getBotStats(address, options = {}) {
           null
         );
 
-  const [usdtBalance, bnbBalance, nftBalance, firestoreTrades, bufferStats] = await Promise.all([
+  const [usdtBalance, bnbBalance, nftBalance, firestoreTrades] = await Promise.all([
     withTimeoutFallback(
       usdtAddress ? getUsdtBalance(provider, usdtAddress, addr) : Promise.resolve("0"),
       Math.max(1500, BOT_BALANCE_READ_TIMEOUT_MS),
@@ -208,7 +177,6 @@ export async function getBotStats(address, options = {}) {
       cached?.data?.nftBalance ?? 0
     ),
     firestoreTradesPromise,
-    bufferPromise,
   ]);
 
   const tradesAndProfit =
@@ -239,68 +207,9 @@ export async function getBotStats(address, options = {}) {
     buyTrades: tradesAndProfit.buyTrades,
     sellTrades: tradesAndProfit.sellTrades,
     totalProfit: tradesAndProfit.totalProfit,
-    bufferPending: bufferStats?.bufferPending ?? "0",
-    bufferReceived: bufferStats?.bufferReceived ?? "0",
-    bufferStatus: bufferStats?.bufferStatus ?? "none",
   };
   botStatsCache.set(cacheKey, { ts: now, data });
   return data;
-}
-
-async function fetchBufferAmount(provider, marketplaceAddress) {
-  try {
-    const m = new ethers.Contract(marketplaceAddress, ["function BUFFER_AMOUNT() view returns (uint256)"], provider);
-    const v = await withRpcRetry(() => m.BUFFER_AMOUNT());
-    return v != null ? v.toString() : null;
-  } catch (_) {
-    return null;
-  }
-}
-
-/** On-chain pending buffer from bufferOwedFor (authoritative, no eth_getLogs). */
-async function getBufferStatsOnChain(provider, marketplaceAddress, nftAddress, account) {
-  const fallback = { bufferPending: "0", bufferReceived: "0", bufferStatus: "none", bufferAmount: null };
-  try {
-    const marketplace = new ethers.Contract(
-      marketplaceAddress,
-      ["function bufferOwedFor(uint256) view returns (address)", "function BUFFER_AMOUNT() view returns (uint256)"],
-      provider
-    );
-    const target = (account || "").toLowerCase();
-    if (!target || !target.startsWith("0x")) return fallback;
-    const bufferAmount = BigInt((await withRpcRetry(() => marketplace.BUFFER_AMOUNT())).toString());
-    let maxTokenId = Number(process.env.MARKETPLACE_MAX_TOKEN_ID || 500);
-    if (nftAddress) {
-      try {
-        const nft = new ethers.Contract(nftAddress, ["function totalMinted() view returns (uint256)"], provider);
-        const minted = await withRpcRetry(() => nft.totalMinted());
-        const n = Number(minted ?? 0);
-        if (Number.isFinite(n) && n > 0) maxTokenId = Math.min(n + 10, 10000);
-      } catch (_) {}
-    }
-    maxTokenId = Math.max(1, Math.min(maxTokenId, 10000));
-    const safeBatch = Math.max(10, Math.min(BOT_BUFFER_SCAN_BATCH, 100));
-    let pendingCount = 0n;
-    for (let start = 1; start <= maxTokenId; start += safeBatch) {
-      const end = Math.min(start + safeBatch - 1, maxTokenId);
-      const rows = await Promise.all(
-        Array.from({ length: end - start + 1 }, (_, i) => start + i).map((tokenId) =>
-          withRpcRetry(() => marketplace.bufferOwedFor(tokenId))
-            .then((x) => String(x || "").toLowerCase())
-            .catch(() => "")
-        )
-      );
-      for (const addr of rows) {
-        if (addr === target) pendingCount += 1n;
-      }
-    }
-    const bufferPending = (pendingCount * bufferAmount).toString();
-    const status = BigInt(bufferPending) > 0n ? "pending" : "none";
-    return { bufferPending, bufferReceived: "0", bufferStatus: status, bufferAmount: bufferAmount.toString() };
-  } catch (err) {
-    console.warn("getBufferStatsOnChain error:", err?.message);
-    return fallback;
-  }
 }
 
 async function getUsdtBalance(provider, usdtAddress, account) {

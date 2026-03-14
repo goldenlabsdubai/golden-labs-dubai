@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { ethers } from "ethers";
 import * as User from "../services/userFirestore.js";
+import { getListingBlocksMap } from "../services/marketplaceActivityIndexer.js";
 
 const router = Router();
 let listingsCache = [];
@@ -133,6 +134,11 @@ router.get("/listings", async (_, res) => {
         if (r) listings.push({ tokenId: r.tokenId, seller: String(r.seller), price: r.price, priceFormatted: (Number(r.price) / 1e6).toFixed(0) + " USDT", tokenURI: r.tokenURI || "" });
       });
     }
+    const listingBlocks = await getListingBlocksMap().catch(() => ({}));
+    listings.forEach((l) => {
+      const entry = listingBlocks[String(l.tokenId)];
+      l.listedAt = entry?.timestamp != null ? Number(entry.timestamp) : 0;
+    });
     // Resolve seller names (username/name) for "Owned by" display
     const uniqueSellers = [...new Set(listings.map((l) => (l.seller || "").toLowerCase()))].filter(Boolean);
     const sellerMap = {};

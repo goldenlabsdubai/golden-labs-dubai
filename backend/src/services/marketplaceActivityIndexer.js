@@ -4,10 +4,12 @@ import * as User from "./userFirestore.js";
 
 const ABI = [
   "event Sold(uint256 indexed tokenId, address seller, address buyer, uint256 price)",
+  "event Listed(uint256 indexed tokenId, address seller, uint256 price)",
 ];
 
 const META_COLLECTION = "meta";
 const META_DOC = "marketplaceActivityIndexer";
+const LISTING_BLOCKS_DOC = "marketplace_listing_blocks";
 const PROCESSED_COLLECTION = "marketplace_processed_sales";
 const MAX_BLOCKS_PER_QUERY = 10; // Free-tier safe for eth_getLogs
 const POLL_INTERVAL_MS = Number(process.env.MARKETPLACE_INDEXER_POLL_INTERVAL_MS || 20000);
@@ -26,6 +28,26 @@ async function setLastProcessedBlock(block) {
   const db = getFirestore();
   if (!db) return;
   await db.collection(META_COLLECTION).doc(META_DOC).set({ lastProcessedBlock: block }, { merge: true });
+}
+
+/** Read current listing blocks map from Firestore. */
+async function getListingBlocksDoc(db) {
+  if (!db) return {};
+  const snap = await db.collection(META_COLLECTION).doc(LISTING_BLOCKS_DOC).get();
+  const data = snap.exists ? snap.data() : {};
+  return data.byTokenId && typeof data.byTokenId === "object" ? data.byTokenId : {};
+}
+
+/** Public: get tokenId -> { blockNumber, timestamp } for marketplace sort. */
+export async function getListingBlocksMap() {
+  const db = getFirestore();
+  return getListingBlocksDoc(db);
+}
+
+/** Write merged listing blocks map (byTokenId). */
+async function setListingBlocksDoc(db, byTokenId) {
+  if (!db) return;
+  await db.collection(META_COLLECTION).doc(LISTING_BLOCKS_DOC).set({ byTokenId }, { merge: true });
 }
 
 function getStartBlock(latest) {
@@ -112,6 +134,7 @@ export function startMarketplaceActivityIndexer() {
 
 /** Shared poll logic – used by startMarketplaceActivityIndexer and runMarketplaceActivityIndexerOnce (Vercel cron). */
 async function runMarketplaceActivityIndexerPoll(provider, contract) {
+  const db = getFirestore();
   let lastBlock = await getLastProcessedBlock();
   const latest = await provider.getBlockNumber();
   if (lastBlock == null) {
@@ -119,7 +142,7 @@ async function runMarketplaceActivityIndexerPoll(provider, contract) {
     await setLastProcessedBlock(lastBlock);
   }
   if (latest <= lastBlock) return;
-  const queryWithRetry = async (fromBlock, toBlock, retries = 3) => {
+  const querySoldWithRetry = async (fromBlock, toBlock, retries = 3) => {
     for (let i = 0; i < retries; i++) {
       try {
         return await contract.queryFilter(contract.filters.Sold(), fromBlock, toBlock);
@@ -133,13 +156,31 @@ async function runMarketplaceActivityIndexerPoll(provider, contract) {
     }
     return [];
   };
+  const queryListedWithRetry = async (fromBlock, toBlock, retries = 3) => {
+    for (let i = 0; i < retries; i++) {
+      try {
+        return await contract.queryFilter(contract.filters.Listed(), fromBlock, toBlock);
+      } catch (e) {
+        if (isRateLimitError(e) && i < retries - 1) {
+          await new Promise((r) => setTimeout(r, 2000 * (i + 1)));
+          continue;
+        }
+        throw e;
+      }
+    }
+    return [];
+  };
+  let listingBlocks = db ? await getListingBlocksDoc(db) : {};
   let fromBlock = lastBlock + 1;
   const toBlock = latest;
   let processedUpTo = lastBlock;
   while (fromBlock <= toBlock) {
     const chunkTo = Math.min(fromBlock + MAX_BLOCKS_PER_QUERY - 1, toBlock);
-    const events = await queryWithRetry(fromBlock, chunkTo);
-    for (const evt of events) {
+    const [soldEvents, listedEvents] = await Promise.all([
+      querySoldWithRetry(fromBlock, chunkTo),
+      queryListedWithRetry(fromBlock, chunkTo),
+    ]);
+    for (const evt of soldEvents) {
       const tokenId = evt.args?.tokenId;
       const seller = evt.args?.seller ? String(evt.args.seller).toLowerCase() : "";
       const buyer = evt.args?.buyer ? String(evt.args.buyer).toLowerCase() : "";
@@ -163,9 +204,32 @@ async function runMarketplaceActivityIndexerPoll(provider, contract) {
       });
       await markProcessed(id, payload);
     }
+    if (db && listedEvents.length > 0) {
+      const uniqueBlocks = [...new Set(listedEvents.map((e) => e.blockNumber))];
+      const blockTs = {};
+      for (const b of uniqueBlocks) {
+        try {
+          const block = await provider.getBlock(b);
+          blockTs[b] = block?.timestamp != null ? Number(block.timestamp) * 1000 : 0;
+        } catch (_) {
+          blockTs[b] = 0;
+        }
+      }
+      for (const evt of listedEvents) {
+        const tokenId = evt.args?.tokenId != null ? String(evt.args.tokenId) : null;
+        if (!tokenId) continue;
+        const blockNumber = Number(evt.blockNumber ?? 0);
+        const existing = listingBlocks[tokenId];
+        if (existing && existing.blockNumber >= blockNumber) continue;
+        listingBlocks[tokenId] = { blockNumber, timestamp: blockTs[blockNumber] ?? 0 };
+      }
+    }
     processedUpTo = chunkTo;
     fromBlock = chunkTo + 1;
     if (fromBlock <= toBlock) await new Promise((r) => setTimeout(r, CHUNK_DELAY_MS));
+  }
+  if (db && Object.keys(listingBlocks).length > 0) {
+    await setListingBlocksDoc(db, listingBlocks);
   }
   await setLastProcessedBlock(processedUpTo);
 }

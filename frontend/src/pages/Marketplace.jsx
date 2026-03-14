@@ -67,7 +67,6 @@ export default function Marketplace() {
   const { writeContractAsync } = useWriteContract();
   const listingsReqIdRef = useRef(0);
   const assetsReqIdRef = useRef(0);
-  const listingFirstSeenRef = useRef({});
 
   const marketplaceAddress = (import.meta.env.VITE_MARKETPLACE_CONTRACT || "").trim();
   const marketplaceAddressNormalized = marketplaceAddress?.startsWith("0x") ? marketplaceAddress : marketplaceAddress ? `0x${marketplaceAddress}` : "";
@@ -94,15 +93,6 @@ export default function Marketplace() {
       .then((r) => r.json())
       .then((d) => {
         const incoming = d.listings || [];
-        const now = Date.now();
-        const map = listingFirstSeenRef.current || {};
-        incoming.forEach((l) => {
-          const id = String(l.tokenId);
-          if (map[id] == null) {
-            map[id] = now;
-          }
-        });
-        listingFirstSeenRef.current = map;
         if (reqId === listingsReqIdRef.current) setListings(incoming);
       })
       .catch(() => {});
@@ -307,14 +297,25 @@ export default function Marketplace() {
   const filteredListings = listings;
 
   const sortedListings = [...filteredListings].sort((a, b) => {
-    if (sortBy === "Price: Low to High") return Number(a.price || 0) - Number(b.price || 0);
-    if (sortBy === "Price: High to Low") return Number(b.price || 0) - Number(a.price || 0);
-    const tsMap = listingFirstSeenRef.current || {};
-    const aTs = tsMap[String(a.tokenId)] ?? 0;
-    const bTs = tsMap[String(b.tokenId)] ?? 0;
-    if (sortBy === "Oldest Listed") return aTs - bTs;
-    if (sortBy === "Recently Listed") return bTs - aTs;
-    return Number(b.tokenId || 0) - Number(a.tokenId || 0);
+    const aPrice = Number(a.price || 0);
+    const bPrice = Number(b.price || 0);
+    const aListedAt = Number(a.listedAt ?? 0);
+    const bListedAt = Number(b.listedAt ?? 0);
+    const aId = Number(a.tokenId || 0);
+    const bId = Number(b.tokenId || 0);
+    const byListedOldestFirst = aListedAt !== bListedAt ? aListedAt - bListedAt : aId - bId;
+    const byListedNewestFirst = aListedAt !== bListedAt ? bListedAt - aListedAt : aId - bId;
+    if (sortBy === "Price: Low to High") {
+      if (aPrice !== bPrice) return aPrice - bPrice;
+      return byListedOldestFirst;
+    }
+    if (sortBy === "Price: High to Low") {
+      if (aPrice !== bPrice) return bPrice - aPrice;
+      return byListedOldestFirst;
+    }
+    if (sortBy === "Oldest Listed") return byListedOldestFirst;
+    if (sortBy === "Recently Listed") return byListedNewestFirst;
+    return byListedOldestFirst;
   });
 
   useEffect(() => {
