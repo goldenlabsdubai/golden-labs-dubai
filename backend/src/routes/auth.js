@@ -2,7 +2,8 @@ import { Router } from "express";
 import jwt from "jsonwebtoken";
 import { SiweMessage } from "siwe";
 import { verifyIdToken, getFirestore } from "../config/firebase.js";
-import * as User from "../services/userFirestore.js";
+import * as AdminPg from "../services/adminPostgres.js";
+import * as User from "../services/user.js";
 import { syncReferrerToChain } from "../services/referralContractSync.js";
 import { isAdminWallet, isConfiguredBotWallet } from "../services/botService.js";
 
@@ -99,12 +100,16 @@ router.get("/admin-nonce/:wallet", async (req, res) => {
       return res.status(403).json({ error: "Not an admin wallet" });
     }
     const nonce = Math.random().toString(36).slice(2);
-    const db = getFirestore();
-    if (db) {
-      await db.collection("admins").doc(wallet).set(
-        { nonce, updatedAt: new Date(), wallet },
-        { merge: true }
-      );
+    try {
+      await AdminPg.setAdminNoncePg(wallet, nonce);
+    } catch (_) {
+      const db = getFirestore();
+      if (db) {
+        await db.collection("admins").doc(wallet).set(
+          { nonce, updatedAt: new Date(), wallet },
+          { merge: true }
+        );
+      }
     }
     res.json({ nonce });
   } catch (e) {

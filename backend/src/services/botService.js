@@ -7,7 +7,8 @@
  */
 import { ethers } from "ethers";
 import { getFirestore } from "../config/firebase.js";
-import * as User from "./userFirestore.js";
+import * as User from "./user.js";
+import * as AdminPg from "./adminPostgres.js";
 
 const BOT_CONTROL_COLLECTION = "bot_control";
 const BOT_STATE_DOC = "bots";
@@ -95,8 +96,14 @@ export function isConfiguredBotWallet(wallet) {
   return getBotConfig().some((b) => (b.address || "").toLowerCase() === w);
 }
 
-/** Get running state for all bots from Firestore. Returns { "1": true, "2": false, ... }. */
+/** Get running state for all bots. Prefers PostgreSQL, else Firestore. */
 export async function getBotRunningState() {
+  try {
+    const fromPg = await AdminPg.getBotRunningStatePg();
+    if (fromPg !== null) return fromPg;
+  } catch (e) {
+    console.warn("botService getBotRunningState PG:", e?.message);
+  }
   const db = getFirestore();
   if (!db) return {};
   try {
@@ -109,12 +116,18 @@ export async function getBotRunningState() {
   }
 }
 
-/** Set running state for one bot. */
+/** Set running state for one bot. Prefers PostgreSQL, else Firestore. */
 export async function setBotRunning(botId, running) {
-  const db = getFirestore();
-  if (!db) throw new Error("Firestore not configured");
   const state = await getBotRunningState();
   state[String(botId)] = Boolean(running);
+  try {
+    await AdminPg.setBotRunningStatePg(state);
+    return state;
+  } catch (e) {
+    console.warn("botService setBotRunning PG:", e?.message);
+  }
+  const db = getFirestore();
+  if (!db) throw new Error("Database not configured (set PGHOST or Firebase)");
   await db.collection(BOT_CONTROL_COLLECTION).doc(BOT_STATE_DOC).set(
     { runningByBotId: state, updatedAt: new Date() },
     { merge: true }

@@ -1,5 +1,5 @@
 import jwt from "jsonwebtoken";
-import * as User from "../services/userFirestore.js";
+import * as User from "../services/user.js";
 
 const JWT_SECRET = process.env.JWT_SECRET || "dev-secret-change-in-production";
 

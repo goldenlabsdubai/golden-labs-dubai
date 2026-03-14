@@ -1,6 +1,7 @@
 import { ethers } from "ethers";
 import { getFirestore } from "../config/firebase.js";
-import * as User from "./userFirestore.js";
+import * as User from "./user.js";
+import * as MetaPg from "./metaPostgres.js";
 
 const ABI = [
   "event ReferralPaid(address indexed referrer, uint256 level, uint256 amount)"
@@ -13,6 +14,10 @@ const POLL_INTERVAL_MS = 60000;   // 60s between polls
 const CHUNK_DELAY_MS = 1500;     // delay between chunk requests
 
 async function getLastProcessedBlock() {
+  try {
+    const block = await MetaPg.getLastProcessedBlockReferralPg();
+    if (block !== null) return block;
+  } catch (_) {}
   const db = getFirestore();
   if (!db) return null;
   const snap = await db.collection(META_COLLECTION).doc(META_DOC).get();
@@ -22,6 +27,10 @@ async function getLastProcessedBlock() {
 }
 
 async function setLastProcessedBlock(block) {
+  try {
+    await MetaPg.setLastProcessedBlockReferralPg(block);
+    return;
+  } catch (_) {}
   const db = getFirestore();
   if (!db) return;
   await db.collection(META_COLLECTION).doc(META_DOC).set({ lastProcessedBlock: block }, { merge: true });

@@ -69,14 +69,16 @@ import botControlRoutes from "./routes/botControl.js";
 import cronRoutes from "./routes/cron.js";
 import { authMiddleware, optionalAuthMiddleware } from "./middleware/auth.js";
 import { getFirestore } from "./config/firebase.js";
+import { getPool } from "./config/postgres.js";
 
 const uploadsPath = path.join(process.cwd(), "uploads");
 app.use("/uploads", express.static(uploadsPath));
 
-// Defer Firebase check so /api/health responds fast on Vercel (no wait for Firebase init on cold start)
 setImmediate(() => {
-  if (!getFirestore()) {
-    console.warn("Firebase/Firestore not configured. Set FIREBASE_SERVICE_ACCOUNT_PATH or FIREBASE_SERVICE_ACCOUNT_JSON in backend/.env");
+  if (getPool()) {
+    console.log("Database: PostgreSQL (RDS)");
+  } else if (!getFirestore()) {
+    console.warn("No database configured. Set PGHOST/PGDATABASE/PGUSER for PostgreSQL or Firebase for Firestore.");
   }
 });
 

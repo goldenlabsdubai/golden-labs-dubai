@@ -1,5 +1,5 @@
 import { Router } from "express";
-import * as User from "../services/userFirestore.js";
+import * as User from "../services/user.js";
 import { getOnChainUserStatus } from "../services/onChainUser.js";
 
 const router = Router();

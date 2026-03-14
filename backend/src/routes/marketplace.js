@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { ethers } from "ethers";
-import * as User from "../services/userFirestore.js";
+import * as User from "../services/user.js";
 import { getListingBlocksMap } from "../services/marketplaceActivityIndexer.js";
 
 const router = Router();

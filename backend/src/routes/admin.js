@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { ethers } from "ethers";
 import { getFirestore } from "../config/firebase.js";
+import * as AdminPg from "../services/adminPostgres.js";
 import { authMiddleware } from "../middleware/auth.js";
 import * as BotService from "../services/botService.js";
 
@@ -63,6 +64,10 @@ function getEnvContracts() {
 }
 
 async function getStoredContracts() {
+  try {
+    const fromPg = await AdminPg.getAdminSettingsContractsPg();
+    if (fromPg !== null) return fromPg;
+  } catch (_) {}
   const db = getFirestore();
   if (!db) return {};
   const doc = await db.collection(SETTINGS_COLLECTION).doc(CONTRACTS_DOC).get();
@@ -169,16 +174,22 @@ router.patch("/contracts", async (req, res) => {
     if (Object.keys(updates).length === 0) {
       return res.status(400).json({ error: "No valid contract fields provided" });
     }
-    const db = getFirestore();
-    if (!db) return res.status(500).json({ error: "Firestore not configured in backend" });
-    await db.collection(SETTINGS_COLLECTION).doc(CONTRACTS_DOC).set(
-      {
-        addresses: updates,
-        updatedAt: new Date(),
-        updatedBy: (req.wallet || "").toLowerCase(),
-      },
-      { merge: true }
-    );
+    const existing = await getStoredContracts();
+    const merged = { ...existing, ...updates };
+    try {
+      await AdminPg.setAdminSettingsContractsPg(merged, (req.wallet || "").toLowerCase());
+    } catch (_) {
+      const db = getFirestore();
+      if (!db) return res.status(500).json({ error: "Database not configured in backend" });
+      await db.collection(SETTINGS_COLLECTION).doc(CONTRACTS_DOC).set(
+        {
+          addresses: merged,
+          updatedAt: new Date(),
+          updatedBy: (req.wallet || "").toLowerCase(),
+        },
+        { merge: true }
+      );
+    }
     const contracts = { ...getEnvContracts(), ...(await getStoredContracts()) };
     res.json({ ok: true, contracts });
   } catch (e) {

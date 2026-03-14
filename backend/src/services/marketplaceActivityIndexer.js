@@ -1,6 +1,7 @@
 import { ethers } from "ethers";
 import { getFirestore } from "../config/firebase.js";
-import * as User from "./userFirestore.js";
+import * as User from "./user.js";
+import * as MetaPg from "./metaPostgres.js";
 
 const ABI = [
   "event Sold(uint256 indexed tokenId, address seller, address buyer, uint256 price)",
@@ -11,11 +12,15 @@ const META_COLLECTION = "meta";
 const META_DOC = "marketplaceActivityIndexer";
 const LISTING_BLOCKS_DOC = "marketplace_listing_blocks";
 const PROCESSED_COLLECTION = "marketplace_processed_sales";
-const MAX_BLOCKS_PER_QUERY = 10; // Free-tier safe for eth_getLogs
+const MAX_BLOCKS_PER_QUERY = 10;
 const POLL_INTERVAL_MS = Number(process.env.MARKETPLACE_INDEXER_POLL_INTERVAL_MS || 20000);
 const CHUNK_DELAY_MS = Number(process.env.MARKETPLACE_INDEXER_CHUNK_DELAY_MS || 1000);
 
 async function getLastProcessedBlock() {
+  try {
+    const block = await MetaPg.getLastProcessedBlockMarketplacePg();
+    if (block !== null) return block;
+  } catch (_) {}
   const db = getFirestore();
   if (!db) return null;
   const snap = await db.collection(META_COLLECTION).doc(META_DOC).get();
@@ -25,13 +30,20 @@ async function getLastProcessedBlock() {
 }
 
 async function setLastProcessedBlock(block) {
+  try {
+    await MetaPg.setLastProcessedBlockMarketplacePg(block);
+    return;
+  } catch (_) {}
   const db = getFirestore();
   if (!db) return;
   await db.collection(META_COLLECTION).doc(META_DOC).set({ lastProcessedBlock: block }, { merge: true });
 }
 
-/** Read current listing blocks map from Firestore. */
 async function getListingBlocksDoc(db) {
+  try {
+    const map = await MetaPg.getListingBlocksMapPg();
+    if (map !== null) return map;
+  } catch (_) {}
   if (!db) return {};
   const snap = await db.collection(META_COLLECTION).doc(LISTING_BLOCKS_DOC).get();
   const data = snap.exists ? snap.data() : {};
@@ -44,8 +56,11 @@ export async function getListingBlocksMap() {
   return getListingBlocksDoc(db);
 }
 
-/** Write merged listing blocks map (byTokenId). */
 async function setListingBlocksDoc(db, byTokenId) {
+  try {
+    await MetaPg.setListingBlocksMapPg(byTokenId);
+    return;
+  } catch (_) {}
   if (!db) return;
   await db.collection(META_COLLECTION).doc(LISTING_BLOCKS_DOC).set({ byTokenId }, { merge: true });
 }
@@ -170,7 +185,7 @@ async function runMarketplaceActivityIndexerPoll(provider, contract) {
     }
     return [];
   };
-  let listingBlocks = db ? await getListingBlocksDoc(db) : {};
+  let listingBlocks = await getListingBlocksDoc(db);
   let fromBlock = lastBlock + 1;
   const toBlock = latest;
   let processedUpTo = lastBlock;
@@ -204,7 +219,7 @@ async function runMarketplaceActivityIndexerPoll(provider, contract) {
       });
       await markProcessed(id, payload);
     }
-    if (db && listedEvents.length > 0) {
+    if (listedEvents.length > 0) {
       const uniqueBlocks = [...new Set(listedEvents.map((e) => e.blockNumber))];
       const blockTs = {};
       for (const b of uniqueBlocks) {
@@ -228,7 +243,7 @@ async function runMarketplaceActivityIndexerPoll(provider, contract) {
     fromBlock = chunkTo + 1;
     if (fromBlock <= toBlock) await new Promise((r) => setTimeout(r, CHUNK_DELAY_MS));
   }
-  if (db && Object.keys(listingBlocks).length > 0) {
+  if (Object.keys(listingBlocks).length > 0) {
     await setListingBlocksDoc(db, listingBlocks);
   }
   await setLastProcessedBlock(processedUpTo);

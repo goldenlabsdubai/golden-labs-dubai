@@ -4,7 +4,7 @@
  * POST /api/top-sellers/record-trade – auth required, increments current user's trades (call from marketplace buy/sell when trade completes).
  */
 import { Router } from "express";
-import { getTopSellers, incrementUserTrades } from "../services/userFirestore.js";
+import { getTopSellers, incrementUserTrades } from "../services/user.js";
 import { authMiddleware } from "../middleware/auth.js";
 import { avatarToAbsoluteUrl } from "./publicUser.js";
 

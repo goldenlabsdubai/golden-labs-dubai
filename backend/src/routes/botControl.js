@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { getFirestore } from "../config/firebase.js";
+import * as AdminPg from "../services/adminPostgres.js";
 
 const router = Router();
 const BOT_CONTROL_COLLECTION = "bot_control";
@@ -7,7 +8,7 @@ const BOT_STATE_DOC = "bots";
 
 function isAuthorized(req) {
   const expected = (process.env.BOT_CONTROL_API_KEY || "").trim();
-  if (!expected) return true; // Backward-compatible for local setups.
+  if (!expected) return true;
   const provided = String(req.headers["x-bot-control-key"] || req.query.key || "").trim();
   return Boolean(provided) && provided === expected;
 }
@@ -21,10 +22,17 @@ router.get("/:id", async (req, res) => {
     if (!/^[1-5]$/.test(id)) {
       return res.status(400).json({ error: "Invalid bot id" });
     }
+    const fromPg = await AdminPg.getBotRunningStatePg();
+    if (fromPg !== null) {
+      return res.json({
+        botId: id,
+        running: Boolean(fromPg[id]),
+        source: "postgres",
+      });
+    }
     const db = getFirestore();
     if (!db) {
-      // Safe default when backend has no Firestore: allow bot loop to run.
-      return res.json({ botId: id, running: true, source: "default-no-firestore" });
+      return res.json({ botId: id, running: true, source: "default-no-db" });
     }
     const doc = await db.collection(BOT_CONTROL_COLLECTION).doc(BOT_STATE_DOC).get();
     const data = doc.exists ? doc.data() : {};

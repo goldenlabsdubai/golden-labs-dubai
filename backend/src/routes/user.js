@@ -2,7 +2,7 @@ import { Router } from "express";
 import path from "path";
 import fs from "fs";
 import multer from "multer";
-import * as User from "../services/userFirestore.js";
+import * as User from "../services/user.js";
 import { updateAuthUser } from "../config/firebase.js";
 import { getOnChainUserStatus } from "../services/onChainUser.js";
 import { syncReferrerToChain } from "../services/referralContractSync.js";
