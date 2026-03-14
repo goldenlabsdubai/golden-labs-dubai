@@ -10,12 +10,12 @@ export function avatarToAbsoluteUrl(avatar) {
   const base = (process.env.BACKEND_URL || "").trim();
   if (!base) return trimmed.startsWith("http") ? trimmed : `/${trimmed.replace(/^\//, "")}`;
   const baseUrl = (base.startsWith("http://") || base.startsWith("https://") ? base : `http://${base}`).replace(/\/$/, "");
-  // Rewrite stored localhost URLs so they work when backend is deployed (EC2, Vercel, etc.)
+  // Rewrite stored localhost or server-IP avatar URLs so HTTPS frontend can load (fix mixed content)
   if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
     try {
       const u = new URL(trimmed);
-      if (u.hostname === "localhost" || u.hostname === "127.0.0.1") {
-        const pathPart = u.pathname + u.search;
+      const pathPart = (u.pathname + u.search).replace(/\/\/+/g, "/");
+      if (u.hostname === "localhost" || u.hostname === "127.0.0.1" || pathPart.includes("/uploads/avatars/")) {
         return `${baseUrl}${pathPart}`;
       }
       return trimmed;

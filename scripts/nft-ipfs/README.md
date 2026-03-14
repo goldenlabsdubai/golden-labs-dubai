@@ -1,39 +1,26 @@
 # GLFA NFT – Generate 10k metadata & upload to IPFS (free)
 
-This folder generates **1.json … 10000.json** (GLFA #1 … GLFA #10000) and uploads them to **Pinata** (free tier). One GIF for all; same image in every metadata file.
+This folder generates **1.json … 10000.json** (GLFA #1 … GLFA #10000) and uploads them to **Pinata**. One **.mp4 video** for all; each metadata has `animation_url` and `image` pointing to that video on IPFS.
 
 ---
 
-## 1. Get a free Pinata account
+## 1. Pinata
 
 1. Go to **[pinata.cloud](https://pinata.cloud)** → Sign up (free).
-2. **API Keys:** Dashboard → API Keys → New Key → enable **pinFileToIPFS** (and pinJSON if you want). Copy the **JWT**.
-3. (Optional) **Upload your GIF** in the Pinata dashboard: Files → Upload → select your `.gif` → copy the **CID** (e.g. `QmGifXXX`).  
-   Or use the script below to upload the GIF from your PC.
+2. **API Keys** → New Key → enable **pinFileToIPFS** / **pinJSONToIPFS** and **Gateways: Read**. Copy the **JWT** into **backend/.env** as `PINATA_JWT`.
+3. Upload your **.mp4** to Pinata (Files → Upload), copy its **CID**, and set in **backend/.env**:  
+   `NFT_MP4_CID=your_mp4_cid`
 
 ---
 
 ## 2. Setup
-
-From the **project root** (or from `scripts/nft-ipfs`):
 
 ```bash
 cd scripts/nft-ipfs
 npm install
 ```
 
-Create a **`.env`** file in `scripts/nft-ipfs/`:
-
-```env
-# From Pinata: API Keys → New Key → copy JWT
-PINATA_JWT=your_pinata_jwt_here
-
-# Your GIF's IPFS CID (upload GIF in Pinata dashboard first, or use upload-gif.js)
-GIF_CID=QmYourGifCidHere
-```
-
-- **GIF_CID:** Upload your Golden Labs GIF to Pinata (Files → Upload), then paste its CID here.  
-  Or put your GIF in this folder as **`glfa.gif`** and run **`node upload-gif.js`** – it will print the CID; put that in `.env` as `GIF_CID`.
+**JWT** and **video CID** are read from **backend/.env** (`PINATA_JWT`, `NFT_MP4_CID`). You can override in `scripts/nft-ipfs/.env` with `PINATA_JWT` and `VIDEO_CID` or `NFT_MP4_CID` if you prefer.
 
 ---
 
@@ -43,7 +30,7 @@ GIF_CID=QmYourGifCidHere
 npm run generate
 ```
 
-This writes **1.json … 10000.json** into `scripts/nft-ipfs/output/` (each has `"name": "GLFA #1"`, … `"GLFA #10000"`, same `"image": "ipfs://YOUR_GIF_CID"`).
+This writes **1.json … 10000.json** into `scripts/nft-ipfs/output/` with `"animation_url"` and `"image"` set to `ipfs://YOUR_MP4_CID` (uses `NFT_MP4_CID` from backend/.env if set).
 
 ---
 

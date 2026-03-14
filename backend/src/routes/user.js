@@ -10,7 +10,7 @@ import { isAdminWallet, isConfiguredBotWallet } from "../services/botService.js"
 
 const router = Router();
 
-/** Turn avatar path from Firestore into absolute URL so frontend can load from backend. Rewrites stored localhost URLs for deployed backend. Set BACKEND_URL in .env. */
+/** Turn avatar path into absolute URL. Rewrites localhost and server-IP avatar URLs to BACKEND_URL so HTTPS frontend avoids mixed content. Set BACKEND_URL in .env. */
 function avatarToAbsoluteUrl(avatar) {
   if (!avatar || typeof avatar !== "string") return null;
   const trimmed = avatar.trim();
@@ -22,8 +22,8 @@ function avatarToAbsoluteUrl(avatar) {
   if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
     try {
       const u = new URL(trimmed);
-      if (u.hostname === "localhost" || u.hostname === "127.0.0.1") {
-        const pathPart = u.pathname + u.search;
+      const pathPart = (u.pathname + u.search).replace(/\/\/+/g, "/");
+      if (u.hostname === "localhost" || u.hostname === "127.0.0.1" || pathPart.includes("/uploads/avatars/")) {
         return `${baseUrl}${pathPart}`;
       }
       return trimmed;

@@ -6,6 +6,7 @@
   "scripts": {
     "generate": "node generate-metadata.js",
     "upload": "node upload-pinata.js",
+    "upload-video": "node upload-video.js",
     "upload-w3": "node upload-w3.js",
     "generate-and-upload": "node generate-metadata.js && node upload-pinata.js"
   },

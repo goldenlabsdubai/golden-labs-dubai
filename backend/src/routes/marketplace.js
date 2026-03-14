@@ -35,6 +35,17 @@ function isBotActivityAuthorized(req) {
   return Boolean(provided) && provided === expected;
 }
 
+/** Base CID for tokenId when using NFT_METADATA_BASE_URIS (comma-separated). Batch size must match upload script (500). */
+function getMetadataBaseForToken(tokenId) {
+  const multi = (process.env.NFT_METADATA_BASE_URIS || "").trim().split(",").map((s) => s.trim().replace(/^ipfs:\/\//, "")).filter(Boolean);
+  if (multi.length > 0) {
+    const batchSize = Number(process.env.NFT_METADATA_BATCH_SIZE) || 500;
+    const index = Math.min(Math.floor((Number(tokenId) - 1) / batchSize), multi.length - 1);
+    return multi[index] || multi[0];
+  }
+  return (process.env.NFT_METADATA_BASE_URI || "").trim().replace(/^ipfs:\/\//, "");
+}
+
 /** When NFT_MP4_CID is set, metadata is served from backend (one .mp4 for 10k supply). Otherwise use IPFS base. */
 function ensureMetadataUri(uri, tokenId) {
   const mp4Cid = (process.env.NFT_MP4_CID || "").trim();
@@ -45,7 +56,7 @@ function ensureMetadataUri(uri, tokenId) {
   uri = (uri && String(uri).trim()) || "";
   uri = uri.replace(/^(ipfs:\/\/)+/i, "ipfs://");
   if (!uri) {
-    const base = (process.env.NFT_METADATA_BASE_URI || "").trim().replace(/^ipfs:\/\//, "");
+    const base = getMetadataBaseForToken(tokenId);
     return base ? `ipfs://${base}/${tokenId}.json` : "";
   }
   if (!uri.toLowerCase().includes(".json")) {
@@ -119,7 +130,7 @@ router.get("/listings", async (_, res) => {
             if (active && seller && price != null) {
               let uri = (tokenURI && String(tokenURI).trim()) || "";
               if (!uri) {
-                const base = (process.env.NFT_METADATA_BASE_URI || "").trim().replace(/^ipfs:\/\//, "");
+                const base = getMetadataBaseForToken(tokenId);
                 if (base) uri = `ipfs://${base}/${tokenId}.json`;
               }
               uri = (uri || "").replace(/^(ipfs:\/\/)+/i, "ipfs://");
@@ -426,7 +437,8 @@ router.post("/record-purchase", async (req, res) => {
 });
 
 router.get("/config", (_, res) => {
-  const base = (process.env.NFT_METADATA_BASE_URI || "").trim().replace(/^ipfs:\/\//, "");
+  const multi = (process.env.NFT_METADATA_BASE_URIS || "").trim().split(",").map((s) => s.trim()).filter(Boolean);
+  const base = multi.length > 0 ? multi[0] : (process.env.NFT_METADATA_BASE_URI || "").trim().replace(/^ipfs:\/\//, "");
   const mp4Cid = (process.env.NFT_MP4_CID || "").trim();
   res.json({
     marketplaceAddress: process.env.MARKETPLACE_CONTRACT_ADDRESS || "",
@@ -464,22 +476,35 @@ export async function ipfsProxyHandler(req, res) {
     if (!uri || !uri.startsWith("ipfs://")) {
       return res.status(400).json({ error: "Missing or invalid uri (e.g. uri=ipfs://CID/path)" });
     }
-    // Normalize double ipfs:// (e.g. ipfs://ipfs://cid/path -> cid/path)
     uri = uri.replace(/^(ipfs:\/\/)+/i, "ipfs://");
     const path = uri.replace(/^ipfs:\/\//, "").replace(/^\/+/, "");
-    // If we have Pinata key, use Pinata gateway; otherwise use public ipfs.io (no auth)
-    const usePinata = IPFS_GATEWAY_KEY.length > 0;
-    const gatewayBase = usePinata ? PINATA_GATEWAY.replace(/\/+$/, "") : PUBLIC_GATEWAY;
-    const gatewayUrl = `${gatewayBase}/${path}`;
-    const headers = usePinata ? { "x-pinata-gateway-token": IPFS_GATEWAY_KEY } : {};
-    const proxyRes = await fetch(gatewayUrl, { headers });
-    const contentType = proxyRes.headers.get("content-type") || "application/octet-stream";
-    res.setHeader("content-type", contentType);
-    if (!proxyRes.ok) {
-      return res.status(proxyRes.status).send(proxyRes.statusText);
+    const tryFetch = async (gatewayBase, headers = {}) => {
+      const url = `${gatewayBase.replace(/\/+$/, "")}/${path}`;
+      const r = await fetch(url, { headers });
+      return { ok: r.ok, status: r.status, statusText: r.statusText, contentType: r.headers.get("content-type"), body: r };
+    };
+    // Prefer Pinata with key if set
+    if (IPFS_GATEWAY_KEY.length > 0) {
+      const pinataBase = PINATA_GATEWAY.replace(/\/+$/, "");
+      const out = await tryFetch(pinataBase, { "x-pinata-gateway-token": IPFS_GATEWAY_KEY });
+      if (out.ok) {
+        res.setHeader("content-type", out.contentType || "application/octet-stream");
+        return res.send(Buffer.from(await out.body.arrayBuffer()));
+      }
+      // 401/404 from Pinata: fallback to public gateway so public IPFS content can load
+      if (out.status === 401 || out.status === 404) {
+        const pub = await tryFetch(PUBLIC_GATEWAY);
+        if (pub.ok) {
+          res.setHeader("content-type", pub.contentType || "application/octet-stream");
+          return res.send(Buffer.from(await pub.body.arrayBuffer()));
+        }
+      }
+      return res.status(out.status).send(out.statusText);
     }
-    const body = await proxyRes.arrayBuffer();
-    res.send(Buffer.from(body));
+    const out = await tryFetch(PUBLIC_GATEWAY);
+    res.setHeader("content-type", out.contentType || "application/octet-stream");
+    if (!out.ok) return res.status(out.status).send(out.statusText);
+    res.send(Buffer.from(await out.body.arrayBuffer()));
   } catch (e) {
     res.status(502).json({ error: e?.message || "Proxy failed" });
   }
