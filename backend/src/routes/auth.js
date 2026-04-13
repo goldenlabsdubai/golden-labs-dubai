@@ -167,6 +167,8 @@ router.post("/verify", async (req, res) => {
       redirect: redirectFor(user),
     });
   } catch (e) {
+    // Log server-side only — helps debug extension/provider issues (client still gets generic message)
+    console.error("[auth/verify] SIWE error:", e?.message || e);
     return res.status(401).json({ error: "Invalid signature" });
   }
 });
