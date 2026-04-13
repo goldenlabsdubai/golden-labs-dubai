@@ -14,10 +14,29 @@ const queryClient = new QueryClient();
 const projectId =
   import.meta.env.VITE_PROJECT_ID || "b56e18d47c72ab683b10814fe9495694";
 
+// AppKit requires ONE valid absolute URL. Comma-separated lists (like CORS) break new URL() — prefer https origin.
+function resolveAppMetadataUrl() {
+  const raw = (import.meta.env.VITE_FRONTEND_URL || "").trim();
+  if (raw.includes(",")) {
+    const parts = raw
+      .split(",")
+      .map((p) => p.trim())
+      .filter(Boolean);
+    const https = parts.find((p) => p.startsWith("https://"));
+    return https || parts[0] || "";
+  }
+  return raw;
+}
+
+const appMetadataUrl =
+  resolveAppMetadataUrl() ||
+  (typeof window !== "undefined" ? window.location.origin : "") ||
+  "https://goldenlabs.finance";
+
 const metadata = {
   name: "Golden Labs",
   description: "Welcome! Subscribe, mint, trade & refer with friends & family.",
-  url: import.meta.env.VITE_FRONTEND_URL || (typeof window !== "undefined" ? window.location.origin : ""),
+  url: appMetadataUrl,
   icons: ["https://avatars.githubusercontent.com/u/179229932"],
 };
 
