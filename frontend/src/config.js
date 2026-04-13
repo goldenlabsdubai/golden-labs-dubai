@@ -10,8 +10,16 @@ export const MARKETPLACE_AND_RESERVE_POOL_ADDRESS = (
 /** Fallback / placeholder image for panels (Mint, Subscription, Profile). Public path. */
 export const ASSET_IMAGE = "/gldass.png";
 
-/** NFT asset video – fallback in NFT cards when metadata fails. Use VITE_ASSET_VIDEO_URL for full URL (e.g. backend/CDN); else same-origin public path. */
-export const ASSET_VIDEO = import.meta.env.VITE_ASSET_VIDEO_URL?.trim() || "/nft%20asset.mp4";
+/**
+ * NFT card fallback video when metadata/IPFS fails.
+ * 1) VITE_ASSET_VIDEO_URL if set (e.g. https://api…/uploads/nft-asset.mp4)
+ * 2) Else derive from API origin: …/uploads/nft-asset.mp4 (file must exist on backend)
+ * 3) Else public: /nft-asset.mp4 (add frontend/public/nft-asset.mp4 for local dev)
+ */
+export const ASSET_VIDEO =
+  (import.meta.env.VITE_ASSET_VIDEO_URL || "").trim() ||
+  (API ? `${API.replace(/\/api\/?$/i, "")}/uploads/nft-asset.mp4` : "") ||
+  "/nft-asset.mp4";
 
 /** Backend origin (no /api). Use for avatar URLs when avatar is stored as relative path. Set VITE_API_URL in .env. */
 export const API_ORIGIN = API ? API.replace(/\/api\/?$/, "") : "";

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { API, ASSET_VIDEO } from "../config";
+import { API, ASSET_IMAGE, ASSET_VIDEO } from "../config";
 
 const DEFAULT_IPFS_GATEWAY = "https://ipfs.io/ipfs/";
 
@@ -43,9 +43,11 @@ export default function NFTMedia({ tokenURI, tokenId, className, alt: altProp, .
   const [objectUrl, setObjectUrl] = useState(null);
   const objectUrlRef = useRef(null);
   const [videoLoadFailed, setVideoLoadFailed] = useState(false);
+  const [fallbackClipFailed, setFallbackClipFailed] = useState(false);
 
   useEffect(() => {
     setVideoLoadFailed(false);
+    setFallbackClipFailed(false);
     if (!tokenURI || !tokenURI.trim()) {
       setFailed(true);
       return;
@@ -144,17 +146,22 @@ export default function NFTMedia({ tokenURI, tokenId, className, alt: altProp, .
   const displayUrl = objectUrl || proxyMediaUrl || mediaUrl;
   const showFallbackVideo = failed || !displayUrl || videoLoadFailed;
 
-  // Fallback: show local NFT asset video (public/nft asset.mp4) when no metadata, failed, or remote video fails to load
+  // Fallback: /uploads/nft-asset.mp4 on API or public/nft-asset.mp4 — if that 404s, show placeholder image
   if (showFallbackVideo) {
+    if (fallbackClipFailed) {
+      return <img src={ASSET_IMAGE} alt={alt} className={className} {...rest} />;
+    }
     return (
       <video
         src={ASSET_VIDEO}
         className={className}
         alt={alt}
+        poster={ASSET_IMAGE}
         muted
         loop
         playsInline
         autoPlay
+        onError={() => setFallbackClipFailed(true)}
         style={{ objectFit: "cover", width: "100%", height: "100%" }}
         {...rest}
       />

@@ -69,8 +69,16 @@ function getMetadataBaseForToken(tokenId) {
   return (process.env.NFT_METADATA_BASE_URI || "").trim().replace(/^ipfs:\/\//, "");
 }
 
-/** When NFT_MP4_CID is set, metadata is served from backend (one .mp4 for 10k supply). Otherwise use IPFS base. */
+/**
+ * When NFT_LOCAL_ANIMATION_URL is set (full URL to e.g. /uploads/nft-asset.mp4), metadata points at that file — no IPFS.
+ * When NFT_MP4_CID is set, metadata uses one IPFS CID for all tokens. Otherwise use IPFS base / on-chain URI.
+ */
 function ensureMetadataUri(uri, tokenId) {
+  const localAnim = (process.env.NFT_LOCAL_ANIMATION_URL || "").trim();
+  const backendBase = (process.env.BACKEND_URL || "").trim().replace(/\/$/, "");
+  if (localAnim && backendBase) {
+    return `${backendBase}/api/marketplace/nft-metadata/${tokenId}`;
+  }
   const mp4Cid = (process.env.NFT_MP4_CID || "").trim();
   if (mp4Cid) {
     const base = (process.env.BACKEND_URL || "").trim().replace(/\/$/, "");
@@ -513,21 +521,36 @@ router.get("/config", (_, res) => {
   const multi = (process.env.NFT_METADATA_BASE_URIS || "").trim().split(",").map((s) => s.trim()).filter(Boolean);
   const base = multi.length > 0 ? multi[0] : (process.env.NFT_METADATA_BASE_URI || "").trim().replace(/^ipfs:\/\//, "");
   const mp4Cid = (process.env.NFT_MP4_CID || "").trim();
+  const localAnim = (process.env.NFT_LOCAL_ANIMATION_URL || "").trim();
   res.json({
     marketplaceAddress: getMarketplaceAndReservePoolAddress() || "",
     nftAddress: process.env.NFT_CONTRACT_ADDRESS || "",
     metadataBasePath: base || undefined,
     nftMp4Cid: mp4Cid || undefined,
+    nftLocalAnimationUrl: localAnim || undefined,
   });
 });
 
-// Dynamic metadata for tokens 1–10000 when using single .mp4 (NFT_MP4_CID). No auth.
+// Dynamic metadata for tokens 1–10000: local MP4 (NFT_LOCAL_ANIMATION_URL) or IPFS (NFT_MP4_CID). No auth.
 router.get("/nft-metadata/:tokenId", (req, res) => {
-  const mp4Cid = (process.env.NFT_MP4_CID || "").trim();
-  if (!mp4Cid) return res.status(404).json({ error: "NFT_MP4_CID not set" });
   const tokenId = parseInt(req.params.tokenId, 10);
   if (!Number.isInteger(tokenId) || tokenId < 1 || tokenId > 10000) {
     return res.status(404).json({ error: "Invalid tokenId (1–10000)" });
+  }
+  const localAnim = (process.env.NFT_LOCAL_ANIMATION_URL || "").trim();
+  if (localAnim) {
+    return res.json({
+      name: `GLFA #${tokenId}`,
+      description: `Golden Labs Finance Asset #${tokenId}`,
+      image: localAnim,
+      animation_url: localAnim,
+    });
+  }
+  const mp4Cid = (process.env.NFT_MP4_CID || "").trim();
+  if (!mp4Cid) {
+    return res.status(404).json({
+      error: "Set NFT_LOCAL_ANIMATION_URL (e.g. https://api.example.com/uploads/nft-asset.mp4) or NFT_MP4_CID in backend .env",
+    });
   }
   const ipfsUrl = `ipfs://${mp4Cid}`;
   res.json({
