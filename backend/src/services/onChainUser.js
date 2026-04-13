@@ -94,7 +94,19 @@ export async function getOnChainUserStatus(wallet) {
     let mintKnown = false;
     if (nftAddr) {
       try {
-        hasMinted = await new ethers.Contract(nftAddr, NFT_ABI, provider).hasMinted(w).then((b) => !!b);
+        const nftC = new ethers.Contract(nftAddr, NFT_ABI, provider);
+        try {
+          hasMinted = !!(await nftC.hasMinted(w));
+        } catch (_) {
+          hasMinted = false;
+        }
+        // Fallback: some RPCs / older deployments — treat any NFT balance as minted (1 wallet = 1 NFT rule)
+        if (!hasMinted) {
+          try {
+            const bal = await nftC.balanceOf(w);
+            hasMinted = BigInt(bal) > 0n;
+          } catch (_) {}
+        }
         mintKnown = true;
       } catch (_) {
         mintKnown = false;

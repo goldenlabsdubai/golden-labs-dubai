@@ -5,6 +5,8 @@ import * as User from "../services/user.js";
 const router = Router();
 
 const REFERRAL_LEVELS = 10;
+/** Default 10 USDT (6 decimals); must match ReferralContract unless changed on-chain */
+const REFERRAL_WITHDRAW_CHUNK_WEI = process.env.REFERRAL_WITHDRAW_CHUNK_WEI || "10000000";
 
 function sumEarningsByLevel(refUser) {
   let s = 0n;
@@ -127,7 +129,7 @@ router.get("/stats", async (req, res) => {
       ...earningsOut,
       referralEarningsTotal: String(lifetimeCard),
       claimableOnChain: claimable,
-      referralWithdrawChunkWei,
+      referralWithdrawChunkWei: REFERRAL_WITHDRAW_CHUNK_WEI,
     });
   } catch (e) {
     res.status(500).json({ error: e.message });
