@@ -27,6 +27,21 @@ const EXPLORER_BY_CHAIN = {
   8453: "https://basescan.org",
 };
 
+/** Per-tx gas must stay under the block gas limit (~16.7M on BSC). Bad RPC estimates can return 30M+ and revert with "gas limit too high". */
+const MAX_SAFE_TX_GAS = 12_000_000n;
+const DEFAULT_APPROVE_GAS = 120_000n;
+const DEFAULT_SUBSCRIBE_GAS = 800_000n;
+
+async function safeGasLimit(publicClient, estimateParams, fallbackGas) {
+  try {
+    const est = await publicClient.estimateContractGas(estimateParams);
+    if (est > MAX_SAFE_TX_GAS) return fallbackGas;
+    return (est * 120n) / 100n;
+  } catch {
+    return fallbackGas;
+  }
+}
+
 export default function Subscription() {
   const { token, refreshUser, user } = useAuth();
   const isResubscribe = user?.state === "SUSPENDED";
@@ -141,19 +156,42 @@ export default function Subscription() {
     try {
       const amount = subscriptionPriceWei ?? parseUnits("10", 6);
       // 1) Approve USDT – wallet will ask to approve spending
+      const gasApprove = await safeGasLimit(
+        publicClient,
+        {
+          address: usdtAddressNormalized,
+          abi: USDT_ABI,
+          functionName: "approve",
+          args: [config.contractAddress, amount],
+          account: address,
+        },
+        DEFAULT_APPROVE_GAS
+      );
       const hashApprove = await writeContractAsync({
         address: usdtAddressNormalized,
         abi: USDT_ABI,
         functionName: "approve",
         args: [config.contractAddress, amount],
+        gas: gasApprove,
       });
       await publicClient.waitForTransactionReceipt({ hash: hashApprove });
       // 2) Subscribe (Pay) – wallet will ask to confirm subscribe
       setPayStep("subscribe");
+      const gasSubscribe = await safeGasLimit(
+        publicClient,
+        {
+          address: config.contractAddress,
+          abi: SUBSCRIPTION_ABI,
+          functionName: "subscribe",
+          account: address,
+        },
+        DEFAULT_SUBSCRIBE_GAS
+      );
       const hashSubscribe = await writeContractAsync({
         address: config.contractAddress,
         abi: SUBSCRIPTION_ABI,
         functionName: "subscribe",
+        gas: gasSubscribe,
       });
       await publicClient.waitForTransactionReceipt({ hash: hashSubscribe });
 
