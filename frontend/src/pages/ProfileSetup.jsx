@@ -81,6 +81,12 @@ export default function ProfileSetup() {
       setError("Wallet not connected");
       return;
     }
+    // Must match AppKit defaultNetwork (BSC Testnet) so SIWE chainId matches what users expect
+    const BSC_TESTNET_CHAIN_ID = 97;
+    if (Number(chainId) !== BSC_TESTNET_CHAIN_ID) {
+      setError("Switch your wallet to BSC Testnet (Chain ID 97), then tap Save again.");
+      return;
+    }
     const usernameVal = username.trim();
     if (!usernameVal || usernameVal.length < 3) {
       setError("Username must be at least 3 characters");
@@ -105,7 +111,8 @@ export default function ProfileSetup() {
         nonce,
       });
       const message = siweMsg.prepareMessage();
-      const signature = await signMessageAsync({ message });
+      // Explicit account avoids wrong signer when multiple extensions fight over window.ethereum
+      const signature = await signMessageAsync({ message, account: address });
 
       const referrerRaw = referralCode.trim() || (typeof sessionStorage !== "undefined" ? sessionStorage.getItem("gl_ref") || "" : "");
       const referrer = referrerRaw.trim() || undefined;
@@ -348,7 +355,16 @@ export default function ProfileSetup() {
               </label>
             </div>
 
-            {error && <p className="profile-modern__error">{error}</p>}
+            {error && (
+              <div className="profile-modern__error-wrap">
+                <p className="profile-modern__error">{error}</p>
+                {(error.includes("Invalid signature") || error.includes("signature")) && (
+                  <p className="profile-modern__error-hint">
+                    If you use <strong>EVM Ask</strong>, <strong>Rabby</strong>, or multiple wallet extensions, disable them for this site (or use Incognito with only MetaMask), then try again.
+                  </p>
+                )}
+              </div>
+            )}
             <div className="profile-modern__form-actions">
               <button type="submit" className="profile-modern__submit" disabled={loading}>
                 {uploadingAvatar ? "Uploading…" : loading ? "Signing & saving…" : "Save & continue"}

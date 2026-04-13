@@ -53,7 +53,7 @@ export function useSignInWithWallet() {
           nonce,
         });
         const message = siweMsg.prepareMessage();
-        const signature = await signMessageAsync({ message });
+        const signature = await signMessageAsync({ message, account: address });
 
         const referrer = typeof sessionStorage !== "undefined" ? sessionStorage.getItem("gl_ref") : null;
         let verifyRes;

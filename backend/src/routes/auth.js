@@ -90,12 +90,22 @@ router.get("/admin-nonce/:wallet", async (req, res) => {
 
 // Verify SIWE and issue JWT. New users must send profile (username etc.).
 router.post("/verify", async (req, res) => {
+  const { message, signature, referrer: referrerRaw, profile: profileRaw } = req.body;
+  if (!message || !signature) {
+    return res.status(400).json({ error: "message and signature required" });
+  }
+
+  let wallet;
   try {
-    const { message, signature, referrer: referrerRaw, profile: profileRaw } = req.body;
     const siweMessage = new SiweMessage(message);
     const fields = await siweMessage.verify({ signature });
-    const wallet = fields.data.address.toLowerCase();
+    wallet = fields.data.address.toLowerCase();
+  } catch (e) {
+    console.error("[auth/verify] SIWE verify failed:", e?.message || e);
+    return res.status(401).json({ error: "Invalid signature" });
+  }
 
+  try {
     let referrerWallet = null;
     if (referrerRaw && typeof referrerRaw === "string" && referrerRaw.trim()) {
       const ref = referrerRaw.trim();
@@ -167,9 +177,11 @@ router.post("/verify", async (req, res) => {
       redirect: redirectFor(user),
     });
   } catch (e) {
-    // Log server-side only — helps debug extension/provider issues (client still gets generic message)
-    console.error("[auth/verify] SIWE error:", e?.message || e);
-    return res.status(401).json({ error: "Invalid signature" });
+    // DB / business logic errors — do not mask as "Invalid signature"
+    console.error("[auth/verify] after SIWE:", e?.message || e);
+    return res.status(500).json({
+      error: e?.message || "Could not complete sign-in",
+    });
   }
 });
 
