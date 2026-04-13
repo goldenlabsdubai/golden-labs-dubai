@@ -5,7 +5,7 @@ import { useAccount, useBalance, useDisconnect, useWriteContract, usePublicClien
 import { formatEther, formatUnits } from "viem";
 import { useAuth } from "../hooks/useAuth";
 import { useWalletConnect } from "../hooks/useWalletConnect";
-import { API, getAvatarUrl } from "../config";
+import { API, getAvatarUrl, MARKETPLACE_AND_RESERVE_POOL_ADDRESS } from "../config";
 import { detectInsufficientBalanceType, getTransactionErrorMessage } from "../utils/transactionError";
 import NFTMedia from "../components/NFTMedia";
 import InsufficientBalanceModal from "../components/InsufficientBalanceModal";
@@ -68,7 +68,7 @@ export default function Marketplace() {
   const listingsReqIdRef = useRef(0);
   const assetsReqIdRef = useRef(0);
 
-  const marketplaceAddress = (import.meta.env.VITE_MARKETPLACE_CONTRACT || "").trim();
+  const marketplaceAddress = MARKETPLACE_AND_RESERVE_POOL_ADDRESS;
   const marketplaceAddressNormalized = marketplaceAddress?.startsWith("0x") ? marketplaceAddress : marketplaceAddress ? `0x${marketplaceAddress}` : "";
   const nftAddress = (import.meta.env.VITE_NFT_CONTRACT || "").trim();
   const nftAddressNormalized = nftAddress?.startsWith("0x") ? nftAddress : nftAddress ? `0x${nftAddress}` : "";
@@ -296,26 +296,56 @@ export default function Marketplace() {
 
   const filteredListings = listings;
 
+  const fallbackListingTierRank = (l) => {
+    if (l?.listingTierRank != null && Number.isFinite(Number(l.listingTierRank))) return Number(l.listingTierRank);
+    const mp = (marketplaceAddressNormalized || "").toLowerCase();
+    const s = (l?.seller || "").toLowerCase();
+    if (mp && s === mp) return 0;
+    return 2;
+  };
+
+  /** Same tier: oldest list time first, newest last; missing time last; tie = seller (not tokenId). */
+  const byListedTimeOldestFirst = (a, b) => {
+    const aT = Number(a.listedAt ?? 0);
+    const bT = Number(b.listedAt ?? 0);
+    const aBad = !Number.isFinite(aT) || aT <= 0;
+    const bBad = !Number.isFinite(bT) || bT <= 0;
+    if (aBad && bBad) return String(a.seller || "").localeCompare(String(b.seller || ""));
+    if (aBad) return 1;
+    if (bBad) return -1;
+    if (aT !== bT) return aT - bT;
+    return String(a.seller || "").localeCompare(String(b.seller || ""));
+  };
+  const byListedTimeNewestFirst = (a, b) => {
+    const aT = Number(a.listedAt ?? 0);
+    const bT = Number(b.listedAt ?? 0);
+    const aBad = !Number.isFinite(aT) || aT <= 0;
+    const bBad = !Number.isFinite(bT) || bT <= 0;
+    if (aBad && bBad) return String(a.seller || "").localeCompare(String(b.seller || ""));
+    if (aBad) return 1;
+    if (bBad) return -1;
+    if (aT !== bT) return bT - aT;
+    return String(a.seller || "").localeCompare(String(b.seller || ""));
+  };
+
   const sortedListings = [...filteredListings].sort((a, b) => {
+    const trA = fallbackListingTierRank(a);
+    const trB = fallbackListingTierRank(b);
+    if (trA !== trB) return trA - trB;
+
     const aPrice = Number(a.price || 0);
     const bPrice = Number(b.price || 0);
-    const aListedAt = Number(a.listedAt ?? 0);
-    const bListedAt = Number(b.listedAt ?? 0);
-    const aId = Number(a.tokenId || 0);
-    const bId = Number(b.tokenId || 0);
-    const byListedOldestFirst = aListedAt !== bListedAt ? aListedAt - bListedAt : aId - bId;
-    const byListedNewestFirst = aListedAt !== bListedAt ? bListedAt - aListedAt : aId - bId;
     if (sortBy === "Price: Low to High") {
       if (aPrice !== bPrice) return aPrice - bPrice;
-      return byListedOldestFirst;
+      return byListedTimeOldestFirst(a, b);
     }
     if (sortBy === "Price: High to Low") {
       if (aPrice !== bPrice) return bPrice - aPrice;
-      return byListedOldestFirst;
+      return byListedTimeOldestFirst(a, b);
     }
-    if (sortBy === "Oldest Listed") return byListedOldestFirst;
-    if (sortBy === "Recently Listed") return byListedNewestFirst;
-    return byListedOldestFirst;
+    if (sortBy === "Oldest Listed") return byListedTimeOldestFirst(a, b);
+    if (sortBy === "Recently Listed") return byListedTimeNewestFirst(a, b);
+    return byListedTimeOldestFirst(a, b);
   });
 
   useEffect(() => {
@@ -552,7 +582,14 @@ export default function Marketplace() {
                   </div>
                   <div className="profile-hub__nft-card-details">
                     <div className="profile-hub__nft-card-row">
-                      <span className="profile-hub__nft-id">GLFA #{l.tokenId}</span>
+                      <span className="profile-hub__nft-id">
+                        GLFA #{l.tokenId}
+                        {l.listingTierLabel ? (
+                          <span className={`marketplace-page__tier-badge marketplace-page__tier-badge--${l.listingTier || "user"}`} title="Listing queue priority">
+                            {l.listingTierLabel}
+                          </span>
+                        ) : null}
+                      </span>
                       <span className="profile-hub__nft-price">
                       <span className="profile-hub__nft-price-label">{l.priceFormatted ? l.priceFormatted.replace(/\s*USDT$/i, "").trim() : (Number(l.price) / 1e6).toFixed(0)} USDT <img src="/USDT_BEP20.png" alt="" className="usdt-logo-inline" aria-hidden="true" /></span>
                     </span>

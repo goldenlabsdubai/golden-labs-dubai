@@ -1,28 +1,24 @@
 /**
- * Seed Firestore "admins" collection with the default admin wallet.
- * Run from backend folder: npm run seed-admins
- * Requires: FIREBASE_SERVICE_ACCOUNT_PATH or FIREBASE_SERVICE_ACCOUNT_JSON in backend .env
+ * Seed PostgreSQL `admins` table with the default admin wallet (if empty).
+ * Run: npm run seed-admins
+ * Requires: PGHOST, PGDATABASE, PGUSER, PGPASSWORD in backend/.env
  */
 import "dotenv/config";
-import { getFirestore } from "../src/config/firebase.js";
+import { query, getPool } from "../src/config/postgres.js";
 
-const ADMINS_COLLECTION = "admins";
 const DEFAULT_ADMIN_WALLET = "0xbdf976981242e8078b525e78784bf87c3b9da4ca";
 
 async function main() {
-  const db = getFirestore();
-  if (!db) {
-    console.error("Firestore not configured. Set FIREBASE_SERVICE_ACCOUNT_PATH or FIREBASE_SERVICE_ACCOUNT_JSON in backend .env");
+  if (!getPool()) {
+    console.error("PostgreSQL not configured. Set PGHOST, PGDATABASE, PGUSER, PGPASSWORD in backend/.env");
     process.exit(1);
   }
-  const ref = db.collection(ADMINS_COLLECTION).doc(DEFAULT_ADMIN_WALLET);
-  const doc = await ref.get();
-  if (doc.exists) {
-    console.log("Admin already exists:", DEFAULT_ADMIN_WALLET);
-    process.exit(0);
-  }
-  await ref.set({ wallet: DEFAULT_ADMIN_WALLET, createdAt: new Date() });
-  console.log("Seeded admin wallet in Firestore collection 'admins':", DEFAULT_ADMIN_WALLET);
+  await query(
+    `INSERT INTO admins (wallet, created_at, updated_at) VALUES ($1, NOW(), NOW())
+     ON CONFLICT (wallet) DO NOTHING`,
+    [DEFAULT_ADMIN_WALLET]
+  );
+  console.log("Admin wallet ensured in PostgreSQL `admins`:", DEFAULT_ADMIN_WALLET);
   process.exit(0);
 }
 

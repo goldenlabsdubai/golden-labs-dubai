@@ -1,8 +1,8 @@
 /**
- * User data in PostgreSQL (RDS). Same API as userFirestore for drop-in replacement.
- * Requires PGHOST, PGDATABASE, PGUSER in .env.
+ * User data in PostgreSQL (AWS RDS) — requires PGHOST, PGDATABASE, PGUSER in .env.
  */
 import { query, getPool, getClient } from "../config/postgres.js";
+import { getTradingIncomePerSellWeiFromEnv } from "../utils/tradingIncomeWei.js";
 
 function docIdWallet(wallet) {
   return (wallet || "").toLowerCase();
@@ -36,12 +36,33 @@ function rowToUser(r) {
     referralCountL3: r.referral_count_l3 ?? 0,
     referralCountL4: r.referral_count_l4 ?? 0,
     referralCountL5: r.referral_count_l5 ?? 0,
-    totalReferrals: (r.total_referrals ?? 0) || ((r.referral_count_l1 ?? 0) + (r.referral_count_l2 ?? 0) + (r.referral_count_l3 ?? 0) + (r.referral_count_l4 ?? 0) + (r.referral_count_l5 ?? 0)),
+    referralCountL6: r.referral_count_l6 ?? 0,
+    referralCountL7: r.referral_count_l7 ?? 0,
+    referralCountL8: r.referral_count_l8 ?? 0,
+    referralCountL9: r.referral_count_l9 ?? 0,
+    referralCountL10: r.referral_count_l10 ?? 0,
+    totalReferrals:
+      (r.total_referrals ?? 0) ||
+      (r.referral_count_l1 ?? 0) +
+        (r.referral_count_l2 ?? 0) +
+        (r.referral_count_l3 ?? 0) +
+        (r.referral_count_l4 ?? 0) +
+        (r.referral_count_l5 ?? 0) +
+        (r.referral_count_l6 ?? 0) +
+        (r.referral_count_l7 ?? 0) +
+        (r.referral_count_l8 ?? 0) +
+        (r.referral_count_l9 ?? 0) +
+        (r.referral_count_l10 ?? 0),
     referralEarningsL1: String(r.referral_earnings_l1 ?? "0"),
     referralEarningsL2: String(r.referral_earnings_l2 ?? "0"),
     referralEarningsL3: String(r.referral_earnings_l3 ?? "0"),
     referralEarningsL4: String(r.referral_earnings_l4 ?? "0"),
     referralEarningsL5: String(r.referral_earnings_l5 ?? "0"),
+    referralEarningsL6: String(r.referral_earnings_l6 ?? "0"),
+    referralEarningsL7: String(r.referral_earnings_l7 ?? "0"),
+    referralEarningsL8: String(r.referral_earnings_l8 ?? "0"),
+    referralEarningsL9: String(r.referral_earnings_l9 ?? "0"),
+    referralEarningsL10: String(r.referral_earnings_l10 ?? "0"),
     referralEarningsTotal: String(r.referral_earnings_total ?? "0"),
     lastActivity: r.last_activity,
     createdAt: r.created_at,
@@ -69,9 +90,11 @@ export async function createUser(data) {
   await query(
     `INSERT INTO users (id, wallet, firebase_uid, email, username, name, bio, avatar, website_url, x_url, telegram_url,
       total_trades, nonce, state, referrer, referral_count_l1, referral_count_l2, referral_count_l3, referral_count_l4, referral_count_l5,
-      total_referrals, referral_earnings_l1, referral_earnings_l2, referral_earnings_l3, referral_earnings_l4, referral_earnings_l5, referral_earnings_total,
+      referral_count_l6, referral_count_l7, referral_count_l8, referral_count_l9, referral_count_l10,
+      total_referrals, referral_earnings_l1, referral_earnings_l2, referral_earnings_l3, referral_earnings_l4, referral_earnings_l5,
+      referral_earnings_l6, referral_earnings_l7, referral_earnings_l8, referral_earnings_l9, referral_earnings_l10, referral_earnings_total,
       last_activity, created_at, owned_token_ids)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28::timestamptz, $29::timestamptz, '[]'::jsonb)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37::timestamptz, $38::timestamptz, '[]'::jsonb)
      ON CONFLICT (id) DO NOTHING`,
     [
       id,
@@ -89,8 +112,9 @@ export async function createUser(data) {
       data.nonce ?? null,
       data.state ?? "CONNECTED",
       data.referrer ?? null,
-      0, 0, 0, 0, 0, 0,
-      "0", "0", "0", "0", "0", "0",
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+      0,
+      "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0",
       now, now,
     ]
   );
@@ -107,9 +131,11 @@ export async function updateUser(docId, data) {
     avatar: "avatar", websiteUrl: "website_url", xUrl: "x_url", telegramUrl: "telegram_url",
     totalTrades: "total_trades", nonce: "nonce", state: "state", referrer: "referrer",
     referralCountL1: "referral_count_l1", referralCountL2: "referral_count_l2", referralCountL3: "referral_count_l3",
-    referralCountL4: "referral_count_l4", referralCountL5: "referral_count_l5", totalReferrals: "total_referrals",
+    referralCountL4: "referral_count_l4", referralCountL5: "referral_count_l5", referralCountL6: "referral_count_l6",
+    referralCountL7: "referral_count_l7", referralCountL8: "referral_count_l8", referralCountL9: "referral_count_l9", referralCountL10: "referral_count_l10", totalReferrals: "total_referrals",
     referralEarningsL1: "referral_earnings_l1", referralEarningsL2: "referral_earnings_l2", referralEarningsL3: "referral_earnings_l3",
-    referralEarningsL4: "referral_earnings_l4", referralEarningsL5: "referral_earnings_l5", referralEarningsTotal: "referral_earnings_total",
+    referralEarningsL4: "referral_earnings_l4", referralEarningsL5: "referral_earnings_l5", referralEarningsL6: "referral_earnings_l6",
+    referralEarningsL7: "referral_earnings_l7", referralEarningsL8: "referral_earnings_l8", referralEarningsL9: "referral_earnings_l9", referralEarningsL10: "referral_earnings_l10", referralEarningsTotal: "referral_earnings_total",
     lastActivity: "last_activity", ownedTokenIds: "owned_token_ids",
   };
   const now = new Date().toISOString();
@@ -193,7 +219,18 @@ export async function incrementReferralChain(referrerWallet) {
   if (!referrerWallet || typeof referrerWallet !== "string") return;
   const wallet = referrerWallet.toLowerCase().replace(/^0x/, "") ? referrerWallet.toLowerCase() : null;
   if (!wallet) return;
-  const levels = ["referral_count_l1", "referral_count_l2", "referral_count_l3", "referral_count_l4", "referral_count_l5"];
+  const levels = [
+    "referral_count_l1",
+    "referral_count_l2",
+    "referral_count_l3",
+    "referral_count_l4",
+    "referral_count_l5",
+    "referral_count_l6",
+    "referral_count_l7",
+    "referral_count_l8",
+    "referral_count_l9",
+    "referral_count_l10",
+  ];
   let currentWallet = wallet;
   for (let level = 0; level < levels.length; level++) {
     const id = docIdWallet(currentWallet);
@@ -203,7 +240,18 @@ export async function incrementReferralChain(referrerWallet) {
     const r = rows[0];
     const key = levels[level];
     const current = r[key] ?? 0;
-    const totalRef = (r.total_referrals ?? 0) || ((r.referral_count_l1 ?? 0) + (r.referral_count_l2 ?? 0) + (r.referral_count_l3 ?? 0) + (r.referral_count_l4 ?? 0) + (r.referral_count_l5 ?? 0));
+    const totalRef =
+      (r.total_referrals ?? 0) ||
+      (r.referral_count_l1 ?? 0) +
+        (r.referral_count_l2 ?? 0) +
+        (r.referral_count_l3 ?? 0) +
+        (r.referral_count_l4 ?? 0) +
+        (r.referral_count_l5 ?? 0) +
+        (r.referral_count_l6 ?? 0) +
+        (r.referral_count_l7 ?? 0) +
+        (r.referral_count_l8 ?? 0) +
+        (r.referral_count_l9 ?? 0) +
+        (r.referral_count_l10 ?? 0);
     await query(
       `UPDATE users SET ${key} = $1, total_referrals = $2, last_activity = NOW() WHERE id = $3`,
       [current + 1, totalRef + 1, id]
@@ -219,12 +267,12 @@ function addBigIntStrings(a, b) {
 }
 
 export async function addReferralEarning(referrerWallet, level, amount) {
-  if (!referrerWallet || level < 1 || level > 5) return;
+  if (!referrerWallet || level < 1 || level > 10) return;
   const docId = docIdWallet(referrerWallet);
   if (!docId) return;
   const delta = typeof amount === "bigint" ? amount.toString() : String(amount || "0");
   const col = `referral_earnings_l${level}`;
-  const { rows } = await query("SELECT referral_earnings_l1, referral_earnings_l2, referral_earnings_l3, referral_earnings_l4, referral_earnings_l5, referral_earnings_total FROM users WHERE id = $1", [docId]);
+  const { rows } = await query(`SELECT ${col}, referral_earnings_total FROM users WHERE id = $1`, [docId]);
   if (rows.length > 0) {
     const r = rows[0];
     await query(
@@ -262,9 +310,6 @@ export async function setReferralEarningsL1AtLeast(wallet, amount) {
   if (BigInt(amountStr) <= BigInt(current)) return;
   await query("UPDATE users SET referral_earnings_l1 = $1, last_activity = NOW() WHERE id = $2", [amountStr, id]);
 }
-
-const SELLER_PROFIT_BPS = 120n;
-const SELLER_BASE_DIVISOR = 2n;
 
 function normalizeTxHash(v) {
   const s = typeof v === "string" ? v.trim().toLowerCase() : "";
@@ -322,8 +367,7 @@ export async function getWalletTradeStatsFromActivity(wallet, maxRows = 5000) {
     if (type === "buy") buyTrades++;
     else if (type === "sell") {
       sellTrades++;
-      const sellerBase = price / SELLER_BASE_DIVISOR;
-      profitOnly += (sellerBase * SELLER_PROFIT_BPS) / 10000n;
+      profitOnly += getTradingIncomePerSellWeiFromEnv();
     }
   }
   return {

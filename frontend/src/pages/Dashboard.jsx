@@ -5,7 +5,7 @@ import { useAccount, useBalance, useDisconnect, useReadContract, useWriteContrac
 import { formatEther, formatUnits } from "viem";
 import { useAuth } from "../hooks/useAuth";
 import { useWalletConnect } from "../hooks/useWalletConnect";
-import { API, getAvatarUrl } from "../config";
+import { API, getAvatarUrl, MARKETPLACE_AND_RESERVE_POOL_ADDRESS } from "../config";
 import { detectInsufficientBalanceType, getTransactionErrorMessage } from "../utils/transactionError";
 import NFTMedia from "../components/NFTMedia";
 import InsufficientBalanceModal from "../components/InsufficientBalanceModal";
@@ -28,6 +28,7 @@ const USDT_ABI = [
 const REFERRAL_ABI = [
   { name: "withdrawEarnings", type: "function", stateMutability: "nonpayable", inputs: [], outputs: [] },
   { name: "referralEarnings", type: "function", stateMutability: "view", inputs: [{ name: "account", type: "address" }], outputs: [{ type: "uint256" }] },
+  { name: "referralWithdrawChunk", type: "function", stateMutability: "view", inputs: [], outputs: [{ type: "uint256" }] },
 ];
 
 const EXPLORER_BY_CHAIN = {
@@ -79,15 +80,29 @@ export default function Dashboard() {
   const { writeContractAsync } = useWriteContract();
 
   const wallet = (user?.wallet || address || "").toLowerCase();
-  const hasClaimableEarnings = referralStats?.claimableOnChain != null && BigInt(referralStats.claimableOnChain ?? "0") > 0n;
   const nftAddress = (import.meta.env.VITE_NFT_CONTRACT || "").trim();
   const referralAddress = (import.meta.env.VITE_REFERRAL_CONTRACT || "").trim();
   const referralAddressNormalized = referralAddress?.startsWith("0x") ? referralAddress : referralAddress ? `0x${referralAddress}` : "";
   const nftAddressNormalized = nftAddress?.startsWith("0x") ? nftAddress : nftAddress ? `0x${nftAddress}` : "";
-  const marketplaceAddress = (import.meta.env.VITE_MARKETPLACE_CONTRACT || "").trim();
+  const marketplaceAddress = MARKETPLACE_AND_RESERVE_POOL_ADDRESS;
   const marketplaceAddressNormalized = marketplaceAddress?.startsWith("0x") ? marketplaceAddress : marketplaceAddress ? `0x${marketplaceAddress}` : "";
   const usdtAddress = (import.meta.env.VITE_USDT_ADDRESS || "").trim();
   const usdtAddressNormalized = usdtAddress?.startsWith("0x") ? usdtAddress : usdtAddress ? `0x${usdtAddress}` : "";
+  const { data: referralWithdrawChunkRaw } = useReadContract({
+    address: referralAddressNormalized || undefined,
+    abi: REFERRAL_ABI,
+    functionName: "referralWithdrawChunk",
+    query: { enabled: Boolean(referralAddressNormalized) },
+  });
+  const referralWithdrawChunkWei =
+    referralWithdrawChunkRaw != null
+      ? BigInt(referralWithdrawChunkRaw)
+      : referralStats?.referralWithdrawChunkWei != null
+        ? BigInt(referralStats.referralWithdrawChunkWei)
+        : 10n * 10n ** 6n;
+  const claimableReferralWei = BigInt(referralStats?.claimableOnChain ?? "0");
+  const canWithdrawReferral = referralStats?.claimableOnChain != null && claimableReferralWei >= referralWithdrawChunkWei;
+  const referralWithdrawShortfallWei = canWithdrawReferral ? 0n : referralWithdrawChunkWei > claimableReferralWei ? referralWithdrawChunkWei - claimableReferralWei : 0n;
   const { data: usdtBalanceRaw, refetch: refetchUsdtBalance } = useReadContract({
     address: usdtAddressNormalized || undefined,
     abi: USDT_ABI,
@@ -274,6 +289,14 @@ export default function Dashboard() {
     const accountWallet = (user?.wallet || "").toLowerCase();
     if (connectedWallet && accountWallet && connectedWallet !== accountWallet) {
       setError("Connect the wallet that has the referral earnings to withdraw.");
+      return;
+    }
+    if (!canWithdrawReferral) {
+      setError(
+        referralStats?.claimableOnChain == null
+          ? "Loading claimable balance…"
+          : `You need at least ${(Number(referralWithdrawChunkWei) / 1e6).toFixed(2)} USDT claimable to withdraw. Each transaction withdraws exactly that amount.`,
+      );
       return;
     }
     if (!referralAddressNormalized || !writeContractAsync || !publicClient) {
@@ -748,7 +771,7 @@ export default function Dashboard() {
                           <span className="profile-hub__referral-levels-cell profile-hub__referral-levels-cell--count">Referrals</span>
                           <span className="profile-hub__referral-levels-cell profile-hub__referral-levels-cell--earnings">Earnings</span>
                         </div>
-                        {[1, 2, 3, 4, 5].map((lvl) => {
+                        {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((lvl) => {
                           const count = referralStats != null ? (referralStats[`referralCountL${lvl}`] ?? 0) : (user?.[`referralCountL${lvl}`] ?? 0);
                           const earnings = referralStats != null ? formatUsdt(referralStats[`referralEarningsL${lvl}`] || "0") : formatUsdt(user?.[`referralEarningsL${lvl}`] || "0");
                           return (
@@ -769,19 +792,25 @@ export default function Dashboard() {
                         disabled={
                           loadingWithdraw ||
                           !referralAddressNormalized ||
-                          !hasClaimableEarnings ||
+                          !canWithdrawReferral ||
                           user?.state === "SUSPENDED" ||
                           (address && user?.wallet && (address || "").toLowerCase() !== (user.wallet || "").toLowerCase())
                         }
                       >
-                        {loadingWithdraw ? "Withdrawing…" : "Withdraw earnings"}
+                        {loadingWithdraw
+                          ? "Withdrawing…"
+                          : `Withdraw ${(Number(referralWithdrawChunkWei) / 1e6).toFixed(2)} USDT`}
                       </button>
                       <p className="profile-hub__referral-withdraw-hint">
                         {user?.state === "SUSPENDED"
                           ? "Resubscribe to withdraw your referral earnings."
                           : address && user?.wallet && (address || "").toLowerCase() !== (user.wallet || "").toLowerCase()
                             ? "Connect the wallet that has the earnings to withdraw."
-                            : "Sends your claimable referral USDT to your wallet. Requires active subscription."}
+                            : !canWithdrawReferral && referralStats?.claimableOnChain != null && claimableReferralWei > 0n
+                              ? `Withdraw unlocks at ${(Number(referralWithdrawChunkWei) / 1e6).toFixed(2)} USDT claimable. You need ${(Number(referralWithdrawShortfallWei) / 1e6).toFixed(2)} USDT more. Each successful withdrawal sends exactly ${(Number(referralWithdrawChunkWei) / 1e6).toFixed(2)} USDT (not more, not less).`
+                              : !canWithdrawReferral && referralStats?.claimableOnChain != null && claimableReferralWei === 0n
+                                ? "Referral rewards accrue when your qualified referrals trade. Once claimable balance reaches the minimum, you can withdraw that fixed amount per transaction."
+                                : `Each withdrawal sends exactly ${(Number(referralWithdrawChunkWei) / 1e6).toFixed(2)} USDT from your claimable balance. Repeat while your balance stays at or above that amount. Requires active subscription.`}
                       </p>
                     </div>
                   </>

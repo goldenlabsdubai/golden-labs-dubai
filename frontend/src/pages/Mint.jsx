@@ -15,11 +15,10 @@ const USDT_ABI = [
 ];
 const NFT_ABI = [
   { name: "mint", type: "function", stateMutability: "nonpayable", inputs: [{ name: "uri", type: "string" }], outputs: [] },
+  { name: "mintPrice", type: "function", stateMutability: "view", inputs: [], outputs: [{ type: "uint256" }] },
   { name: "nextTokenId", type: "function", stateMutability: "view", inputs: [], outputs: [{ type: "uint256" }] },
   { name: "totalMinted", type: "function", stateMutability: "view", inputs: [], outputs: [{ type: "uint256" }] },
 ];
-
-const MINT_PRICE_USDT = parseUnits("10", 6);
 const EXPLORER_BY_CHAIN = {
   1: "https://etherscan.io",
   56: "https://bscscan.com",
@@ -40,7 +39,8 @@ export default function Mint() {
   const [error, setError] = useState("");
   const [insufficientBalanceType, setInsufficientBalanceType] = useState(null);
   const [config, setConfig] = useState({
-    priceFormatted: "10 USDT",
+    priceFormatted: "30 USDT",
+    priceWei: "30000000",
     rule: "1 Wallet = 1 Asset (lifetime)",
     contractAddress: "",
     metadataUri: "",
@@ -72,6 +72,11 @@ export default function Mint() {
     address: nftAddressNormalized || undefined,
     abi: NFT_ABI,
     functionName: "totalMinted",
+  });
+  const { data: mintPriceOnChain } = useReadContract({
+    address: nftAddressNormalized || undefined,
+    abi: NFT_ABI,
+    functionName: "mintPrice",
   });
   const { data: usdtBalanceRaw, isLoading: usdtBalanceLoading, refetch: refetchUsdtBalance } = useReadContract({
     address: usdtAddressNormalized || undefined,
@@ -160,11 +165,17 @@ export default function Mint() {
     setLoading(true);
     setError("");
     try {
+      const mintPriceWei =
+        mintPriceOnChain != null
+          ? BigInt(mintPriceOnChain)
+          : config?.priceWei != null
+            ? BigInt(config.priceWei)
+            : parseUnits("30", 6);
       const hashApprove = await writeContractAsync({
         address: usdtAddressNormalized,
         abi: USDT_ABI,
         functionName: "approve",
-        args: [nftAddr, MINT_PRICE_USDT],
+        args: [nftAddr, mintPriceWei],
       });
       await publicClient.waitForTransactionReceipt({ hash: hashApprove });
       const tokenIdMinted = nextTokenId != null ? Number(nextTokenId) : null;
@@ -208,7 +219,7 @@ export default function Mint() {
     }
   };
 
-  const displayPrice = (config.priceFormatted || "10 USDT").replace(/^\$+\s*/, "").trim() || "10 USDT";
+  const displayPrice = (config.priceFormatted || "30 USDT").replace(/^\$+\s*/, "").trim() || "30 USDT";
   const supplyText = totalMinted != null && config.maxSupply != null
     ? `${Number(totalMinted).toLocaleString()} / ${Number(config.maxSupply).toLocaleString()}`
     : totalMinted != null
@@ -344,7 +355,7 @@ export default function Mint() {
         <div className="profile-modern__panel-howto">
           <h3 className="profile-modern__panel-howto-title">What you get</h3>
           <ul className="profile-modern__panel-howto-list">
-            <li>Mint cost: 10 USDT → Reserve Pool</li>
+            <li>Mint cost: {displayPrice} → Reserve Pool</li>
             <li>Full access to Marketplace: buy, sell, trade</li>
             <li>Referral rewards and dashboard</li>
           </ul>

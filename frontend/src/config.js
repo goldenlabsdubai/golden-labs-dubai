@@ -1,5 +1,12 @@
 export const API = import.meta.env.VITE_API_URL ?? "";
 
+/** MarketplaceAndReservePoolContract – single address for marketplace + reserve (legacy: VITE_MARKETPLACE_CONTRACT). */
+export const MARKETPLACE_AND_RESERVE_POOL_ADDRESS = (
+  import.meta.env.VITE_MARKETPLACE_AND_RESERVE_POOL_CONTRACT_ADDRESS ||
+  import.meta.env.VITE_MARKETPLACE_CONTRACT ||
+  ""
+).trim();
+
 /** Fallback / placeholder image for panels (Mint, Subscription, Profile). Public path. */
 export const ASSET_IMAGE = "/gldass.png";
 

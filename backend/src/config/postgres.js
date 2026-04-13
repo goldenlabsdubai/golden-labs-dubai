@@ -1,7 +1,6 @@
 /**
- * PostgreSQL (RDS) connection pool for Golden Labs.
+ * PostgreSQL (AWS RDS) connection pool for Golden Labs.
  * Set PGHOST, PGPORT, PGDATABASE, PGUSER, PGPASSWORD in .env.
- * When not set, getPool() returns null (backend keeps using Firestore).
  */
 import pg from "pg";
 
@@ -36,29 +35,28 @@ export function getPool() {
   return pool;
 }
 
+/** Throws if PostgreSQL env is not configured (server should not start without it). */
+export function requirePostgres() {
+  const p = getPool();
+  if (!p) {
+    throw new Error(
+      "PostgreSQL is required. Set PGHOST, PGDATABASE, PGUSER (and PGPASSWORD) in .env."
+    );
+  }
+  return p;
+}
+
 /** Run a query. Returns rows or throws. Use when you have a pool (PostgreSQL enabled). */
 export async function query(text, params = []) {
   const p = getPool();
-  if (!p) throw new Error("PostgreSQL not configured (set PGHOST, PGDATABASE, PGUSER in .env)");
+  if (!p) throw new Error("PostgreSQL not configured");
   const result = await p.query(text, params);
   return result;
 }
 
-/** Get a client from the pool for transactions. Remember to release when done. */
+/** Get a client for transactions. Remember to release(). */
 export async function getClient() {
   const p = getPool();
   if (!p) throw new Error("PostgreSQL not configured");
   return p.connect();
-}
-
-/** Check if PostgreSQL is configured and reachable. */
-export async function isPgConfigured() {
-  const p = getPool();
-  if (!p) return false;
-  try {
-    await p.query("SELECT 1");
-    return true;
-  } catch (_) {
-    return false;
-  }
 }

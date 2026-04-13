@@ -35,6 +35,8 @@ export default function App() {
   const [error, setError] = useState("");
   const [togglingId, setTogglingId] = useState(null);
   const [activeTab, setActiveTab] = useState("bots");
+  const [botSettings, setBotSettings] = useState({ buybackDelayMs: 60 * 60 * 1000, disableBotToBotBuys: true });
+  const [savingBotSettings, setSavingBotSettings] = useState(false);
 
   const openWalletModal = useCallback(() => {
     queueMicrotask(() => open());
@@ -96,6 +98,23 @@ export default function App() {
       }
       const d = await r.json();
       setBots(d.bots || []);
+      if (d.settings && typeof d.settings === "object") {
+        setBotSettings({
+          buybackDelayMs: Number(d.settings.buybackDelayMs) || 60 * 60 * 1000,
+          disableBotToBotBuys: true,
+        });
+      } else {
+        try {
+          const s = await fetchWithTimeout(`${API}/admin/bots/settings`, { headers: { Authorization: `Bearer ${token}` } });
+          if (s.ok) {
+            const payload = await s.json();
+            setBotSettings({
+              buybackDelayMs: Number(payload?.settings?.buybackDelayMs) || 60 * 60 * 1000,
+              disableBotToBotBuys: true,
+            });
+          }
+        } catch (_) {}
+      }
       setLastUpdatedAt(d.serverTime || Date.now());
       setError("");
     } catch (e) {
@@ -178,6 +197,36 @@ export default function App() {
     }
   };
 
+  const handleSaveBotSettings = async ({ buybackDelayMinutes }) => {
+    setSavingBotSettings(true);
+    setError("");
+    try {
+      const mins = Number(buybackDelayMinutes);
+      if (!Number.isFinite(mins) || mins < 1) {
+        throw new Error("Buyback timeframe must be at least 1 minute");
+      }
+      const buybackDelayMs = Math.floor(mins * 60 * 1000);
+      const r = await fetch(`${API}/admin/bots/settings`, {
+        method: "PATCH",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ buybackDelayMs }),
+      });
+      const payload = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(payload?.error || "Failed to save bot settings");
+      setBotSettings({
+        buybackDelayMs: Number(payload?.settings?.buybackDelayMs) || buybackDelayMs,
+        disableBotToBotBuys: true,
+      });
+    } catch (e) {
+      setError(e?.message || "Failed to save bot settings");
+    } finally {
+      setSavingBotSettings(false);
+    }
+  };
+
   if (!token) {
     return (
       <div className="login">
@@ -230,6 +279,8 @@ export default function App() {
       {activeTab === "bots" ? (
         <BotsPage
           bots={bots}
+          botSettings={botSettings}
+          savingBotSettings={savingBotSettings}
           botsLoading={botsLoading}
           refreshing={refreshing}
           lastUpdatedAt={lastUpdatedAt}
@@ -238,6 +289,7 @@ export default function App() {
           onRefresh={() => loadBots({ silent: true }).catch(() => {})}
           onStart={handleStart}
           onStop={handleStop}
+          onSaveSettings={handleSaveBotSettings}
         />
       ) : (
         <ContractsPage connectedWallet={address} />

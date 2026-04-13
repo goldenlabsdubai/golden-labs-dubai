@@ -1,39 +1,28 @@
 import { ethers } from "ethers";
-import { getFirestore } from "../config/firebase.js";
+import { getPool } from "../config/postgres.js";
 import * as User from "./user.js";
 import * as MetaPg from "./metaPostgres.js";
 
-const ABI = [
-  "event ReferralPaid(address indexed referrer, uint256 level, uint256 amount)"
-];
+const ABI = ["event ReferralPaid(address indexed referrer, uint256 level, uint256 amount)"];
 
-const META_COLLECTION = "meta";
-const META_DOC = "referralIndexer";
-const MAX_BLOCKS_PER_QUERY = 10;  // Alchemy Free tier: eth_getLogs max 10 blocks per request
-const POLL_INTERVAL_MS = 60000;   // 60s between polls
-const CHUNK_DELAY_MS = 1500;     // delay between chunk requests
+const MAX_BLOCKS_PER_QUERY = 10; // Alchemy Free tier: eth_getLogs max 10 blocks per request
+const POLL_INTERVAL_MS = 60000; // 60s between polls
+const CHUNK_DELAY_MS = 1500; // delay between chunk requests
 
 async function getLastProcessedBlock() {
+  if (!getPool()) return null;
   try {
     const block = await MetaPg.getLastProcessedBlockReferralPg();
     if (block !== null) return block;
   } catch (_) {}
-  const db = getFirestore();
-  if (!db) return null;
-  const snap = await db.collection(META_COLLECTION).doc(META_DOC).get();
-  if (!snap.exists) return null;
-  const d = snap.data();
-  return typeof d.lastProcessedBlock === "number" ? d.lastProcessedBlock : null;
+  return null;
 }
 
 async function setLastProcessedBlock(block) {
+  if (!getPool()) return;
   try {
     await MetaPg.setLastProcessedBlockReferralPg(block);
-    return;
   } catch (_) {}
-  const db = getFirestore();
-  if (!db) return;
-  await db.collection(META_COLLECTION).doc(META_DOC).set({ lastProcessedBlock: block }, { merge: true });
 }
 
 export function startReferralIndexer() {
@@ -41,6 +30,10 @@ export function startReferralIndexer() {
   const rpcUrl = process.env.RPC_URL;
   if (!contractAddress || !rpcUrl) {
     console.warn("Referral indexer disabled: set REFERRAL_CONTRACT_ADDRESS and RPC_URL");
+    return;
+  }
+  if (!getPool()) {
+    console.warn("Referral indexer disabled: PostgreSQL required (PGHOST, PGDATABASE, PGUSER) for indexer state.");
     return;
   }
 
@@ -52,22 +45,8 @@ export function startReferralIndexer() {
 
   function isRateLimitError(e) {
     const msg = (e?.message || "") + JSON.stringify(e?.value || []);
-    return msg.includes("rate limit") || msg.includes("-32005") || (e?.value?.[0]?.error?.code === -32005);
+    return msg.includes("rate limit") || msg.includes("-32005") || e?.value?.[0]?.error?.code === -32005;
   }
-
-  const queryWithRetry = async (fromBlock, toBlock, retries = 4) => {
-    for (let i = 0; i < retries; i++) {
-      try {
-        return await contract.queryFilter(contract.filters.ReferralPaid(), fromBlock, toBlock);
-      } catch (e) {
-        if (isRateLimitError(e) && i < retries - 1) {
-          await new Promise((r) => setTimeout(r, 5000 * (i + 1)));
-          continue;
-        }
-        throw e;
-      }
-    }
-  };
 
   const poll = async () => {
     if (running) return;
@@ -100,7 +79,7 @@ async function runReferralIndexerPoll(provider, contract) {
         return await contract.queryFilter(contract.filters.ReferralPaid(), fromBlock, toBlock);
       } catch (e) {
         const msg = (e?.message || "") + JSON.stringify(e?.value || []);
-        if ((msg.includes("rate limit") || msg.includes("-32005") || (e?.value?.[0]?.error?.code === -32005)) && i < retries - 1) {
+        if ((msg.includes("rate limit") || msg.includes("-32005") || e?.value?.[0]?.error?.code === -32005) && i < retries - 1) {
           await new Promise((r) => setTimeout(r, 5000 * (i + 1)));
           continue;
         }
@@ -128,7 +107,7 @@ async function runReferralIndexerPoll(provider, contract) {
       const referrer = raw ? String(raw).toLowerCase() : "";
       const level = Number(evt.args?.level ?? 0);
       const amount = evt.args?.amount ?? 0n;
-      if (referrer && level >= 1 && level <= 5) {
+      if (referrer && level >= 1 && level <= 10) {
         await User.addReferralEarning(referrer, level, amount);
       }
     }
@@ -145,6 +124,10 @@ export async function runReferralIndexerOnce() {
   const rpcUrl = process.env.RPC_URL;
   if (!contractAddress || !rpcUrl) {
     console.warn("Referral indexer disabled: set REFERRAL_CONTRACT_ADDRESS and RPC_URL");
+    return;
+  }
+  if (!getPool()) {
+    console.warn("Referral indexer: PostgreSQL required for indexer state.");
     return;
   }
   const provider = new ethers.JsonRpcProvider(rpcUrl);

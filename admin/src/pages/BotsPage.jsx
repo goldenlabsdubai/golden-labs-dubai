@@ -1,3 +1,5 @@
+import { useEffect, useState } from "react";
+
 function formatUsdt(wei) {
   if (wei == null || wei === "") return "0.00";
   const n = Number(wei) / 1e6;
@@ -19,6 +21,8 @@ const BNB_LOGO =
 
 export default function BotsPage({
   bots,
+  botSettings,
+  savingBotSettings,
   botsLoading,
   refreshing,
   lastUpdatedAt,
@@ -27,7 +31,13 @@ export default function BotsPage({
   onRefresh,
   onStart,
   onStop,
+  onSaveSettings,
 }) {
+  const currentMinutes = Math.max(1, Math.round((Number(botSettings?.buybackDelayMs) || 3600000) / 60000));
+  const [buybackDelayMinutes, setBuybackDelayMinutes] = useState(String(currentMinutes));
+  useEffect(() => {
+    setBuybackDelayMinutes(String(currentMinutes));
+  }, [currentMinutes]);
   const botMap = new Map((bots || []).map((b) => [String(b.id), b]));
   // Client scope for now: show/manage only 2 bots.
   // Increase this to 5 later when Bot 3/4/5 are purchased/configured.
@@ -70,6 +80,29 @@ export default function BotsPage({
         <p className="section__empty">Loading bots...</p>
       ) : (
         <>
+          <article className="bot-card" style={{ marginBottom: "1rem" }}>
+            <div className="bot-card__header">
+              <strong>Auto Buyback Rules</strong>
+            </div>
+            <p className="section__empty">Bot-to-bot buying is disabled (Bot A/B never buy from each other).</p>
+            <label className="form-field">
+              <span>Buyback timeframe after user listing (minutes)</span>
+              <input
+                type="number"
+                min="1"
+                value={buybackDelayMinutes}
+                onChange={(e) => setBuybackDelayMinutes(e.target.value)}
+              />
+            </label>
+            <button
+              type="button"
+              className="btn btn--success"
+              disabled={savingBotSettings}
+              onClick={() => onSaveSettings?.({ buybackDelayMinutes })}
+            >
+              {savingBotSettings ? "Saving..." : "Save Buyback Timeframe"}
+            </button>
+          </article>
           <p className="section__empty">
             Configure bot addresses in backend `.env` using `BOT_1_ADDRESS` and `BOT_2_ADDRESS`.
           </p>

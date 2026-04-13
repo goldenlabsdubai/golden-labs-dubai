@@ -3324,6 +3324,35 @@ a.marketplace-page__nav-profile.marketplace-page__profile-icon-btn {
   cursor: pointer;
 }
 
+/* Listing queue: System (dynamic) → Bot → Member */
+.marketplace-page__tier-badge {
+  display: inline-block;
+  margin-left: 0.4rem;
+  padding: 0.12rem 0.45rem;
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  border-radius: 4px;
+  vertical-align: middle;
+  line-height: 1.2;
+}
+.marketplace-page__tier-badge--dynamic {
+  background: rgba(99, 102, 241, 0.25);
+  color: #a5b4fc;
+  border: 1px solid rgba(129, 140, 248, 0.45);
+}
+.marketplace-page__tier-badge--bot {
+  background: rgba(212, 175, 55, 0.2);
+  color: var(--accent-bright, #e8d48b);
+  border: 1px solid rgba(212, 175, 55, 0.4);
+}
+.marketplace-page__tier-badge--user {
+  background: rgba(148, 163, 184, 0.15);
+  color: var(--muted);
+  border: 1px solid var(--border);
+}
+
 /* Insufficient USDT modal */
 .marketplace-page__insufficient-overlay {
   position: fixed;
@@ -5354,6 +5383,8 @@ a.marketplace-page__nav-profile.marketplace-page__profile-icon-btn {
   max-width: min(320px, 32vw);
   width: auto;
   height: auto;
+  min-height: clamp(180px, 28vw, 280px);
+  object-fit: contain;
   flex-shrink: 0;
   animation: landing-v2-float 3.5s ease-in-out infinite;
 }

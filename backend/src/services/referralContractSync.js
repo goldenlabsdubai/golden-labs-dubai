@@ -1,5 +1,5 @@
 /**
- * Sync referrer from Firestore to ReferralContract so L2–L5 on-chain payouts work.
+ * Sync referrer from Firestore to ReferralContract so multi-level on-chain payouts work (L2–L9).
  * When we set user.referrer in the backend, we call setReferrer(user, referrer) on-chain (owner only).
  */
 import { ethers } from "ethers";

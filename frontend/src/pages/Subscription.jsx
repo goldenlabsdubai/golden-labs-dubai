@@ -260,9 +260,13 @@ export default function Subscription() {
 
       <main className="profile-modern__main">
         <div className="profile-modern__glass subscription-modern__glass">
-          <span className="profile-modern__step">Step 2 · Subscription</span>
-          <h1 className="profile-modern__headline">Unlock Minting & Trading</h1>
-          <p className="profile-modern__subline">Subscribe To Access Assets & The Marketplace</p>
+          <span className="profile-modern__step">{isResubscribe ? "Resubscribe" : "Step 2 · Subscription"}</span>
+          <h1 className="profile-modern__headline">{isResubscribe ? "Resubscribe to continue" : "Unlock Minting & Trading"}</h1>
+          <p className="profile-modern__subline">
+            {isResubscribe
+              ? "Your subscription is suspended (e.g. profit threshold reached). Pay again to unlock marketplace, dashboard, trading, and referral withdrawals."
+              : "Subscribe To Access Assets & The Marketplace"}
+          </p>
 
           <div className="subscription-modern__price-card">
             <div className="subscription-modern__price-row">
@@ -308,9 +312,12 @@ export default function Subscription() {
           <ul className="profile-modern__panel-howto-list">
             <li>Subscribe with BEP20 USDT</li>
             <li>Subscription to unlock all features</li>
-            <li>Access to mint your Golden Labs asset (1 Asset per wallet)</li>
+            {!isResubscribe && <li>Access to mint your Golden Labs asset (1 Asset per wallet)</li>}
             <li>Full marketplace: buy, sell, trade & earn</li>
             <li>Referral rewards and dashboard</li>
+            {isResubscribe && (
+              <li className="subscription-modern__resub-note">While suspended: no trading, no referral withdrawals on-chain until you resubscribe.</li>
+            )}
           </ul>
         </div>
       </div>

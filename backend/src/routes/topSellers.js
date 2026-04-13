@@ -1,5 +1,5 @@
 /**
- * Top sellers / leaderboard – live data from Firestore.
+ * Top sellers / leaderboard – PostgreSQL users.total_trades.
  * GET /api/top-sellers – no auth, returns top 10 by totalTrades (desc).
  * POST /api/top-sellers/record-trade – auth required, increments current user's trades (call from marketplace buy/sell when trade completes).
  */

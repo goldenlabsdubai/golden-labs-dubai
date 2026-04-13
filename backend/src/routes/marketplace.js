@@ -2,10 +2,31 @@ import { Router } from "express";
 import { ethers } from "ethers";
 import * as User from "../services/user.js";
 import { getListingBlocksMap } from "../services/marketplaceActivityIndexer.js";
+import { getMarketplaceAndReservePoolAddress } from "../config/contractsEnv.js";
 
 const router = Router();
 let listingsCache = [];
 let listingsCacheAt = 0;
+
+/**
+ * Within the same queue tier: oldest listed first, recently listed last.
+ * Missing listedAt (0) sorts last. Tie-break: seller address (not tokenId).
+ */
+function sortByListedTimeOldestFirst(a, b) {
+  const ta = Number(a.listedAt ?? 0);
+  const tb = Number(b.listedAt ?? 0);
+  const aMissing = !Number.isFinite(ta) || ta <= 0;
+  const bMissing = !Number.isFinite(tb) || tb <= 0;
+  if (aMissing && bMissing) return String(a.seller || "").localeCompare(String(b.seller || ""));
+  if (aMissing) return 1;
+  if (bMissing) return -1;
+  if (ta !== tb) return ta - tb;
+  return String(a.seller || "").localeCompare(String(b.seller || ""));
+}
+
+/** Fixed list/buy price — must match MarketplaceAndReservePoolContract (30 USDT, 6 decimals). */
+const MARKETPLACE_LIST_PRICE_USDT = 30;
+const MARKETPLACE_LIST_PRICE_WEI = "30000000";
 
 const getProvider = () => {
   const rpc = process.env.RPC_URL || "http://127.0.0.1:8545";
@@ -17,10 +38,12 @@ const MARKETPLACE_ABI = [
   "event Sold(uint256 indexed tokenId, address seller, address buyer, uint256 price)",
   "event ListingCancelled(uint256 indexed tokenId)",
   "function listings(uint256) view returns (address, uint256, uint256, bool)",
+  "function listingListedAt(uint256) view returns (uint64)",
   "function saleCount(uint256) view returns (uint256)",
+  "function isBotTrader(address) view returns (bool)",
 ];
 
-// Resolve wallet from JWT (req.wallet) or from Firestore user
+// Resolve wallet from JWT (req.wallet) or from DB user
 async function getWalletForRequest(req) {
   if (req.wallet) return (req.wallet || "").toLowerCase();
   const user = await User.getUser(req);
@@ -89,7 +112,7 @@ async function readWithRetry(fn, fallback, retries = 2, timeoutMs = 7000) {
 // Listings: loop 1..totalMinted, call marketplace.listings(tokenId), keep where active. No events.
 router.get("/listings", async (_, res) => {
   try {
-    const marketAddr = (process.env.MARKETPLACE_CONTRACT_ADDRESS || "").trim();
+    const marketAddr = (getMarketplaceAndReservePoolAddress() || "").trim();
     const nftAddr = (process.env.NFT_CONTRACT_ADDRESS || "").trim();
     if (!marketAddr || !nftAddr) return res.json({ listings: [] });
 
@@ -122,19 +145,26 @@ router.get("/listings", async (_, res) => {
           Promise.all([
             readWithRetry(() => marketContract.listings(tokenId), null, 2, 7000),
             readWithRetry(() => nftContract.tokenURI(tokenId), "", 1, 5000),
-          ]).then(([listing, tokenURI]) => {
+          ]).then(async ([listing, tokenURI]) => {
             if (!listing) return null;
             const active = listing?.[3];
             const seller = listing?.[0];
             const price = listing?.[2];
             if (active && seller && price != null) {
+              let listedAtSec = 0;
+              try {
+                const la = await readWithRetry(() => marketContract.listingListedAt(tokenId), 0n, 1, 5000);
+                listedAtSec = la != null ? Number(la) : 0;
+              } catch (_) {
+                listedAtSec = 0;
+              }
               let uri = (tokenURI && String(tokenURI).trim()) || "";
               if (!uri) {
                 const base = getMetadataBaseForToken(tokenId);
                 if (base) uri = `ipfs://${base}/${tokenId}.json`;
               }
               uri = (uri || "").replace(/^(ipfs:\/\/)+/i, "ipfs://");
-              return { tokenId: String(tokenId), seller, price: String(price), tokenURI: uri };
+              return { tokenId: String(tokenId), seller, price: String(price), tokenURI: uri, listedAtSec };
             }
             return null;
           }, () => null)
@@ -142,14 +172,62 @@ router.get("/listings", async (_, res) => {
       }
       const batch = await Promise.all(promises);
       batch.forEach((r) => {
-        if (r) listings.push({ tokenId: r.tokenId, seller: String(r.seller), price: r.price, priceFormatted: (Number(r.price) / 1e6).toFixed(0) + " USDT", tokenURI: r.tokenURI || "" });
+        if (r) {
+          listings.push({
+            tokenId: r.tokenId,
+            seller: String(r.seller),
+            price: r.price,
+            priceFormatted: (Number(r.price) / 1e6).toFixed(0) + " USDT",
+            tokenURI: r.tokenURI || "",
+            listedAtSec: r.listedAtSec ?? 0,
+          });
+        }
       });
     }
     const listingBlocks = await getListingBlocksMap().catch(() => ({}));
     listings.forEach((l) => {
+      const fromChainMs = l.listedAtSec > 0 ? l.listedAtSec * 1000 : 0;
       const entry = listingBlocks[String(l.tokenId)];
-      l.listedAt = entry?.timestamp != null ? Number(entry.timestamp) : 0;
+      const fromIndexer = entry?.timestamp != null ? Number(entry.timestamp) : 0;
+      // Prefer on-chain listingListedAt (no indexer dependency); indexer only for legacy listings pre-contract field.
+      l.listedAt = fromChainMs > 0 ? fromChainMs : fromIndexer;
+      delete l.listedAtSec;
     });
+
+    /** Queue priority: (0) dynamic mint = seller is marketplace, (1) bot wallets (isBotTrader), (2) members. */
+    const marketNorm = marketAddr.toLowerCase();
+    const uniqueForBotCheck = [...new Set(listings.map((l) => (l.seller || "").toLowerCase()))].filter(Boolean);
+    const botTraderCache = {};
+    await Promise.all(
+      uniqueForBotCheck.map(async (w) => {
+        if (w === marketNorm) {
+          botTraderCache[w] = false;
+          return;
+        }
+        botTraderCache[w] = !!(await readWithRetry(() => marketContract.isBotTrader(w), false, 1, 4000));
+      })
+    );
+    listings.forEach((l) => {
+      const s = (l.seller || "").toLowerCase();
+      if (s === marketNorm) {
+        l.listingTier = "dynamic";
+        l.listingTierRank = 0;
+        l.listingTierLabel = "Dynamic";
+      } else if (botTraderCache[s]) {
+        l.listingTier = "bot";
+        l.listingTierRank = 1;
+        l.listingTierLabel = "Bot";
+      } else {
+        l.listingTier = "user";
+        l.listingTierRank = 2;
+        l.listingTierLabel = "Member";
+      }
+    });
+    listings.sort((a, b) => {
+      if (a.listingTierRank !== b.listingTierRank) return a.listingTierRank - b.listingTierRank;
+      return sortByListedTimeOldestFirst(a, b);
+    });
+
     // Resolve seller names (username/name) for "Owned by" display
     const uniqueSellers = [...new Set(listings.map((l) => (l.seller || "").toLowerCase()))].filter(Boolean);
     const sellerMap = {};
@@ -186,7 +264,7 @@ router.get("/my-listings", async (req, res) => {
     const wallet = await getWalletForRequest(req);
     if (!wallet || !wallet.startsWith("0x")) return res.json({ listings: [] });
 
-    const marketAddr = (process.env.MARKETPLACE_CONTRACT_ADDRESS || "").trim();
+    const marketAddr = (getMarketplaceAndReservePoolAddress() || "").trim();
     const nftAddr = (process.env.NFT_CONTRACT_ADDRESS || "").trim();
     if (!marketAddr || !nftAddr) return res.json({ listings: [] });
 
@@ -250,17 +328,17 @@ const NFT_VIEW_ABI = [
   "function tokenURI(uint256 tokenId) view returns (string)",
 ];
 
-// My assets: tokenIds you "own" = tracked in Firestore ownedTokenIds, enriched from on-chain listing/metadata.
+// My assets: tokenIds you "own" = tracked in PostgreSQL owned_token_ids, enriched from on-chain listing/metadata.
 router.get("/my-assets", async (req, res) => {
   try {
     const wallet = await getWalletForRequest(req);
     if (!wallet || !wallet.startsWith("0x")) return res.json({ assets: [] });
 
-    const marketAddr = (process.env.MARKETPLACE_CONTRACT_ADDRESS || "").trim();
+    const marketAddr = (getMarketplaceAndReservePoolAddress() || "").trim();
     const nftAddr = (process.env.NFT_CONTRACT_ADDRESS || "").trim();
     if (!marketAddr || !nftAddr) return res.json({ assets: [] });
 
-    // Read owned token ids from Firestore (single doc read, no 1..totalMinted scan)
+    // Read owned token ids from PostgreSQL (single row read)
     const ownedTokenIds = await User.getOwnedTokenIds(wallet);
     if (!Array.isArray(ownedTokenIds) || ownedTokenIds.length === 0) {
       return res.json({ assets: [] });
@@ -311,11 +389,8 @@ router.get("/my-assets", async (req, res) => {
           const isListedByMe = listing.active && listing.seller === wallet;
           if (!inWallet && !isListedByMe) return null;
           const uri = ensureMetadataUri(tokenURI, tokenId);
-          const inferredFromListing =
-            listing.price != null ? Number(listing.price) <= 20 * 10 ** 6 : false;
-          const isFirstSale = saleCount == null ? inferredFromListing : Number(saleCount) === 0;
-          const listPriceUsdt = isFirstSale ? 20 : 40;
-          const listPriceWei = isFirstSale ? "20000000" : "40000000";
+          const listPriceUsdt = MARKETPLACE_LIST_PRICE_USDT;
+          const listPriceWei = MARKETPLACE_LIST_PRICE_WEI;
           return {
             tokenId: String(tokenId),
             saleCount: saleCount == null ? undefined : saleCount,
@@ -345,7 +420,7 @@ router.get("/my-nfts", async (req, res) => {
   try {
     const wallet = await getWalletForRequest(req);
     if (!wallet || !wallet.startsWith("0x")) return res.json({ nfts: [] });
-    const marketAddr = (process.env.MARKETPLACE_CONTRACT_ADDRESS || "").trim();
+    const marketAddr = (getMarketplaceAndReservePoolAddress() || "").trim();
     const nftAddr = (process.env.NFT_CONTRACT_ADDRESS || "").trim();
     if (!marketAddr || !nftAddr) return res.json({ nfts: [] });
     const provider = getProvider();
@@ -387,10 +462,8 @@ router.get("/my-nfts", async (req, res) => {
             const isListedByMe = listing.active && listing.seller === wallet;
             if (!inWallet && !isListedByMe) return null;
             const uri = ensureMetadataUri(tokenURI, tokenId);
-            const inferredFromListing = listing.price != null ? Number(listing.price) <= 20 * 10 ** 6 : false;
-            const isFirstSale = saleCount == null ? inferredFromListing : Number(saleCount) === 0;
-            const listPriceUsdt = isFirstSale ? 20 : 40;
-            const listPriceWei = isFirstSale ? "20000000" : "40000000";
+            const listPriceUsdt = MARKETPLACE_LIST_PRICE_USDT;
+            const listPriceWei = MARKETPLACE_LIST_PRICE_WEI;
             return {
               tokenId: String(tokenId),
               saleCount: saleCount == null ? undefined : saleCount,
@@ -410,7 +483,7 @@ router.get("/my-nfts", async (req, res) => {
   }
 });
 
-// Record purchase in Firestore (buyer + tokenId) so we know which wallet owns which asset. Call after successful buy.
+// Record purchase in PostgreSQL (buyer + tokenId). Call after successful buy.
 router.post("/record-purchase", async (req, res) => {
   try {
     const body = req.body || {};
@@ -441,7 +514,7 @@ router.get("/config", (_, res) => {
   const base = multi.length > 0 ? multi[0] : (process.env.NFT_METADATA_BASE_URI || "").trim().replace(/^ipfs:\/\//, "");
   const mp4Cid = (process.env.NFT_MP4_CID || "").trim();
   res.json({
-    marketplaceAddress: process.env.MARKETPLACE_CONTRACT_ADDRESS || "",
+    marketplaceAddress: getMarketplaceAndReservePoolAddress() || "",
     nftAddress: process.env.NFT_CONTRACT_ADDRESS || "",
     metadataBasePath: base || undefined,
     nftMp4Cid: mp4Cid || undefined,

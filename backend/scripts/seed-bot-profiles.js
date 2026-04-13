@@ -1,12 +1,11 @@
 /**
- * Seed/update Firestore "users" docs for bot wallets so listings show bot profiles.
+ * Seed/update PostgreSQL `users` rows for bot wallets so listings show bot profiles.
  * Run from backend folder: npm run seed-bot-profiles
- * Requires:
- * - FIREBASE_SERVICE_ACCOUNT_PATH or FIREBASE_SERVICE_ACCOUNT_JSON
- * - BOT_1_ADDRESS / BOT_2_ADDRESS (optional BOT_3..BOT_5)
+ * Requires: PGHOST, PGDATABASE, PGUSER, PGPASSWORD and BOT_1_ADDRESS / BOT_2_ADDRESS (optional BOT_3..BOT_5)
  */
 import "dotenv/config";
-import * as User from "../src/services/userFirestore.js";
+import { getPool } from "../src/config/postgres.js";
+import * as User from "../src/services/user.js";
 
 function normalizeAddress(value) {
   if (typeof value !== "string") return "";
@@ -53,6 +52,10 @@ async function upsertBotProfile(bot) {
 }
 
 async function main() {
+  if (!getPool()) {
+    console.error("PostgreSQL not configured. Set PGHOST, PGDATABASE, PGUSER, PGPASSWORD in backend/.env");
+    process.exit(1);
+  }
   const bots = getBotWallets();
   if (bots.length === 0) {
     console.error("No bot wallet addresses found. Set BOT_1_ADDRESS/BOT_2_ADDRESS in backend .env");

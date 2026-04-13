@@ -1,4 +1,4 @@
--- Step 2: PostgreSQL schema for Golden Labs (replaces Firestore collections)
+-- Golden Labs PostgreSQL schema (AWS RDS) — source of truth for app data
 -- Run this once against your RDS database (e.g. psql or any SQL client)
 -- Database name: goldenlabs
 
@@ -24,12 +24,22 @@ CREATE TABLE IF NOT EXISTS users (
   referral_count_l3 INTEGER NOT NULL DEFAULT 0,
   referral_count_l4 INTEGER NOT NULL DEFAULT 0,
   referral_count_l5 INTEGER NOT NULL DEFAULT 0,
+  referral_count_l6 INTEGER NOT NULL DEFAULT 0,
+  referral_count_l7 INTEGER NOT NULL DEFAULT 0,
+  referral_count_l8 INTEGER NOT NULL DEFAULT 0,
+  referral_count_l9 INTEGER NOT NULL DEFAULT 0,
+  referral_count_l10 INTEGER NOT NULL DEFAULT 0,
   total_referrals INTEGER NOT NULL DEFAULT 0,
   referral_earnings_l1 TEXT NOT NULL DEFAULT '0',
   referral_earnings_l2 TEXT NOT NULL DEFAULT '0',
   referral_earnings_l3 TEXT NOT NULL DEFAULT '0',
   referral_earnings_l4 TEXT NOT NULL DEFAULT '0',
   referral_earnings_l5 TEXT NOT NULL DEFAULT '0',
+  referral_earnings_l6 TEXT NOT NULL DEFAULT '0',
+  referral_earnings_l7 TEXT NOT NULL DEFAULT '0',
+  referral_earnings_l8 TEXT NOT NULL DEFAULT '0',
+  referral_earnings_l9 TEXT NOT NULL DEFAULT '0',
+  referral_earnings_l10 TEXT NOT NULL DEFAULT '0',
   referral_earnings_total TEXT NOT NULL DEFAULT '0',
   last_activity TIMESTAMPTZ,
   created_at TIMESTAMPTZ,

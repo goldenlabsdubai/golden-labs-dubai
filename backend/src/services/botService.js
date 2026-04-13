@@ -1,28 +1,22 @@
 /**
  * Bot config and state for admin panel.
- * Bots are identified by env BOT_1_ADDRESS, BOT_2_ADDRESS, ... BOT_5_ADDRESS.
- * Running state is stored in Firestore bot_control/bots.
- * Admin wallets: Firestore collection "admins" (one doc per wallet, doc id = wallet address lowercase).
- * Default admin is seeded on first read if collection is empty.
+ * Bots: BOT_1_ADDRESS … BOT_5_ADDRESS. State + admin list: PostgreSQL (admins, bot_control, admin_settings).
  */
 import { ethers } from "ethers";
-import { getFirestore } from "../config/firebase.js";
 import * as User from "./user.js";
 import * as AdminPg from "./adminPostgres.js";
+import { getTradingIncomePerSellWeiFromEnv } from "../utils/tradingIncomeWei.js";
+import { getMarketplaceAndReservePoolAddress } from "../config/contractsEnv.js";
 
-const BOT_CONTROL_COLLECTION = "bot_control";
-const BOT_STATE_DOC = "bots";
-const ADMINS_COLLECTION = "admins";
+const BOT_SETTINGS_DOC = "bot_rules";
 const BOT_STATS_CACHE_TTL_MS = Number(process.env.BOT_STATS_CACHE_TTL_MS || 20000);
 const BOT_BALANCE_READ_TIMEOUT_MS = Number(process.env.BOT_BALANCE_READ_TIMEOUT_MS || 12000);
 const BOT_TRADES_READ_TIMEOUT_MS = Number(process.env.BOT_TRADES_READ_TIMEOUT_MS || 8000);
-const SELLER_PROFIT_BPS = 120n;
-const SELLER_BASE_DIVISOR = 2n;
 const providerByRpc = new Map();
 const botStatsCache = new Map();
 
-/** Default admin wallet – seeded into Firestore admins collection if empty. */
 const DEFAULT_ADMIN_WALLET = "0xbdf976981242e8078b525e78784bf87c3b9da4ca";
+const DEFAULT_BUYBACK_DELAY_MS = 60 * 60 * 1000;
 
 function getAdminWalletsFromEnv() {
   const raw = process.env.ADMIN_WALLETS || "";
@@ -38,39 +32,17 @@ function getAdminWalletsFromEnv() {
   return [];
 }
 
-/** Ensure default admin doc exists in admins collection. */
-async function ensureDefaultAdmin(db) {
-  const ref = db.collection(ADMINS_COLLECTION).doc(DEFAULT_ADMIN_WALLET);
-  const doc = await ref.get();
-  if (!doc.exists) {
-    await ref.set({ wallet: DEFAULT_ADMIN_WALLET, createdAt: new Date() });
-  }
-}
-
-/** Get admin wallet addresses from Firestore collection "admins". Doc id = wallet (lowercase). */
-async function getAdminWalletsFromFirestore() {
-  const db = getFirestore();
-  if (!db) return [];
-  try {
-    await ensureDefaultAdmin(db);
-    const snapshot = await db.collection(ADMINS_COLLECTION).get();
-    const wallets = [];
-    snapshot.forEach((doc) => {
-      const id = doc.id;
-      if (id && id.startsWith("0x") && id.length === 42) wallets.push(id.toLowerCase());
-    });
-    return wallets;
-  } catch (e) {
-    console.warn("botService getAdminWalletsFromFirestore:", e?.message);
-    return [];
-  }
-}
-
-/** All admin wallets: Firestore first, then env fallback. Used for admin panel login and /api/admin. */
+/** All admin wallets: PostgreSQL `admins` (seeded with default if empty), then env ADMIN_WALLETS / CREATOR_WALLET. */
 export async function getAdminWallets() {
-  const fromFirestore = await getAdminWalletsFromFirestore();
-  if (fromFirestore.length > 0) return fromFirestore;
-  return getAdminWalletsFromEnv();
+  try {
+    const fromPg = await AdminPg.getAdminWalletsFromPg();
+    if (fromPg !== null && fromPg.length > 0) return fromPg;
+  } catch (e) {
+    console.warn("botService getAdminWallets PG:", e?.message);
+  }
+  const env = getAdminWalletsFromEnv();
+  if (env.length > 0) return env;
+  return [DEFAULT_ADMIN_WALLET];
 }
 
 export async function isAdminWallet(wallet) {
@@ -96,7 +68,7 @@ export function isConfiguredBotWallet(wallet) {
   return getBotConfig().some((b) => (b.address || "").toLowerCase() === w);
 }
 
-/** Get running state for all bots. Prefers PostgreSQL, else Firestore. */
+/** Get running state for all bots (PostgreSQL `bot_control`). */
 export async function getBotRunningState() {
   try {
     const fromPg = await AdminPg.getBotRunningStatePg();
@@ -104,35 +76,41 @@ export async function getBotRunningState() {
   } catch (e) {
     console.warn("botService getBotRunningState PG:", e?.message);
   }
-  const db = getFirestore();
-  if (!db) return {};
-  try {
-    const doc = await db.collection(BOT_CONTROL_COLLECTION).doc(BOT_STATE_DOC).get();
-    const data = doc.exists ? doc.data() : {};
-    return data.runningByBotId && typeof data.runningByBotId === "object" ? data.runningByBotId : {};
-  } catch (e) {
-    console.warn("botService getBotRunningState:", e?.message);
-    return {};
-  }
+  return {};
 }
 
-/** Set running state for one bot. Prefers PostgreSQL, else Firestore. */
+/** Set running state for one bot. */
 export async function setBotRunning(botId, running) {
   const state = await getBotRunningState();
   state[String(botId)] = Boolean(running);
-  try {
-    await AdminPg.setBotRunningStatePg(state);
-    return state;
-  } catch (e) {
-    console.warn("botService setBotRunning PG:", e?.message);
-  }
-  const db = getFirestore();
-  if (!db) throw new Error("Database not configured (set PGHOST or Firebase)");
-  await db.collection(BOT_CONTROL_COLLECTION).doc(BOT_STATE_DOC).set(
-    { runningByBotId: state, updatedAt: new Date() },
-    { merge: true }
-  );
+  await AdminPg.setBotRunningStatePg(state);
   return state;
+}
+
+function normalizeBotSettings(input) {
+  const rawDelay = Number(input?.buybackDelayMs);
+  const buybackDelayMs = Number.isFinite(rawDelay) && rawDelay >= 60_000 ? Math.floor(rawDelay) : DEFAULT_BUYBACK_DELAY_MS;
+  return {
+    buybackDelayMs,
+    // Hard rule per client requirement.
+    disableBotToBotBuys: true,
+  };
+}
+
+export async function getBotSettings() {
+  try {
+    const fromPg = await AdminPg.getAdminSettingsByIdPg(BOT_SETTINGS_DOC);
+    if (fromPg !== null && Object.keys(fromPg).length > 0) return normalizeBotSettings(fromPg);
+  } catch (e) {
+    console.warn("botService getBotSettings PG:", e?.message);
+  }
+  return normalizeBotSettings({});
+}
+
+export async function setBotSettings(settings, updatedBy) {
+  const normalized = normalizeBotSettings(settings);
+  await AdminPg.setAdminSettingsByIdPg(BOT_SETTINGS_DOC, normalized, updatedBy || null);
+  return normalized;
 }
 
 /** Get on-chain stats for one address: balances, buy/sell counts, total trades, total profit (USDT 6 decimals).
@@ -143,7 +121,7 @@ export async function getBotStats(address, options = {}) {
   const rpcUrl = (process.env.BOT_STATS_RPC_URL || process.env.RPC_URL || "").trim();
   const usdtAddress = process.env.USDT_ADDRESS;
   const nftAddress = process.env.NFT_CONTRACT_ADDRESS;
-  const marketplaceAddress = process.env.MARKETPLACE_CONTRACT_ADDRESS;
+  const marketplaceAddress = getMarketplaceAndReservePoolAddress();
   if (!rpcUrl || !address) {
     return {
       usdtBalance: "0",
@@ -164,7 +142,7 @@ export async function getBotStats(address, options = {}) {
     return cached.data;
   }
 
-  const firestoreTradesPromise =
+  const dbTradesPromise =
     tradesFromChainOnly
       ? Promise.resolve(null)
       : withTimeoutFallback(
@@ -173,7 +151,7 @@ export async function getBotStats(address, options = {}) {
           null
         );
 
-  const [usdtBalance, bnbBalance, nftBalance, firestoreTrades] = await Promise.all([
+  const [usdtBalance, bnbBalance, nftBalance, dbTrades] = await Promise.all([
     withTimeoutFallback(
       usdtAddress ? getUsdtBalance(provider, usdtAddress, addr) : Promise.resolve("0"),
       Math.max(1500, BOT_BALANCE_READ_TIMEOUT_MS),
@@ -189,11 +167,11 @@ export async function getBotStats(address, options = {}) {
       Math.max(5000, BOT_BALANCE_READ_TIMEOUT_MS),
       cached?.data?.nftBalance ?? 0
     ),
-    firestoreTradesPromise,
+    dbTradesPromise,
   ]);
 
   const tradesAndProfit =
-    firestoreTrades ||
+    dbTrades ||
     (marketplaceAddress
       ? await withTimeoutFallback(
           getTradesAndProfit(provider, marketplaceAddress, addr),
@@ -293,9 +271,24 @@ function parseOptionalNonNegativeInt(value) {
   return Math.floor(n);
 }
 
-/** Query Sold events and compute buy/sell counts + profit-only (1.20% seller profit metric) in USDT 6 decimals. */
+/** Query Sold events and compute buy/sell counts + profit-only (trading income per bot sell) in USDT 6 decimals. */
 async function getTradesAndProfit(provider, marketplaceAddress, botAddress) {
   try {
+    let incomePerSell = getTradingIncomePerSellWeiFromEnv();
+    try {
+      const view = new ethers.Contract(
+        marketplaceAddress,
+        ["function tradingIncomeAmount() view returns (uint256)"],
+        provider
+      );
+      const onChain = await withRpcRetry(() => view.tradingIncomeAmount());
+      if (onChain != null) {
+        const v = BigInt(onChain.toString());
+        if (v > 0n) incomePerSell = v;
+      }
+    } catch (_) {
+      // fallback env/default
+    }
     const contract = new ethers.Contract(
       marketplaceAddress,
       [
@@ -339,9 +332,7 @@ async function getTradesAndProfit(provider, marketplaceAddress, botAddress) {
       const price = e.args?.price != null ? BigInt(e.args.price.toString()) : 0n;
       if (seller === botLower) {
         sellTrades++;
-        const sellerBase = price / SELLER_BASE_DIVISOR;
-        const perSaleProfit = (sellerBase * SELLER_PROFIT_BPS) / 10000n;
-        profitOnly += perSaleProfit;
+        profitOnly += incomePerSell;
       }
       if (buyer === botLower) {
         buyTrades++;

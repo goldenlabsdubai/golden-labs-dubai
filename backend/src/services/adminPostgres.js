@@ -62,3 +62,21 @@ export async function setAdminSettingsContractsPg(addresses, updatedBy) {
     [JSON.stringify(addresses && typeof addresses === "object" ? addresses : {}), updatedBy ?? null]
   );
 }
+
+export async function getAdminSettingsByIdPg(id) {
+  const p = getPool();
+  if (!p) return null;
+  const { rows } = await query("SELECT addresses FROM admin_settings WHERE id = $1", [id]);
+  const raw = rows[0]?.addresses;
+  return raw && typeof raw === "object" ? raw : {};
+}
+
+export async function setAdminSettingsByIdPg(id, payload, updatedBy) {
+  const p = getPool();
+  if (!p) return;
+  await query(
+    `INSERT INTO admin_settings (id, addresses, updated_at, updated_by) VALUES ($1, $2::jsonb, NOW(), $3)
+     ON CONFLICT (id) DO UPDATE SET addresses = $2::jsonb, updated_at = NOW(), updated_by = $3`,
+    [id, JSON.stringify(payload && typeof payload === "object" ? payload : {}), updatedBy ?? null]
+  );
+}

@@ -43,7 +43,8 @@ export default function Landing() {
   const [topSellersLoading, setTopSellersLoading] = useState(true);
   const [recentListings, setRecentListings] = useState([]);
   const [recentListingsLoading, setRecentListingsLoading] = useState(true);
-  const [continuityTop, setContinuityTop] = useState(0);
+  /** null = not measured yet — avoids portal overlay sitting at y=0 on top of hero image */
+  const [continuityTop, setContinuityTop] = useState(null);
   const menuRef = useRef(null);
   const continuityRef = useRef(null);
   const supportCloseTimeoutRef = useRef(null);
@@ -152,17 +153,27 @@ export default function Landing() {
       setContinuityTop(rect.top + window.scrollY);
     }
   }
+  /** Measure before paint + on data/layout changes so overlay never stacks on hero; ResizeObserver catches hero image load reflow */
   useLayoutEffect(() => {
+    const el = continuityRef.current;
+    if (!el) return undefined;
     updateContinuityOffset();
-  }, [topSellers, recentListings]);
-  useEffect(() => {
-    window.addEventListener("scroll", updateContinuityOffset, { passive: true });
-    window.addEventListener("resize", updateContinuityOffset);
+    const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(() => updateContinuityOffset()) : null;
+    if (ro) ro.observe(el);
+    const onScroll = () => updateContinuityOffset();
+    const onResize = () => updateContinuityOffset();
+    const onLoad = () => updateContinuityOffset();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    window.addEventListener("resize", onResize);
+    window.addEventListener("load", onLoad);
+    requestAnimationFrame(() => updateContinuityOffset());
     return () => {
-      window.removeEventListener("scroll", updateContinuityOffset);
-      window.removeEventListener("resize", updateContinuityOffset);
+      if (ro) ro.disconnect();
+      window.removeEventListener("scroll", onScroll);
+      window.removeEventListener("resize", onResize);
+      window.removeEventListener("load", onLoad);
     };
-  }, []);
+  }, [topSellers, recentListings]);
 
   const displayAddress = (token && user?.wallet) ? user.wallet : (isConnected && address) ? address : null;
   const isSignedIn = Boolean(token);
@@ -227,6 +238,10 @@ export default function Landing() {
       ctaLabel = "Complete profile";
       ctaLoading = false;
       ctaOnClick = () => navigate("/profile");
+    } else if (user.state === "SUSPENDED") {
+      ctaLabel = "Resubscribe";
+      ctaLoading = false;
+      ctaOnClick = () => navigate("/subscription");
     } else if (!["SUBSCRIBED", "MINTED", "ACTIVE_TRADER"].includes(user.state ?? "")) {
       ctaLabel = "Proceed to subscription";
       ctaLoading = false;
@@ -470,6 +485,7 @@ export default function Landing() {
         )}
       {typeof document !== "undefined" &&
         document.getElementById("cards-overlay") &&
+        continuityTop != null &&
         createPortal(
           <>
             <div style={{ height: continuityTop, minHeight: 0 }} aria-hidden="true" />

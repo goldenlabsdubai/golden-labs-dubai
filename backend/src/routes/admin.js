@@ -1,15 +1,12 @@
 import { Router } from "express";
 import { ethers } from "ethers";
-import { getFirestore } from "../config/firebase.js";
 import * as AdminPg from "../services/adminPostgres.js";
 import { authMiddleware } from "../middleware/auth.js";
 import * as BotService from "../services/botService.js";
+import { getMarketplaceAndReservePoolAddress } from "../config/contractsEnv.js";
 
 const router = Router();
-const SETTINGS_COLLECTION = "admin_settings";
-const CONTRACTS_DOC = "contracts";
-
-/** Require wallet to be in Firestore config/admins or env admin list. Must be used after authMiddleware. */
+/** Require wallet to be in PostgreSQL `admins` or env admin list. Must be used after authMiddleware. */
 async function requireAdmin(req, res, next) {
   const wallet = (req.wallet || "").toLowerCase();
   const isAdmin = await BotService.isAdminWallet(wallet);
@@ -52,13 +49,15 @@ function isStateOnlyBotControlMode() {
 }
 
 function getEnvContracts() {
+  const marketplace = normalizeAddress(getMarketplaceAndReservePoolAddress());
   return {
     usdt: normalizeAddress(process.env.USDT_ADDRESS),
     subscription: normalizeAddress(process.env.SUBSCRIPTION_CONTRACT_ADDRESS),
     nft: normalizeAddress(process.env.NFT_CONTRACT_ADDRESS),
-    marketplace: normalizeAddress(process.env.MARKETPLACE_CONTRACT_ADDRESS),
+    marketplace,
     referral: normalizeAddress(process.env.REFERRAL_CONTRACT_ADDRESS),
-    reservePool: normalizeAddress(process.env.RESERVE_POOL_CONTRACT_ADDRESS),
+    // Legacy API field: same address as marketplace (MarketplaceAndReservePool).
+    reservePool: marketplace,
     creator: normalizeAddress(process.env.CREATOR_WALLET),
   };
 }
@@ -68,33 +67,29 @@ async function getStoredContracts() {
     const fromPg = await AdminPg.getAdminSettingsContractsPg();
     if (fromPg !== null) return fromPg;
   } catch (_) {}
-  const db = getFirestore();
-  if (!db) return {};
-  const doc = await db.collection(SETTINGS_COLLECTION).doc(CONTRACTS_DOC).get();
-  if (!doc.exists) return {};
-  const addresses = doc.data()?.addresses;
-  return addresses && typeof addresses === "object" ? addresses : {};
+  return {};
 }
 
-/** GET /api/admin/bots – list bots with config, running state (Firestore), and on-chain stats. Bot start/stop is handled in the bots project. */
+/** GET /api/admin/bots – list bots with config, running state (Postgres), and on-chain stats. */
 router.get("/bots", async (req, res) => {
   try {
     const config = BotService.getBotConfig();
     const runningState = await BotService.getBotRunningState();
+    const settings = await BotService.getBotSettings();
     const settled = await Promise.allSettled(
       config.map((bot) =>
         BotService.getBotStats(bot.address, { tradesFromChainOnly: true })
       )
     );
     const bots = config.map((bot, index) => {
-      const firestoreRunning = Boolean(runningState[bot.id]);
+      const runningFlag = Boolean(runningState[bot.id]);
       const resolved = settled[index];
       const stats = resolved.status === "fulfilled" ? resolved.value : emptyBotStats();
       return {
         id: bot.id,
         address: bot.address,
         isConfigured: Boolean(bot.address),
-        running: firestoreRunning,
+        running: runningFlag,
         totalTrades: stats.totalTrades,
         buyTrades: stats.buyTrades,
         sellTrades: stats.sellTrades,
@@ -105,7 +100,7 @@ router.get("/bots", async (req, res) => {
         statsError: resolved.status === "rejected" ? (resolved.reason?.message || "Stats unavailable") : "",
       };
     });
-    res.json({ bots, serverTime: Date.now() });
+    res.json({ bots, settings, serverTime: Date.now() });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -126,7 +121,7 @@ router.patch("/bots/:id/start", async (req, res) => {
   }
 });
 
-/** PATCH /api/admin/bots/:id/stop – set bot running = false in Firestore. Bots project applies this (e.g. PM2 stop) on the server. */
+/** PATCH /api/admin/bots/:id/stop – set bot running = false in Postgres. */
 router.patch("/bots/:id/stop", async (req, res) => {
   try {
     const id = String(req.params.id || "").trim();
@@ -141,7 +136,29 @@ router.patch("/bots/:id/stop", async (req, res) => {
   }
 });
 
-/** GET /api/admin/contracts – merged contracts config (env + Firestore overrides). */
+router.get("/bots/settings", async (_req, res) => {
+  try {
+    const settings = await BotService.getBotSettings();
+    res.json({ settings });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.patch("/bots/settings", async (req, res) => {
+  try {
+    const payload = req.body && typeof req.body === "object" ? req.body : {};
+    const next = await BotService.setBotSettings(
+      { buybackDelayMs: payload.buybackDelayMs },
+      (req.wallet || "").toLowerCase()
+    );
+    res.json({ ok: true, settings: next });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+/** GET /api/admin/contracts – merged contracts config (env + Postgres overrides). */
 router.get("/contracts", async (req, res) => {
   try {
     const envContracts = getEnvContracts();
@@ -151,7 +168,7 @@ router.get("/contracts", async (req, res) => {
       contracts,
       source: {
         env: envContracts,
-        firestore: storedContracts,
+        database: storedContracts,
       },
     });
   } catch (e) {
@@ -159,7 +176,7 @@ router.get("/contracts", async (req, res) => {
   }
 });
 
-/** PATCH /api/admin/contracts – save contract addresses in Firestore admin_settings/contracts. */
+/** PATCH /api/admin/contracts – save contract addresses in Postgres admin_settings. */
 router.patch("/contracts", async (req, res) => {
   try {
     const payload = req.body?.contracts && typeof req.body.contracts === "object" ? req.body.contracts : req.body;
@@ -169,27 +186,20 @@ router.patch("/contracts", async (req, res) => {
       if (payload[key] == null) continue;
       const value = normalizeAddress(String(payload[key]));
       if (!value) return res.status(400).json({ error: `Invalid address for ${key}` });
-      updates[key] = value;
+      if (key === "reservePool") {
+        // Keep old key supported but map it to merged marketplace contract.
+        updates.marketplace = value;
+        updates.reservePool = value;
+      } else {
+        updates[key] = value;
+      }
     }
     if (Object.keys(updates).length === 0) {
       return res.status(400).json({ error: "No valid contract fields provided" });
     }
     const existing = await getStoredContracts();
     const merged = { ...existing, ...updates };
-    try {
-      await AdminPg.setAdminSettingsContractsPg(merged, (req.wallet || "").toLowerCase());
-    } catch (_) {
-      const db = getFirestore();
-      if (!db) return res.status(500).json({ error: "Database not configured in backend" });
-      await db.collection(SETTINGS_COLLECTION).doc(CONTRACTS_DOC).set(
-        {
-          addresses: merged,
-          updatedAt: new Date(),
-          updatedBy: (req.wallet || "").toLowerCase(),
-        },
-        { merge: true }
-      );
-    }
+    await AdminPg.setAdminSettingsContractsPg(merged, (req.wallet || "").toLowerCase());
     const contracts = { ...getEnvContracts(), ...(await getStoredContracts()) };
     res.json({ ok: true, contracts });
   } catch (e) {

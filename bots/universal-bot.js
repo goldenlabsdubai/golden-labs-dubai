@@ -7,7 +7,7 @@
  *
  * Env keys used:
  *   RPC_URL
- *   MARKETPLACE_CONTRACT_ADDRESS
+ *   MARKETPLACE_AND_RESERVE_POOL_CONTRACT_ADDRESS (legacy: MARKETPLACE_CONTRACT_ADDRESS)
  *   NFT_CONTRACT_ADDRESS
  *   USDT_ADDRESS
  *   BOT1_PRIVATE_KEY ... BOT5_PRIVATE_KEY
@@ -17,10 +17,11 @@ import { ethers } from "ethers";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import { PRICES } from "./config.js";
+import { LIST_PRICE_WEI } from "./config.js";
 
 const RPC = process.env.RPC_URL || "http://127.0.0.1:8545";
-const MARKETPLACE_ADDR = process.env.MARKETPLACE_CONTRACT_ADDRESS;
+const MARKETPLACE_ADDR =
+  process.env.MARKETPLACE_AND_RESERVE_POOL_CONTRACT_ADDRESS || process.env.MARKETPLACE_CONTRACT_ADDRESS;
 const NFT_ADDR = process.env.NFT_CONTRACT_ADDRESS;
 const USDT_ADDR = process.env.USDT_ADDRESS;
 const LOCK_TTL_MS = Number(process.env.BOT_LOCK_TTL_MS || 2 * 60 * 1000);
@@ -38,6 +39,15 @@ const RELIST_SCAN_BATCH_SIZE = Number(process.env.BOT_RELIST_SCAN_BATCH_SIZE || 
 const RELIST_MAX_PER_RUN = Number(process.env.BOT_RELIST_MAX_PER_RUN || 3);
 const INTER_BOT_COOLDOWN_MS = Number(process.env.BOT_INTERBOT_COOLDOWN_MS || 24 * 60 * 60 * 1000);
 const USER_LISTING_MIN_AGE_MS = Number(process.env.BOT_USER_LISTING_MIN_AGE_MS || 60 * 60 * 1000);
+/** Max blocks to scan backward for latest Listed(tokenId) when resolving listing time (startup sweep). */
+const LISTED_EVENT_LOOKBACK_BLOCKS = Math.max(
+  1000,
+  Number(process.env.BOT_LISTED_EVENT_LOOKBACK_BLOCKS || 120_000)
+);
+const BUY_MAX_ATTEMPTS = Math.max(1, Math.min(Number(process.env.BOT_BUY_MAX_ATTEMPTS || 2), 5));
+const RELIST_AFTER_BUY_MAX_ATTEMPTS = Math.max(1, Math.min(Number(process.env.BOT_RELIST_AFTER_BUY_MAX_ATTEMPTS || 4), 10));
+const RELIST_RETRY_GAP_MS = Math.max(500, Number(process.env.BOT_RELIST_RETRY_GAP_MS || 2500));
+const BUY_RETRY_GAP_MS = Math.max(500, Number(process.env.BOT_BUY_RETRY_GAP_MS || 2000));
 const POST_APPROVE_DELAY_MS = Number(process.env.BOT_POST_APPROVE_DELAY_MS || 2000);
 const RPC_POLLING_INTERVAL_MS = Number(process.env.BOT_RPC_POLLING_INTERVAL_MS || 12000);
 const BOT_TX_GAS_GWEI = Number(process.env.BOT_TX_GAS_GWEI || 3);
@@ -64,6 +74,7 @@ function resolveBotId() {
 
 const marketplaceAbi = [
   "function listings(uint256) view returns (address seller, uint256 tokenId, uint256 price, bool active)",
+  "function listingListedAt(uint256) view returns (uint64)",
   "function isBotTrader(address) view returns (bool)",
   "event Listed(uint256 indexed tokenId, address indexed seller, uint256 price)",
   "event Sold(uint256 indexed tokenId, address seller, address buyer, uint256 price)",
@@ -131,7 +142,7 @@ async function main() {
 
   if (!isConfigured) {
     console.log(
-      `Bot ${botId} idle - set ${keyVar}, MARKETPLACE_CONTRACT_ADDRESS, NFT_CONTRACT_ADDRESS, USDT_ADDRESS in bots/.env`
+      `Bot ${botId} idle - set ${keyVar}, MARKETPLACE_AND_RESERVE_POOL_CONTRACT_ADDRESS, NFT_CONTRACT_ADDRESS, USDT_ADDRESS in bots/.env`
     );
     return;
   }
@@ -155,8 +166,53 @@ async function main() {
   let cachedHasUserListings = false;
   let lastUserListingsCheckAt = 0;
   const knownBotWallets = new Set();
+  /** Lowercase marketplace address — listings from this seller are dynamic/system supply. */
+  let marketLc = "";
   const interBotCooldowns = readInterBotCooldowns();
   let listingTimestamps = readListingTimestamps();
+  let dynamicUserListingMinAgeMs = Math.max(60_000, USER_LISTING_MIN_AGE_MS);
+
+  /** Preferred: marketplace stores list time on-chain (seconds → ms). No log scan. */
+  async function getListingListedAtMs(tokenId) {
+    try {
+      const sec = await marketplace.listingListedAt(tokenId);
+      const n = sec != null ? Number(sec) : 0;
+      if (Number.isFinite(n) && n > 0) return n * 1000;
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Fallback when listingListedAt is 0 (legacy deployment): latest Listed event in lookback window. */
+  async function getListedEventTimeMsForToken(tokenId) {
+    try {
+      const tid = typeof tokenId === "bigint" ? tokenId : BigInt(String(tokenId));
+      const filter = marketplace.filters.Listed(tid);
+      const latest = await provider.getBlockNumber();
+      const from = Math.max(0, latest - LISTED_EVENT_LOOKBACK_BLOCKS);
+      const events = await marketplace.queryFilter(filter, from, latest);
+      if (!events.length) return null;
+      const last = events[events.length - 1];
+      const blk = await last.getBlock();
+      if (blk?.timestamp == null) return null;
+      return Number(blk.timestamp) * 1000;
+    } catch (e) {
+      console.warn(
+        `Bot ${botId}: Listed time lookup failed token ${tokenId}`,
+        e?.shortMessage || e?.message || e
+      );
+      return null;
+    }
+  }
+
+  async function ensureUserListingTimestampFromChain(tokenIdStr, tokenId) {
+    if (listingTimestamps[tokenIdStr] !== undefined) return;
+    let chainMs = await getListingListedAtMs(tokenId);
+    if (chainMs == null) chainMs = await getListedEventTimeMsForToken(tokenId);
+    listingTimestamps[tokenIdStr] = chainMs ?? Date.now();
+    writeListingTimestamps(listingTimestamps);
+  }
 
   process.on("unhandledRejection", (reason) => {
     if (isRateLimitError(reason)) {
@@ -294,6 +350,7 @@ function txOverrides(kind = "default") {
         for (const row of chunk) {
           if (!row?.active) continue;
           if (!row.seller) continue;
+          if (marketLc && row.seller === marketLc) continue;
           if (!knownBotWallets.has(row.seller)) {
             cachedHasUserListings = true;
             return true;
@@ -316,39 +373,27 @@ function txOverrides(kind = "default") {
     const sellerIsBot = knownBotWallets.has(sellerAddr);
 
     if (sellerAddr === self) return; // never buy own listing
-    if (priceBn !== PRICES.PREFERRED_BUY && priceBn !== PRICES.DEFAULT) return;
+    // Buyback targets member listings only — not dynamic mint (seller = marketplace contract).
+    if (marketLc && sellerAddr === marketLc) return;
+    if (priceBn !== LIST_PRICE_WEI) return;
 
     const eligible = await ensureBotTraderEligibility();
     if (!eligible) return; // skip without logging every time; already logged at startup
 
-    // User listings: wait 60 min before buying so users can trade first.
+    // Hard requirement: never allow bot-to-bot buys.
+    if (sellerIsBot) return;
+
+    // User listings: wait buyback delay from list time (prefer on-chain listingListedAt).
     if (!sellerIsBot) {
-      let firstSeen = listingTimestamps[tokenIdStr];
-      if (firstSeen === undefined) {
-        firstSeen = Date.now();
-        listingTimestamps[tokenIdStr] = firstSeen;
-        writeListingTimestamps(listingTimestamps);
+      let listTimeMs = await getListingListedAtMs(tokenId);
+      if (listTimeMs == null) {
+        await ensureUserListingTimestampFromChain(tokenIdStr, tokenId);
+        listTimeMs = listingTimestamps[tokenIdStr];
       }
-      const ageMs = Date.now() - Number(firstSeen);
-      if (ageMs < USER_LISTING_MIN_AGE_MS) {
-        const minsLeft = Math.ceil((USER_LISTING_MIN_AGE_MS - ageMs) / 60000);
+      const ageMs = Date.now() - Number(listTimeMs);
+      if (ageMs < dynamicUserListingMinAgeMs) {
+        const minsLeft = Math.ceil((dynamicUserListingMinAgeMs - ageMs) / 60000);
         console.log(`Bot ${botId}: skip token ${tokenIdStr}, user listing too new (${minsLeft}m left)`);
-        return;
-      }
-    }
-    if (sellerIsBot) {
-      const cooldownKey = interBotCooldownKey(self, sellerAddr);
-      const now = Date.now();
-      const blockedUntil = Number(interBotCooldowns[cooldownKey] || 0);
-      if (blockedUntil > now) {
-        const minsLeft = Math.ceil((blockedUntil - now) / 60000);
-        console.log(`Bot ${botId}: skip token ${tokenIdStr}, bot pair cooldown ${minsLeft}m left`);
-        return;
-      }
-      // Bot-to-bot trades are allowed only when there are no active user listings.
-      const hasUserListings = await hasAnyActiveUserListing();
-      if (hasUserListings) {
-        console.log(`Bot ${botId}: skip token ${tokenIdStr}, user listings exist`);
         return;
       }
     }
@@ -393,8 +438,34 @@ function txOverrides(kind = "default") {
         console.log(`Bot ${botId}: listing changed or sold, skip token ${tokenIdStr}`);
         return;
       }
-      const buyTx = await marketplace.buy(tokenId, ethers.ZeroAddress, txOverrides("buy"));
-      const buyReceipt = await buyTx.wait();
+
+      let buyTx = null;
+      let buyReceipt = null;
+      for (let attempt = 1; attempt <= BUY_MAX_ATTEMPTS; attempt++) {
+        const live = await marketplace.listings(tokenId);
+        if (!live?.active || (live.seller || "").toString().toLowerCase() !== sellerAddr) {
+          console.log(`Bot ${botId}: listing gone before buy, token ${tokenIdStr}`);
+          return;
+        }
+        if (BigInt((live.price || 0).toString()) !== priceBn) return;
+        try {
+          buyTx = await marketplace.buy(tokenId, ethers.ZeroAddress, txOverrides("buy"));
+          buyReceipt = await buyTx.wait();
+          break;
+        } catch (e) {
+          console.warn(
+            `Bot ${botId}: buy attempt ${attempt}/${BUY_MAX_ATTEMPTS} failed token ${tokenIdStr}`,
+            e?.shortMessage || e?.message || e
+          );
+          if (attempt >= BUY_MAX_ATTEMPTS) {
+            console.error(`Bot ${botId}: buy aborted after ${BUY_MAX_ATTEMPTS} attempts; another bot may succeed`);
+            return;
+          }
+          await new Promise((r) => setTimeout(r, BUY_RETRY_GAP_MS * attempt));
+        }
+      }
+      if (!buyTx || !buyReceipt) return;
+
       console.log(`Bot ${botId}: bought token ${tokenIdStr} (${source})`);
       delete listingTimestamps[tokenIdStr];
       writeListingTimestamps(listingTimestamps);
@@ -407,15 +478,30 @@ function txOverrides(kind = "default") {
         receipt: buyReceipt,
       });
 
-      const approveNftTx = await nft.approve(MARKETPLACE_ADDR, tokenId, txOverrides("approve"));
-      await approveNftTx.wait();
-      const listTx = await marketplace.list(tokenId, PRICES.DEFAULT, txOverrides("list"));
-      await listTx.wait();
-      console.log(`Bot ${botId}: relisted token ${tokenIdStr} at $40`);
-      if (sellerIsBot) {
-        const cooldownKey = interBotCooldownKey(self, sellerAddr);
-        interBotCooldowns[cooldownKey] = Date.now() + Math.max(60_000, INTER_BOT_COOLDOWN_MS);
-        writeInterBotCooldowns(interBotCooldowns);
+      let relistOk = false;
+      for (let attempt = 1; attempt <= RELIST_AFTER_BUY_MAX_ATTEMPTS; attempt++) {
+        try {
+          const approveNftTx = await nft.approve(MARKETPLACE_ADDR, tokenId, txOverrides("approve"));
+          await approveNftTx.wait();
+          const listTx = await marketplace.list(tokenId, LIST_PRICE_WEI, txOverrides("list"));
+          await listTx.wait();
+          relistOk = true;
+          console.log(`Bot ${botId}: relisted token ${tokenIdStr} at $30 (attempt ${attempt})`);
+          break;
+        } catch (e) {
+          console.warn(
+            `Bot ${botId}: relist attempt ${attempt}/${RELIST_AFTER_BUY_MAX_ATTEMPTS} token ${tokenIdStr}`,
+            e?.shortMessage || e?.message || e
+          );
+          if (attempt < RELIST_AFTER_BUY_MAX_ATTEMPTS) {
+            await new Promise((r) => setTimeout(r, RELIST_RETRY_GAP_MS * attempt));
+          }
+        }
+      }
+      if (!relistOk) {
+        console.error(
+          `Bot ${botId}: relist failed after ${RELIST_AFTER_BUY_MAX_ATTEMPTS} attempts; relist-recovery will retry`
+        );
       }
     } catch (e) {
       console.error(`Bot ${botId} trade error (${source}) token ${tokenIdStr}:`, e?.message || e);
@@ -435,44 +521,71 @@ function txOverrides(kind = "default") {
         const end = Math.min(totalMinted, start + batchSize - 1);
         const tokenIds = Array.from({ length: end - start + 1 }, (_, idx) => start + idx);
         const rows = await Promise.all(
-          tokenIds.map((tokenId) =>
-            marketplace
-              .listings(tokenId)
-              .then((l) => ({
+          tokenIds.map(async (tokenId) => {
+            try {
+              const l = await marketplace.listings(tokenId);
+              const active = Boolean(l?.active ?? l?.[3]);
+              if (!active) return null;
+              let listedAtMs = null;
+              try {
+                const sec = await marketplace.listingListedAt(tokenId);
+                const n = sec != null ? Number(sec) : 0;
+                if (Number.isFinite(n) && n > 0) listedAtMs = n * 1000;
+              } catch (_) {
+                listedAtMs = null;
+              }
+              return {
                 tokenId: BigInt(tokenId),
                 seller: (l?.seller || l?.[0] || "").toString(),
                 price: l?.price ?? l?.[2] ?? 0n,
-                active: Boolean(l?.active ?? l?.[3]),
-              }))
-              .catch(() => null)
-          )
+                active: true,
+                listedAtMs,
+              };
+            } catch {
+              return null;
+            }
+          })
         );
         for (const row of rows) {
           if (!row?.active) continue;
           const sellerAddr = (row.seller || "").toString().toLowerCase();
-          const isUserListing = sellerAddr && !knownBotWallets.has(sellerAddr);
+          const isUserListing =
+            sellerAddr && (!marketLc || sellerAddr !== marketLc) && !knownBotWallets.has(sellerAddr);
           if (isUserListing) {
             const tid = row.tokenId.toString();
             if (listingTimestamps[tid] === undefined) {
-              listingTimestamps[tid] = Date.now();
-              writeListingTimestamps(listingTimestamps);
+              await ensureUserListingTimestampFromChain(tid, row.tokenId);
             }
           }
           allRows.push(row);
         }
       }
-      // Prefer oldest user listings first: sort by first-seen time ascending; bot listings after.
+      // Sweep order matches UI priority: dynamic (system) → bot → member; within tier by list time then tokenId.
+      function listingTierRankSeller(sellerRaw) {
+        const s = (sellerRaw || "").toString().toLowerCase();
+        if (marketLc && s === marketLc) return 0;
+        if (knownBotWallets.has(s)) return 1;
+        return 2;
+      }
       allRows.sort((a, b) => {
-        const aSeller = (a.seller || "").toString().toLowerCase();
-        const bSeller = (b.seller || "").toString().toLowerCase();
-        const aUser = aSeller && !knownBotWallets.has(aSeller);
-        const bUser = bSeller && !knownBotWallets.has(bSeller);
-        const aTs = listingTimestamps[a.tokenId.toString()] ?? Infinity;
-        const bTs = listingTimestamps[b.tokenId.toString()] ?? Infinity;
-        if (aUser && bUser) return aTs - bTs;
-        if (aUser && !bUser) return -1;
-        if (!aUser && bUser) return 1;
-        return 0;
+        const ra = listingTierRankSeller(a.seller);
+        const rb = listingTierRankSeller(b.seller);
+        if (ra !== rb) return ra - rb;
+        const aRaw = a.listedAtMs ?? listingTimestamps[a.tokenId.toString()];
+        const bRaw = b.listedAtMs ?? listingTimestamps[b.tokenId.toString()];
+        const aTs = Number.isFinite(aRaw) ? aRaw : null;
+        const bTs = Number.isFinite(bRaw) ? bRaw : null;
+        if (aTs == null && bTs == null) {
+          const sa = (a.seller || "").toString().toLowerCase();
+          const sb = (b.seller || "").toString().toLowerCase();
+          return sa < sb ? -1 : sa > sb ? 1 : 0;
+        }
+        if (aTs == null) return 1;
+        if (bTs == null) return -1;
+        if (aTs !== bTs) return aTs - bTs;
+        const sa = (a.seller || "").toString().toLowerCase();
+        const sb = (b.seller || "").toString().toLowerCase();
+        return sa < sb ? -1 : sa > sb ? 1 : 0;
       });
       for (const row of allRows) {
         await tryBuyAndRelist(row.tokenId, row.seller, row.price, source);
@@ -497,7 +610,7 @@ function txOverrides(kind = "default") {
 
       const approveTx = await nft.approve(MARKETPLACE_ADDR, tokenId, txOverrides("approve"));
       await approveTx.wait();
-      const listTx = await marketplace.list(tokenId, PRICES.DEFAULT, txOverrides("list"));
+      const listTx = await marketplace.list(tokenId, LIST_PRICE_WEI, txOverrides("list"));
       await listTx.wait();
       console.log(`Bot ${botId}: relisted held token ${tokenIdStr} (${source})`);
       return true;
@@ -615,6 +728,10 @@ function txOverrides(kind = "default") {
       if (!res.ok) throw new Error(`control endpoint ${res.status}`);
       const data = await res.json();
       cachedEnabled = Boolean(data?.running);
+      const cfgDelay = Number(data?.settings?.buybackDelayMs);
+      if (Number.isFinite(cfgDelay) && cfgDelay >= 60_000) {
+        dynamicUserListingMinAgeMs = Math.floor(cfgDelay);
+      }
       hadControlError = false;
       return cachedEnabled;
     } catch (e) {
@@ -628,6 +745,7 @@ function txOverrides(kind = "default") {
 
   console.log(`Bot ${botId} wallet: ${wallet.address}`);
   buildKnownBotWalletSet();
+  marketLc = (MARKETPLACE_ADDR || "").toLowerCase();
 
   async function ensureBotTraderEligibility() {
     if (botTraderEligible !== null) return botTraderEligible;
@@ -660,14 +778,22 @@ function txOverrides(kind = "default") {
     enqueue(() => processActiveListingsOnce("startup-sweep"));
   }
 
-  marketplace.on("Listed", (tokenId, seller, price) => {
+  marketplace.on("Listed", (tokenId, seller, price, eventPayload) => {
     enqueue(async () => {
       const enabled = await isBotEnabled();
       if (!enabled) return;
       const sellerAddr = (seller || "").toString().toLowerCase();
-      if (sellerAddr && !knownBotWallets.has(sellerAddr)) {
+      if (sellerAddr && sellerAddr !== marketLc && !knownBotWallets.has(sellerAddr)) {
         const tid = tokenId.toString();
-        listingTimestamps[tid] = Date.now();
+        let tsMs = Date.now();
+        try {
+          const bn = eventPayload?.log?.blockNumber;
+          if (bn != null) {
+            const blk = await provider.getBlock(bn);
+            if (blk?.timestamp != null) tsMs = Number(blk.timestamp) * 1000;
+          }
+        } catch (_) {}
+        listingTimestamps[tid] = tsMs;
         writeListingTimestamps(listingTimestamps);
       }
       await tryBuyAndRelist(tokenId, seller, price, "event-listed");

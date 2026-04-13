@@ -15,6 +15,7 @@ router.get("/config", async (_, res) => {
 
   let totalSupply = null;
   let maxSupply = null;
+  let mintPriceWei = "30000000";
   if (contractAddress && rpcUrl) {
     try {
       const provider = new ethers.JsonRpcProvider(rpcUrl);
@@ -23,19 +24,28 @@ router.get("/config", async (_, res) => {
         [
           "function totalMinted() view returns (uint256)",
           "function MAX_SUPPLY() view returns (uint256)",
+          "function mintPrice() view returns (uint256)",
         ],
         provider
       );
-      totalSupply = Number(await nft.totalMinted());
-      maxSupply = Number(await nft.MAX_SUPPLY());
+      const [totalMintedRaw, maxSupplyRaw, mintPriceRaw] = await Promise.all([
+        nft.totalMinted(),
+        nft.MAX_SUPPLY(),
+        nft.mintPrice(),
+      ]);
+      totalSupply = Number(totalMintedRaw);
+      maxSupply = Number(maxSupplyRaw);
+      mintPriceWei = mintPriceRaw.toString();
     } catch (_) {
       // leave null if chain unreachable or contract not deployed
     }
   }
+  const mintPriceUsdt = (Number(mintPriceWei) / 1e6).toFixed(2);
 
   res.json({
-    price: "10",
-    priceFormatted: "$10 USDT",
+    price: mintPriceUsdt,
+    priceWei: mintPriceWei,
+    priceFormatted: `$${mintPriceUsdt} USDT`,
     rule: "1 Wallet = 1 NFT (lifetime)",
     contractAddress,
     metadataUri: metadataUri || undefined,
@@ -60,7 +70,17 @@ router.post("/confirm", async (req, res) => {
     const { tokenId } = req.body || {};
     if (tokenId != null && tokenId !== "") await User.addOwnedTokenId(wallet, String(tokenId));
     const txHash = (req.body && req.body.txHash) ? String(req.body.txHash).trim() : null;
-    await User.logActivity(wallet, "mint", { tokenId: tokenId != null ? String(tokenId) : null, price: "10000000", ...(txHash ? { txHash } : {}) });
+    let mintPriceWei = "30000000";
+    const contractAddress = process.env.NFT_CONTRACT_ADDRESS || "";
+    const rpcUrl = process.env.RPC_URL || "";
+    if (contractAddress && rpcUrl) {
+      try {
+        const provider = new ethers.JsonRpcProvider(rpcUrl);
+        const nft = new ethers.Contract(contractAddress, ["function mintPrice() view returns (uint256)"], provider);
+        mintPriceWei = (await nft.mintPrice()).toString();
+      } catch (_) {}
+    }
+    await User.logActivity(wallet, "mint", { tokenId: tokenId != null ? String(tokenId) : null, price: mintPriceWei, ...(txHash ? { txHash } : {}) });
     await User.updateUser(user.id, { state: "MINTED", lastActivity: new Date() });
     const updated = await User.getUser(req);
     res.json({

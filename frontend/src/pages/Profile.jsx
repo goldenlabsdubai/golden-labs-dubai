@@ -195,7 +195,7 @@ export default function Profile() {
       if (!res.ok) throw new Error(data.error || "Save failed");
       setSession(token, data.user);
       await refreshUser();
-      // If user just set a referrer (referral code), have them sign setMyReferrer on-chain so L2–L5 payouts work
+      // If user just set a referrer (referral code), have them sign setMyReferrer on-chain so L2–L9 payouts work
       if (data.user?.referrer && referralAddressNormalized && writeContractAsync && address) {
         try {
           const referrerAddr = (data.user.referrer.startsWith("0x") ? data.user.referrer : `0x${data.user.referrer}`).toLowerCase();

@@ -1,11 +1,13 @@
 import { Router } from "express";
+import { getMarketplaceAndReservePoolAddress } from "../config/contractsEnv.js";
 
 const router = Router();
 
 router.get("/info", (_, res) => {
+  const mergedAddr = getMarketplaceAndReservePoolAddress();
   res.json({
-    contractAddress: process.env.RESERVE_POOL_CONTRACT_ADDRESS || "",
-    // Balance would be fetched from chain in production
+    contractAddress: mergedAddr,
+    mergedIntoMarketplace: true,
   });
 });
 

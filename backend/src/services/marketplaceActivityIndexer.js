@@ -1,5 +1,6 @@
 import { ethers } from "ethers";
-import { getFirestore } from "../config/firebase.js";
+import { getPool } from "../config/postgres.js";
+import { getMarketplaceAndReservePoolAddress } from "../config/contractsEnv.js";
 import * as User from "./user.js";
 import * as MetaPg from "./metaPostgres.js";
 
@@ -8,61 +9,46 @@ const ABI = [
   "event Listed(uint256 indexed tokenId, address seller, uint256 price)",
 ];
 
-const META_COLLECTION = "meta";
-const META_DOC = "marketplaceActivityIndexer";
-const LISTING_BLOCKS_DOC = "marketplace_listing_blocks";
-const PROCESSED_COLLECTION = "marketplace_processed_sales";
 const MAX_BLOCKS_PER_QUERY = 10;
 const POLL_INTERVAL_MS = Number(process.env.MARKETPLACE_INDEXER_POLL_INTERVAL_MS || 20000);
 const CHUNK_DELAY_MS = Number(process.env.MARKETPLACE_INDEXER_CHUNK_DELAY_MS || 1000);
 
 async function getLastProcessedBlock() {
+  if (!getPool()) return null;
   try {
     const block = await MetaPg.getLastProcessedBlockMarketplacePg();
     if (block !== null) return block;
   } catch (_) {}
-  const db = getFirestore();
-  if (!db) return null;
-  const snap = await db.collection(META_COLLECTION).doc(META_DOC).get();
-  if (!snap.exists) return null;
-  const d = snap.data();
-  return typeof d.lastProcessedBlock === "number" ? d.lastProcessedBlock : null;
+  return null;
 }
 
 async function setLastProcessedBlock(block) {
+  if (!getPool()) return;
   try {
     await MetaPg.setLastProcessedBlockMarketplacePg(block);
-    return;
   } catch (_) {}
-  const db = getFirestore();
-  if (!db) return;
-  await db.collection(META_COLLECTION).doc(META_DOC).set({ lastProcessedBlock: block }, { merge: true });
 }
 
-async function getListingBlocksDoc(db) {
+async function loadListingBlocksMap() {
+  if (!getPool()) return {};
   try {
     const map = await MetaPg.getListingBlocksMapPg();
-    if (map !== null) return map;
-  } catch (_) {}
-  if (!db) return {};
-  const snap = await db.collection(META_COLLECTION).doc(LISTING_BLOCKS_DOC).get();
-  const data = snap.exists ? snap.data() : {};
-  return data.byTokenId && typeof data.byTokenId === "object" ? data.byTokenId : {};
+    return map && typeof map === "object" ? map : {};
+  } catch (_) {
+    return {};
+  }
 }
 
 /** Public: get tokenId -> { blockNumber, timestamp } for marketplace sort. */
 export async function getListingBlocksMap() {
-  const db = getFirestore();
-  return getListingBlocksDoc(db);
+  return loadListingBlocksMap();
 }
 
-async function setListingBlocksDoc(db, byTokenId) {
+async function setListingBlocksMap(byTokenId) {
+  if (!getPool()) return;
   try {
     await MetaPg.setListingBlocksMapPg(byTokenId);
-    return;
   } catch (_) {}
-  if (!db) return;
-  await db.collection(META_COLLECTION).doc(LISTING_BLOCKS_DOC).set({ byTokenId }, { merge: true });
 }
 
 function getStartBlock(latest) {
@@ -90,31 +76,34 @@ function saleEventId(evt) {
 }
 
 async function isProcessed(eventId) {
-  const db = getFirestore();
-  if (!db || !eventId) return false;
-  const ref = db.collection(PROCESSED_COLLECTION).doc(eventId);
-  const doc = await ref.get();
-  return doc.exists;
+  if (!getPool() || !eventId) return false;
+  try {
+    return await MetaPg.isProcessedSalePg(eventId);
+  } catch (_) {
+    return false;
+  }
 }
 
 async function markProcessed(eventId, payload) {
-  const db = getFirestore();
-  if (!db || !eventId) return;
-  const ref = db.collection(PROCESSED_COLLECTION).doc(eventId);
-  await ref.set(
-    {
-      ...payload,
-      createdAt: new Date(),
-    },
-    { merge: true }
-  );
+  if (!getPool() || !eventId) return;
+  try {
+    await MetaPg.markProcessedSalePg(eventId, payload);
+  } catch (e) {
+    console.warn("markProcessedSalePg:", e?.message);
+  }
 }
 
 export function startMarketplaceActivityIndexer() {
-  const contractAddress = process.env.MARKETPLACE_CONTRACT_ADDRESS;
+  const contractAddress = getMarketplaceAndReservePoolAddress();
   const rpcUrl = process.env.RPC_URL;
   if (!contractAddress || !rpcUrl) {
-    console.warn("Marketplace activity indexer disabled: set MARKETPLACE_CONTRACT_ADDRESS and RPC_URL");
+    console.warn(
+      "Marketplace activity indexer disabled: set MARKETPLACE_AND_RESERVE_POOL_CONTRACT_ADDRESS (or legacy MARKETPLACE_CONTRACT_ADDRESS) and RPC_URL"
+    );
+    return;
+  }
+  if (!getPool()) {
+    console.warn("Marketplace activity indexer disabled: PostgreSQL required for processed-sale dedup (PGHOST, PGDATABASE, PGUSER).");
     return;
   }
 
@@ -149,7 +138,6 @@ export function startMarketplaceActivityIndexer() {
 
 /** Shared poll logic – used by startMarketplaceActivityIndexer and runMarketplaceActivityIndexerOnce (Vercel cron). */
 async function runMarketplaceActivityIndexerPoll(provider, contract) {
-  const db = getFirestore();
   let lastBlock = await getLastProcessedBlock();
   const latest = await provider.getBlockNumber();
   if (lastBlock == null) {
@@ -185,7 +173,7 @@ async function runMarketplaceActivityIndexerPoll(provider, contract) {
     }
     return [];
   };
-  let listingBlocks = await getListingBlocksDoc(db);
+  let listingBlocks = await loadListingBlocksMap();
   let fromBlock = lastBlock + 1;
   const toBlock = latest;
   let processedUpTo = lastBlock;
@@ -244,17 +232,23 @@ async function runMarketplaceActivityIndexerPoll(provider, contract) {
     if (fromBlock <= toBlock) await new Promise((r) => setTimeout(r, CHUNK_DELAY_MS));
   }
   if (Object.keys(listingBlocks).length > 0) {
-    await setListingBlocksDoc(db, listingBlocks);
+    await setListingBlocksMap(listingBlocks);
   }
   await setLastProcessedBlock(processedUpTo);
 }
 
 /** Run marketplace activity indexer once – for Vercel Cron or external cron. */
 export async function runMarketplaceActivityIndexerOnce() {
-  const contractAddress = process.env.MARKETPLACE_CONTRACT_ADDRESS;
+  const contractAddress = getMarketplaceAndReservePoolAddress();
   const rpcUrl = process.env.RPC_URL;
   if (!contractAddress || !rpcUrl) {
-    console.warn("Marketplace activity indexer disabled: set MARKETPLACE_CONTRACT_ADDRESS and RPC_URL");
+    console.warn(
+      "Marketplace activity indexer disabled: set MARKETPLACE_AND_RESERVE_POOL_CONTRACT_ADDRESS (or legacy MARKETPLACE_CONTRACT_ADDRESS) and RPC_URL"
+    );
+    return;
+  }
+  if (!getPool()) {
+    console.warn("Marketplace activity indexer: PostgreSQL required (PGHOST, PGDATABASE, PGUSER).");
     return;
   }
   const provider = new ethers.JsonRpcProvider(rpcUrl);

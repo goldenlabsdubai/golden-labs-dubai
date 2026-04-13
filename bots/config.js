@@ -1,8 +1,5 @@
 /**
- * Bot Config - Fixed prices
- * USDT 6 decimals
+ * Bot Config - Fixed marketplace list/buy price (must match on-chain MarketplaceAndReservePoolContract.listPrice).
+ * USDT 6 decimals — list/buy is $30 (mint price is separate, from NFT contract).
  */
-export const PRICES = {
-  PREFERRED_BUY: 20n * 10n ** 6n,   // $20 - buy if found
-  DEFAULT: 40n * 10n ** 6n,         // $40 - buy else, always sell at this
-};
+export const LIST_PRICE_WEI = 30n * 10n ** 6n;

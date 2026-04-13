@@ -68,17 +68,21 @@ import adminRoutes from "./routes/admin.js";
 import botControlRoutes from "./routes/botControl.js";
 import cronRoutes from "./routes/cron.js";
 import { authMiddleware, optionalAuthMiddleware } from "./middleware/auth.js";
-import { getFirestore } from "./config/firebase.js";
-import { getPool } from "./config/postgres.js";
+import { getPool, requirePostgres } from "./config/postgres.js";
+
+try {
+  requirePostgres();
+} catch (e) {
+  console.error("FATAL:", e.message);
+  process.exit(1);
+}
 
 const uploadsPath = path.join(process.cwd(), "uploads");
 app.use("/uploads", express.static(uploadsPath));
 
 setImmediate(() => {
   if (getPool()) {
-    console.log("Database: PostgreSQL (RDS)");
-  } else if (!getFirestore()) {
-    console.warn("No database configured. Set PGHOST/PGDATABASE/PGUSER for PostgreSQL or Firebase for Firestore.");
+    console.log("Database: PostgreSQL (AWS RDS)");
   }
 });
 

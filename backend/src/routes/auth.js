@@ -1,11 +1,11 @@
 import { Router } from "express";
 import jwt from "jsonwebtoken";
 import { SiweMessage } from "siwe";
-import { verifyIdToken, getFirestore } from "../config/firebase.js";
 import * as AdminPg from "../services/adminPostgres.js";
 import * as User from "../services/user.js";
 import { syncReferrerToChain } from "../services/referralContractSync.js";
 import { isAdminWallet, isConfiguredBotWallet } from "../services/botService.js";
+import { getPool } from "../config/postgres.js";
 
 const router = Router();
 const JWT_SECRET = process.env.JWT_SECRET || "dev-secret-change-in-production";
@@ -20,33 +20,11 @@ function redirectFor(user) {
   return null;
 }
 
-// Firebase login (optional – app is wallet-only now)
-router.post("/firebase", async (req, res) => {
-  try {
-    const { idToken } = req.body;
-    if (!idToken) return res.status(400).json({ error: "idToken required" });
-    const decoded = await verifyIdToken(idToken);
-    if (!decoded) return res.status(401).json({ error: "Invalid Firebase token" });
-    const { uid, email } = decoded;
-
-    let user = await User.getUserByFirebaseUid(uid);
-    if (!user) {
-      await User.createUser({ firebaseUid: uid, email: email || null, state: "REGISTERED" });
-      user = await User.getUserByFirebaseUid(uid);
-    } else {
-      await User.updateUser(user.id, { lastActivity: new Date() });
-      user = await User.getUserByFirebaseUid(uid);
-    }
-
-    const token = jwt.sign({ firebaseUid: uid }, JWT_SECRET, { expiresIn: "7d" });
-    res.json({
-      token,
-      user: { wallet: user.wallet, email: user.email, username: user.username, state: user.state },
-      redirect: redirectFor(user),
-    });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
+// Removed: Firebase email/Google login. Use wallet SIWE (/verify).
+router.post("/firebase", (_req, res) => {
+  res.status(410).json({
+    error: "Firebase auth has been removed. Sign in with your wallet (SIWE).",
+  });
 });
 
 // Check if wallet has an account (public, no auth). New users go to profile first; existing users sign in.
@@ -63,7 +41,7 @@ router.get("/check/:wallet", async (req, res) => {
   }
 });
 
-// Get nonce for SIWE. For existing users we store nonce in users collection; for new users we only return a nonce (no DB create).
+// Get nonce for SIWE. For existing users we store nonce in users row.
 router.get("/nonce/:wallet", async (req, res) => {
   try {
     const raw = req.params.wallet;
@@ -85,7 +63,7 @@ router.get("/nonce/:wallet", async (req, res) => {
   }
 });
 
-// Get nonce for admin SIWE. Stores nonce in Firestore admins collection only (separate from user nonce).
+// Get nonce for admin SIWE. Stores nonce in PostgreSQL `admins`.
 router.get("/admin-nonce/:wallet", async (req, res) => {
   try {
     const raw = req.params.wallet;
@@ -99,25 +77,18 @@ router.get("/admin-nonce/:wallet", async (req, res) => {
     if (!(await isAdminWallet(wallet))) {
       return res.status(403).json({ error: "Not an admin wallet" });
     }
-    const nonce = Math.random().toString(36).slice(2);
-    try {
-      await AdminPg.setAdminNoncePg(wallet, nonce);
-    } catch (_) {
-      const db = getFirestore();
-      if (db) {
-        await db.collection("admins").doc(wallet).set(
-          { nonce, updatedAt: new Date(), wallet },
-          { merge: true }
-        );
-      }
+    if (!getPool()) {
+      return res.status(503).json({ error: "Database not configured" });
     }
+    const nonce = Math.random().toString(36).slice(2);
+    await AdminPg.setAdminNoncePg(wallet, nonce);
     res.json({ nonce });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
-// Verify SIWE and issue JWT. New users must send profile (username etc.); user is created in Firestore only then.
+// Verify SIWE and issue JWT. New users must send profile (username etc.).
 router.post("/verify", async (req, res) => {
   try {
     const { message, signature, referrer: referrerRaw, profile: profileRaw } = req.body;
@@ -200,7 +171,7 @@ router.post("/verify", async (req, res) => {
   }
 });
 
-/** Admin panel login: SIWE verify, then require wallet to be in Firestore config/admins or env admin list. */
+/** Admin panel login: SIWE verify, then require wallet to be in Postgres `admins` or env admin list. */
 router.post("/admin-login", async (req, res) => {
   try {
     const { message, signature } = req.body;

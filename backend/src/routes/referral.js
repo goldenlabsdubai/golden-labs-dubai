@@ -4,10 +4,46 @@ import * as User from "../services/user.js";
 
 const router = Router();
 
+const REFERRAL_LEVELS = 10;
+
+function sumEarningsByLevel(refUser) {
+  let s = 0n;
+  for (let lvl = 1; lvl <= REFERRAL_LEVELS; lvl++) {
+    s += BigInt(refUser[`referralEarningsL${lvl}`] ?? "0");
+  }
+  return s;
+}
+
+function allLevelsZero(refUser) {
+  for (let lvl = 1; lvl <= REFERRAL_LEVELS; lvl++) {
+    if (BigInt(refUser[`referralEarningsL${lvl}`] ?? "0") !== 0n) return false;
+  }
+  return true;
+}
+
+function onlyL1Referrals(refUser) {
+  if ((refUser.referralCountL1 ?? 0) <= 0) return false;
+  for (let lvl = 2; lvl <= REFERRAL_LEVELS; lvl++) {
+    if ((refUser[`referralCountL${lvl}`] ?? 0) !== 0) return false;
+  }
+  return true;
+}
+
+function upperLevelsZero(refUser) {
+  for (let lvl = 2; lvl <= REFERRAL_LEVELS; lvl++) {
+    if (BigInt(refUser[`referralEarningsL${lvl}`] ?? "0") !== 0n) return false;
+  }
+  return true;
+}
+
 router.get("/info", (_, res) => {
   res.json({
-    rate: "2%",
-    contractAddress: process.env.REFERRAL_CONTRACT_ADDRESS || ""
+    rate: "fixed $2 / trade",
+    levels: REFERRAL_LEVELS,
+    contractAddress: process.env.REFERRAL_CONTRACT_ADDRESS || "",
+    /** On-chain default: 10 USDT (6 decimals). Must match ReferralContract.referralWithdrawChunk unless admin changes it. */
+    withdrawChunkWei: "10000000",
+    withdrawChunkUsdt: 10,
   });
 });
 
@@ -36,98 +72,62 @@ router.get("/stats", async (req, res) => {
     const claimableNum = BigInt(claimable);
     const totalNum = BigInt(totalFromDb);
     const hasL1 = (refUser.referralCountL1 ?? 0) >= 1;
-    const allLevelsZero =
-      (refUser.referralEarningsL1 ?? "0") === "0" &&
-      (refUser.referralEarningsL2 ?? "0") === "0" &&
-      (refUser.referralEarningsL3 ?? "0") === "0" &&
-      (refUser.referralEarningsL4 ?? "0") === "0" &&
-      (refUser.referralEarningsL5 ?? "0") === "0";
-    const attributeClaimableToL1 = claimableNum > 0n && totalNum === 0n && hasL1 && allLevelsZero;
+    const allLevelsZeroFlag = allLevelsZero(refUser);
+    const attributeClaimableToL1 = claimableNum > 0n && totalNum === 0n && hasL1 && allLevelsZeroFlag;
 
     if (wallet && claimableNum > totalNum) {
       await User.setReferralEarningsTotalAtLeast(wallet, claimable);
       const updated = await User.getUserByWallet(wallet);
       if (updated) refUser.referralEarningsTotal = updated.referralEarningsTotal ?? "0";
     }
-    // Do NOT add claimable to DB when totalFromDb > claimable (user withdrew). Lifetime = max we've ever seen, never decrease.
     if (attributeClaimableToL1 && wallet) {
       await User.setReferralEarningsL1AtLeast(wallet, claimable);
       const updated = await User.getUserByWallet(wallet);
       if (updated) {
         refUser.referralEarningsTotal = updated.referralEarningsTotal ?? "0";
-        refUser.referralEarningsL1 = updated.referralEarningsL1 ?? "0";
-        refUser.referralEarningsL2 = updated.referralEarningsL2 ?? "0";
-        refUser.referralEarningsL3 = updated.referralEarningsL3 ?? "0";
-        refUser.referralEarningsL4 = updated.referralEarningsL4 ?? "0";
-        refUser.referralEarningsL5 = updated.referralEarningsL5 ?? "0";
+        for (let lvl = 1; lvl <= REFERRAL_LEVELS; lvl++) {
+          refUser[`referralEarningsL${lvl}`] = updated[`referralEarningsL${lvl}`] ?? "0";
+        }
       }
     }
 
     const totalFromDbAfterPersist = refUser.referralEarningsTotal ?? "0";
-    // Lifetime = total ever earned (L1..L5, claimed + unclaimed). We only ever bump DB when claimable > DB; never add on withdraw.
     const lifetimeTotal = totalFromDbAfterPersist;
 
-    const l1FromDb = refUser.referralEarningsL1 ?? "0";
-    const l2FromDb = refUser.referralEarningsL2 ?? "0";
-    const l3FromDb = refUser.referralEarningsL3 ?? "0";
-    const l4FromDb = refUser.referralEarningsL4 ?? "0";
-    const l5FromDb = refUser.referralEarningsL5 ?? "0";
-    const l1Big = BigInt(l1FromDb);
-    const l2Big = BigInt(l2FromDb);
-    const l3Big = BigInt(l3FromDb);
-    const l4Big = BigInt(l4FromDb);
-    const l5Big = BigInt(l5FromDb);
+    const l1Big = BigInt(refUser.referralEarningsL1 ?? "0");
 
-    // If this wallet only has L1 referrals and levels are stored from fallback path,
-    // keep L1 aligned with current on-chain claimable when it grows.
-    const hasOnlyL1Referrals =
-      (refUser.referralCountL1 ?? 0) > 0 &&
-      (refUser.referralCountL2 ?? 0) === 0 &&
-      (refUser.referralCountL3 ?? 0) === 0 &&
-      (refUser.referralCountL4 ?? 0) === 0 &&
-      (refUser.referralCountL5 ?? 0) === 0;
-    const allUpperLevelsZero = l2Big === 0n && l3Big === 0n && l4Big === 0n && l5Big === 0n;
-    if (wallet && hasOnlyL1Referrals && allUpperLevelsZero && claimableNum > l1Big) {
+    if (wallet && onlyL1Referrals(refUser) && upperLevelsZero(refUser) && claimableNum > l1Big) {
       await User.setReferralEarningsL1AtLeast(wallet, claimable);
       const updated = await User.getUserByWallet(wallet);
       if (updated) {
-        refUser.referralEarningsL1 = updated.referralEarningsL1 ?? "0";
-        refUser.referralEarningsL2 = updated.referralEarningsL2 ?? "0";
-        refUser.referralEarningsL3 = updated.referralEarningsL3 ?? "0";
-        refUser.referralEarningsL4 = updated.referralEarningsL4 ?? "0";
-        refUser.referralEarningsL5 = updated.referralEarningsL5 ?? "0";
+        for (let lvl = 1; lvl <= REFERRAL_LEVELS; lvl++) {
+          refUser[`referralEarningsL${lvl}`] = updated[`referralEarningsL${lvl}`] ?? "0";
+        }
       }
     }
 
-    const referralEarningsL1 = refUser.referralEarningsL1 ?? "0";
-    const referralEarningsL2 = refUser.referralEarningsL2 ?? "0";
-    const referralEarningsL3 = refUser.referralEarningsL3 ?? "0";
-    const referralEarningsL4 = refUser.referralEarningsL4 ?? "0";
-    const referralEarningsL5 = refUser.referralEarningsL5 ?? "0";
+    const earningsOut = {};
+    for (let lvl = 1; lvl <= REFERRAL_LEVELS; lvl++) {
+      earningsOut[`referralEarningsL${lvl}`] = String(refUser[`referralEarningsL${lvl}`] ?? "0");
+    }
 
-    const sumL1L5 =
-      BigInt(referralEarningsL1 ?? "0") +
-      BigInt(referralEarningsL2 ?? "0") +
-      BigInt(referralEarningsL3 ?? "0") +
-      BigInt(referralEarningsL4 ?? "0") +
-      BigInt(referralEarningsL5 ?? "0");
-    const lifetimeCard = sumL1L5 > BigInt(lifetimeTotal) ? sumL1L5.toString() : lifetimeTotal;
+    const countsOut = {};
+    for (let lvl = 1; lvl <= REFERRAL_LEVELS; lvl++) {
+      countsOut[`referralCountL${lvl}`] = refUser[`referralCountL${lvl}`] ?? 0;
+    }
+
+    const sumL = sumEarningsByLevel(refUser);
+    const lifetimeCard = sumL > BigInt(lifetimeTotal) ? sumL.toString() : lifetimeTotal;
 
     res.json({
       referrer: refUser.referrer ?? user.referrer ?? null,
-      referralCountL1: refUser.referralCountL1 ?? 0,
-      referralCountL2: refUser.referralCountL2 ?? 0,
-      referralCountL3: refUser.referralCountL3 ?? 0,
-      referralCountL4: refUser.referralCountL4 ?? 0,
-      referralCountL5: refUser.referralCountL5 ?? 0,
+      totalTrades: refUser.totalTrades ?? 0,
+      ...countsOut,
       totalReferrals: refUser.totalReferrals ?? 0,
-      referralEarningsL1: String(referralEarningsL1 ?? "0"),
-      referralEarningsL2: String(referralEarningsL2 ?? "0"),
-      referralEarningsL3: String(referralEarningsL3 ?? "0"),
-      referralEarningsL4: String(referralEarningsL4 ?? "0"),
-      referralEarningsL5: String(referralEarningsL5 ?? "0"),
+      ...earningsOut,
       referralEarningsTotal: String(lifetimeCard),
       claimableOnChain: claimable,
+      referralWithdrawChunkWei,
     });
   } catch (e) {
     res.status(500).json({ error: e.message });

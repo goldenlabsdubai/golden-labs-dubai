@@ -3,7 +3,6 @@ import path from "path";
 import fs from "fs";
 import multer from "multer";
 import * as User from "../services/user.js";
-import { updateAuthUser } from "../config/firebase.js";
 import { getOnChainUserStatus } from "../services/onChainUser.js";
 import { syncReferrerToChain } from "../services/referralContractSync.js";
 import { isAdminWallet, isConfiguredBotWallet } from "../services/botService.js";
@@ -56,12 +55,22 @@ function toMeResponse(user) {
     referralCountL3: user.referralCountL3 ?? 0,
     referralCountL4: user.referralCountL4 ?? 0,
     referralCountL5: user.referralCountL5 ?? 0,
+    referralCountL6: user.referralCountL6 ?? 0,
+    referralCountL7: user.referralCountL7 ?? 0,
+    referralCountL8: user.referralCountL8 ?? 0,
+    referralCountL9: user.referralCountL9 ?? 0,
+    referralCountL10: user.referralCountL10 ?? 0,
     totalReferrals: user.totalReferrals ?? 0,
     referralEarningsL1: user.referralEarningsL1 ?? "0",
     referralEarningsL2: user.referralEarningsL2 ?? "0",
     referralEarningsL3: user.referralEarningsL3 ?? "0",
     referralEarningsL4: user.referralEarningsL4 ?? "0",
     referralEarningsL5: user.referralEarningsL5 ?? "0",
+    referralEarningsL6: user.referralEarningsL6 ?? "0",
+    referralEarningsL7: user.referralEarningsL7 ?? "0",
+    referralEarningsL8: user.referralEarningsL8 ?? "0",
+    referralEarningsL9: user.referralEarningsL9 ?? "0",
+    referralEarningsL10: user.referralEarningsL10 ?? "0",
     referralEarningsTotal: user.referralEarningsTotal ?? "0",
     createdAt: user.createdAt,
   };
@@ -187,12 +196,22 @@ router.get("/me", async (req, res) => {
           referralEarningsL3: walletUser.referralEarningsL3 ?? "0",
           referralEarningsL4: walletUser.referralEarningsL4 ?? "0",
           referralEarningsL5: walletUser.referralEarningsL5 ?? "0",
+          referralEarningsL6: walletUser.referralEarningsL6 ?? "0",
+          referralEarningsL7: walletUser.referralEarningsL7 ?? "0",
+          referralEarningsL8: walletUser.referralEarningsL8 ?? "0",
+          referralEarningsL9: walletUser.referralEarningsL9 ?? "0",
+          referralEarningsL10: walletUser.referralEarningsL10 ?? "0",
           referralEarningsTotal: walletUser.referralEarningsTotal ?? "0",
           referralCountL1: walletUser.referralCountL1 ?? 0,
           referralCountL2: walletUser.referralCountL2 ?? 0,
           referralCountL3: walletUser.referralCountL3 ?? 0,
           referralCountL4: walletUser.referralCountL4 ?? 0,
           referralCountL5: walletUser.referralCountL5 ?? 0,
+          referralCountL6: walletUser.referralCountL6 ?? 0,
+          referralCountL7: walletUser.referralCountL7 ?? 0,
+          referralCountL8: walletUser.referralCountL8 ?? 0,
+          referralCountL9: walletUser.referralCountL9 ?? 0,
+          referralCountL10: walletUser.referralCountL10 ?? 0,
           totalReferrals: walletUser.totalReferrals ?? 0,
         };
       }
@@ -267,13 +286,6 @@ router.post("/profile", async (req, res) => {
       userForResponse = { ...user, referrerUsername: referrerUser?.username ?? null };
     }
 
-    // Sync Firebase Auth profile (displayName, photoURL) for email/Firebase users
-    if (req.firebaseUid && user) {
-      await updateAuthUser(req.firebaseUid, {
-        displayName: user.name ?? null,
-        photoURL: user.avatar ?? null,
-      });
-    }
     const userIsBot = isConfiguredBotWallet(user.wallet);
     let redirect = userIsBot ? "marketplace" : "subscription";
     if (user.state === "MINTED" || (user.state && !["CONNECTED", "REGISTERED", "PROFILE_SET", "SUBSCRIBED"].includes(user.state))) {
@@ -301,7 +313,7 @@ router.post("/avatar-upload", (req, res, next) => {
   try {
     if (!req.file || !req.file.path) return res.status(400).json({ error: "No image file" });
     const accountWallet = (req.wallet || "").toLowerCase();
-    if (!accountWallet && !req.firebaseUid) return res.status(401).json({ error: "Sign in required" });
+    if (!accountWallet) return res.status(401).json({ error: "Sign in required" });
 
     // Only the connected wallet can change avatar for this account
     const connectedHeader = (req.headers["x-connected-wallet"] || "").trim().toLowerCase();

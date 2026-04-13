@@ -3,6 +3,7 @@
  * Used to verify before updating Firestore and to sync user state from chain in GET /user/me.
  */
 import { ethers } from "ethers";
+import { getMarketplaceAndReservePoolAddress } from "../config/contractsEnv.js";
 
 function getProvider() {
   const rpc = process.env.RPC_URL || "http://127.0.0.1:8545";
@@ -34,13 +35,13 @@ function getNftAddress() {
 }
 
 function getMarketplaceAddress() {
-  const addr = (process.env.MARKETPLACE_CONTRACT_ADDRESS || "").trim();
+  const addr = (getMarketplaceAndReservePoolAddress() || "").trim();
   return addr?.startsWith("0x") ? addr : addr ? `0x${addr}` : null;
 }
 
 /**
  * Returns { hasSubscribed, isSuspended, hasMinted, buyCount, subscriptionKnown, mintKnown } for a wallet.
- * hasSubscribed = ever subscribed; isSuspended = 7d inactive or profit >= $60 (need re-subscribe).
+ * hasSubscribed = ever subscribed; isSuspended = inactivity or profit >= threshold (default $50) → must resubscribe.
  * buyCount = number of Sold events where buyer === wallet (on-chain trade count).
  * If a contract is missing or RPC fails, that field is false/0 and we don't throw.
  */
