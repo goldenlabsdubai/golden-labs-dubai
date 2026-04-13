@@ -1,4 +1,5 @@
--- Run once on existing PostgreSQL DBs (adds referral columns up to L10).
+-- Run once on existing PostgreSQL DBs (adds referral columns L6–L10 only).
+-- For DBs that might miss L1–L5 too, use instead: postgres-migration-users-referral-l1-l10.sql
 ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_count_l6 INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_count_l7 INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_count_l8 INTEGER NOT NULL DEFAULT 0;

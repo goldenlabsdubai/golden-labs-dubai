@@ -94,7 +94,7 @@ export async function createUser(data) {
       total_referrals, referral_earnings_l1, referral_earnings_l2, referral_earnings_l3, referral_earnings_l4, referral_earnings_l5,
       referral_earnings_l6, referral_earnings_l7, referral_earnings_l8, referral_earnings_l9, referral_earnings_l10, referral_earnings_total,
       last_activity, created_at, owned_token_ids)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37::timestamptz, $38::timestamptz, '[]'::jsonb)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38::timestamptz, $39::timestamptz, '[]'::jsonb)
      ON CONFLICT (id) DO NOTHING`,
     [
       id,
