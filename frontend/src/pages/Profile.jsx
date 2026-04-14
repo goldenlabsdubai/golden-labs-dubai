@@ -1,8 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { Link, useNavigate } from "react-router-dom";
-import { useAccount, useBalance, useDisconnect, useWriteContract, usePublicClient } from "wagmi";
-import { formatEther } from "viem";
+import { useDisconnect, useWriteContract, usePublicClient } from "wagmi";
 import { useAuth } from "../hooks/useAuth";
 import { useWalletConnect } from "../hooks/useWalletConnect";
 import { API, getAvatarUrl, ASSET_IMAGE } from "../config";
@@ -12,19 +11,10 @@ const REFERRAL_ABI = [
   { name: "setMyReferrer", type: "function", stateMutability: "nonpayable", inputs: [{ name: "referrer", type: "address" }], outputs: [] },
 ];
 
-const EXPLORER_BY_CHAIN = {
-  1: "https://etherscan.io",
-  56: "https://bscscan.com",
-  137: "https://polygonscan.com",
-  8453: "https://basescan.org",
-};
-
 export default function Profile() {
   const { user, token, setSession, refreshUser, connect, logout } = useAuth();
   const navigate = useNavigate();
   const { openModal, isConnected, address } = useWalletConnect();
-  const { chainId } = useAccount();
-  const { data: balanceData } = useBalance({ address: address ?? undefined });
   const { disconnect: disconnectWallet } = useDisconnect();
   const publicClient = usePublicClient();
   const { writeContractAsync } = useWriteContract();
@@ -46,15 +36,10 @@ export default function Profile() {
   const [avatarPreviewUrl, setAvatarPreviewUrl] = useState("");
   const [portalReady, setPortalReady] = useState(false);
   const [addressMenuOpen, setAddressMenuOpen] = useState(false);
-  const [copied, setCopied] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const menuRef = useRef(null);
 
   const displayAddress = (token && user?.wallet) ? user.wallet : (isConnected && address) ? address : null;
-  const explorerUrl = chainId && EXPLORER_BY_CHAIN[chainId] && displayAddress
-    ? `${EXPLORER_BY_CHAIN[chainId]}/address/${displayAddress}`
-    : null;
-
   const handleConnect = () => {
     if (openModal) openModal();
   };
@@ -64,15 +49,6 @@ export default function Profile() {
     disconnectWallet();
     logout();
     navigate("/", { replace: true });
-  };
-
-  const handleCopyAddress = async () => {
-    if (!displayAddress) return;
-    try {
-      await navigator.clipboard.writeText(displayAddress);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch {}
   };
 
   useEffect(() => {
@@ -277,23 +253,6 @@ export default function Profile() {
               </button>
               {addressMenuOpen && (
                 <div className="landing-v2__address-menu">
-                  {balanceData && (
-                    <div className="landing-v2__address-menu-balance">
-                      <span className="landing-v2__address-menu-balance-label">Balance</span>
-                      <span className="landing-v2__address-menu-balance-value">
-                        {Number(formatEther(balanceData.value ?? 0n)).toFixed(4)} {balanceData.symbol ?? "BNB"}
-                      </span>
-                    </div>
-                  )}
-                  <button type="button" className="landing-v2__address-menu-item" onClick={handleCopyAddress}>
-                    {copied ? "Copied!" : "Copy address"}
-                  </button>
-                  {explorerUrl && (
-                    <a href={explorerUrl} target="_blank" rel="noopener noreferrer" className="landing-v2__address-menu-item landing-v2__address-menu-item--link">
-                      View on explorer
-                    </a>
-                  )}
-                  <div className="landing-v2__address-menu-divider" />
                   <button type="button" className="landing-v2__address-menu-item landing-v2__address-menu-item--danger" onClick={handleDisconnect}>
                     Disconnect wallet
                   </button>

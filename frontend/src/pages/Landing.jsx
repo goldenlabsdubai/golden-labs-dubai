@@ -1,20 +1,12 @@
 import { useState, useEffect, useLayoutEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
-import { useAccount, useBalance, useDisconnect } from "wagmi";
-import { formatEther } from "viem";
+import { useDisconnect } from "wagmi";
 import { useAuth } from "../hooks/useAuth";
 import { useWalletConnect } from "../hooks/useWalletConnect";
 import { useSignInWithWallet } from "../hooks/useSignInWithWallet";
 import { API, getAvatarUrl } from "../config.js";
 import { getTransactionErrorMessage } from "../utils/transactionError";
-
-const EXPLORER_BY_CHAIN = {
-  1: "https://etherscan.io",
-  56: "https://bscscan.com",
-  137: "https://polygonscan.com",
-  8453: "https://basescan.org",
-};
 
 const POLL_TOP_SELLERS_MS = 8000;
 
@@ -31,14 +23,11 @@ export default function Landing() {
   const navigate = useNavigate();
   const { connect, token, user, setSession, refreshUser, logout } = useAuth();
   const { openModal, isConnected, address } = useWalletConnect();
-  const { chainId } = useAccount();
-  const { data: balanceData } = useBalance({ address: address ?? undefined });
   const { signIn, loading: signInLoading } = useSignInWithWallet();
   const { disconnect: disconnectWallet } = useDisconnect();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [addressMenuOpen, setAddressMenuOpen] = useState(false);
-  const [copied, setCopied] = useState(false);
   const [topSellers, setTopSellers] = useState([]);
   const [topSellersLoading, setTopSellersLoading] = useState(true);
   const [recentListings, setRecentListings] = useState([]);
@@ -218,17 +207,6 @@ export default function Landing() {
     logout();
   };
 
-  const handleCopyAddress = () => {
-    if (!displayAddress) return;
-    navigator.clipboard.writeText(displayAddress).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    });
-  };
-
-  const explorerBase = chainId ? (EXPLORER_BY_CHAIN[chainId] ?? "https://bscscan.com") : "https://bscscan.com";
-  const explorerUrl = displayAddress ? `${explorerBase}/address/${displayAddress}` : null;
-
   let ctaLabel = "Connect Wallet";
   let ctaLoading = loading;
   let ctaOnClick = handleConnect;
@@ -285,23 +263,6 @@ export default function Landing() {
               </button>
               {addressMenuOpen && (
                 <div className="landing-v2__address-menu">
-                  {balanceData && (
-                    <div className="landing-v2__address-menu-balance">
-                      <span className="landing-v2__address-menu-balance-label">Balance</span>
-                      <span className="landing-v2__address-menu-balance-value">
-                        {Number(formatEther(balanceData.value ?? 0n)).toFixed(4)} {balanceData.symbol ?? "BNB"}
-                      </span>
-                    </div>
-                  )}
-                  <button type="button" className="landing-v2__address-menu-item" onClick={handleCopyAddress}>
-                    {copied ? "Copied!" : "Copy address"}
-                  </button>
-                  {explorerUrl && (
-                    <a href={explorerUrl} target="_blank" rel="noopener noreferrer" className="landing-v2__address-menu-item landing-v2__address-menu-item--link">
-                      View on explorer
-                    </a>
-                  )}
-                  <div className="landing-v2__address-menu-divider" />
                   <button type="button" className="landing-v2__address-menu-item landing-v2__address-menu-item--danger" onClick={handleDisconnect}>
                     Disconnect wallet
                   </button>
@@ -410,7 +371,6 @@ export default function Landing() {
                     <div key={`listing-${l.tokenId}-${i}`} className="landing-v2__nft-card">
                       <div className="landing-v2__nft-card-image" style={{ backgroundImage: 'url("/gldass.png")', backgroundSize: "cover", backgroundPosition: "center" }} />
                       <h3 className="landing-v2__nft-card-title">GLFA #{l.tokenId}</h3>
-                      <p className="landing-v2__nft-card-creator">Owned by {l.sellerUsername ? `@${l.sellerUsername}` : "—"}</p>
                       <p className="landing-v2__nft-card-price">{l.priceFormatted || (Number(l.price) / 1e6).toFixed(0) + " USDT"}</p>
                       <button type="button" className="landing-v2__btn landing-v2__btn--primary landing-v2__btn--sm" onClick={() => navigate("/marketplace")}>Buy Now</button>
                     </div>
@@ -546,7 +506,6 @@ export default function Landing() {
                           <div key={`listing-${l.tokenId}-${i}`} className="landing-v2__nft-card">
                             <div className="landing-v2__nft-card-image" style={{ backgroundImage: 'url("/gldass.png")', backgroundSize: "cover", backgroundPosition: "center" }} />
                             <h3 className="landing-v2__nft-card-title">GLFA #{l.tokenId}</h3>
-                            <p className="landing-v2__nft-card-creator">Owned by {l.sellerUsername ? `@${l.sellerUsername}` : "—"}</p>
                             <p className="landing-v2__nft-card-price">{l.priceFormatted || (Number(l.price) / 1e6).toFixed(0) + " USDT"}</p>
                             <button type="button" className="landing-v2__btn landing-v2__btn--primary landing-v2__btn--sm" onClick={() => navigate("/marketplace")}>Buy Now</button>
                           </div>

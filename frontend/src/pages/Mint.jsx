@@ -19,14 +19,6 @@ const NFT_ABI = [
   { name: "nextTokenId", type: "function", stateMutability: "view", inputs: [], outputs: [{ type: "uint256" }] },
   { name: "totalMinted", type: "function", stateMutability: "view", inputs: [], outputs: [{ type: "uint256" }] },
 ];
-const EXPLORER_BY_CHAIN = {
-  1: "https://etherscan.io",
-  56: "https://bscscan.com",
-  97: "https://testnet.bscscan.com",
-  137: "https://polygonscan.com",
-  8453: "https://basescan.org",
-};
-
 export default function Mint() {
   const { token, refreshUser, user } = useAuth();
   const navigate = useNavigate();
@@ -51,7 +43,6 @@ export default function Mint() {
     maxSupply: null,
   });
   const [addressMenuOpen, setAddressMenuOpen] = useState(false);
-  const [copied, setCopied] = useState(false);
   const [portalReady, setPortalReady] = useState(false);
   const menuRef = useRef(null);
   const publicClient = usePublicClient();
@@ -113,14 +104,6 @@ export default function Mint() {
     setAddressMenuOpen(false);
     disconnectWallet();
     navigate("/", { replace: true });
-  };
-  const handleCopyAddress = async () => {
-    if (!displayAddress) return;
-    try {
-      await navigator.clipboard.writeText(displayAddress);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch (_) {}
   };
   useEffect(() => {
     function handleClickOutside(e) {
@@ -264,23 +247,6 @@ export default function Mint() {
               </button>
               {addressMenuOpen && (
                 <div className="landing-v2__address-menu">
-                  {balanceData && (
-                    <div className="landing-v2__address-menu-balance">
-                      <span className="landing-v2__address-menu-balance-label">Balance</span>
-                      <span className="landing-v2__address-menu-balance-value">
-                        {Number(formatEther(balanceData.value ?? 0n)).toFixed(4)} {balanceData.symbol ?? "BNB"}
-                      </span>
-                    </div>
-                  )}
-                  <button type="button" className="landing-v2__address-menu-item" onClick={handleCopyAddress}>
-                    {copied ? "Copied!" : "Copy address"}
-                  </button>
-                  {explorerUrl && (
-                    <a href={explorerUrl} target="_blank" rel="noopener noreferrer" className="landing-v2__address-menu-item landing-v2__address-menu-item--link">
-                      View on explorer
-                    </a>
-                  )}
-                  <div className="landing-v2__address-menu-divider" />
                   <button type="button" className="landing-v2__address-menu-item landing-v2__address-menu-item--danger" onClick={handleDisconnect}>
                     Disconnect wallet
                   </button>

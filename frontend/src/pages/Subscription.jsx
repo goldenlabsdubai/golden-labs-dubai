@@ -19,14 +19,6 @@ const SUBSCRIPTION_ABI = [
   { name: "subscribe", type: "function", stateMutability: "nonpayable", inputs: [], outputs: [] },
 ];
 
-const EXPLORER_BY_CHAIN = {
-  1: "https://etherscan.io",
-  56: "https://bscscan.com",
-  97: "https://testnet.bscscan.com",
-  137: "https://polygonscan.com",
-  8453: "https://basescan.org",
-};
-
 /** Per-tx gas must stay under the block gas limit (~16.7M on BSC). Bad RPC estimates can return 30M+ and revert with "gas limit too high". */
 const MAX_SAFE_TX_GAS = 12_000_000n;
 const DEFAULT_APPROVE_GAS = 120_000n;
@@ -67,7 +59,6 @@ export default function Subscription() {
     functionName: "subscriptionPrice",
   });
   const subscriptionPriceFormatted = subscriptionPriceWei != null ? `${Number(formatUnits(subscriptionPriceWei, 6))} USDT` : "10 USDT";
-  const [copied, setCopied] = useState(false);
   const [portalReady, setPortalReady] = useState(false);
   const menuRef = useRef(null);
 
@@ -90,9 +81,6 @@ export default function Subscription() {
   }, []);
 
   const displayAddress = address || (token && user?.wallet ? user.wallet : null) || null;
-  const explorerUrl = chainId && EXPLORER_BY_CHAIN[chainId] && displayAddress
-    ? `${EXPLORER_BY_CHAIN[chainId]}/address/${displayAddress}`
-    : null;
 
   const handleConnect = () => {
     if (openModal) openModal();
@@ -102,15 +90,6 @@ export default function Subscription() {
     setAddressMenuOpen(false);
     disconnectWallet();
     navigate("/", { replace: true });
-  };
-
-  const handleCopyAddress = async () => {
-    if (!displayAddress) return;
-    try {
-      await navigator.clipboard.writeText(displayAddress);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch {}
   };
 
   useEffect(() => {
@@ -260,23 +239,6 @@ export default function Subscription() {
               </button>
               {addressMenuOpen && (
                 <div className="landing-v2__address-menu">
-                  {balanceData && (
-                    <div className="landing-v2__address-menu-balance">
-                      <span className="landing-v2__address-menu-balance-label">Balance</span>
-                      <span className="landing-v2__address-menu-balance-value">
-                        {Number(formatEther(balanceData.value ?? 0n)).toFixed(4)} {balanceData.symbol ?? "BNB"}
-                      </span>
-                    </div>
-                  )}
-                  <button type="button" className="landing-v2__address-menu-item" onClick={handleCopyAddress}>
-                    {copied ? "Copied!" : "Copy address"}
-                  </button>
-                  {explorerUrl && (
-                    <a href={explorerUrl} target="_blank" rel="noopener noreferrer" className="landing-v2__address-menu-item landing-v2__address-menu-item--link">
-                      View on explorer
-                    </a>
-                  )}
-                  <div className="landing-v2__address-menu-divider" />
                   <button type="button" className="landing-v2__address-menu-item landing-v2__address-menu-item--danger" onClick={handleDisconnect}>
                     Disconnect wallet
                   </button>

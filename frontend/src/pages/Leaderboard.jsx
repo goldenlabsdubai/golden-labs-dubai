@@ -1,38 +1,25 @@
 import { useState, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { Link } from "react-router-dom";
-import { useAccount, useBalance, useDisconnect } from "wagmi";
-import { formatEther } from "viem";
+import { useDisconnect } from "wagmi";
 import { useAuth } from "../hooks/useAuth";
 import { useWalletConnect } from "../hooks/useWalletConnect";
 import { API, getAvatarUrl } from "../config";
-
-const EXPLORER_BY_CHAIN = {
-  1: "https://etherscan.io",
-  56: "https://bscscan.com",
-  97: "https://testnet.bscscan.com",
-  137: "https://polygonscan.com",
-  8453: "https://basescan.org",
-};
 
 const TOP_SELLERS_LIMIT = 10;
 
 export default function Leaderboard() {
   const { user, token } = useAuth();
   const { openModal, isConnected, address } = useWalletConnect();
-  const { chainId } = useAccount();
-  const { data: balanceData } = useBalance({ address: address ?? undefined });
   const { disconnect: disconnectWallet } = useDisconnect();
   const [topSellers, setTopSellers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [addressMenuOpen, setAddressMenuOpen] = useState(false);
-  const [copied, setCopied] = useState(false);
   const [avatarError, setAvatarError] = useState(false);
   const [portalReady, setPortalReady] = useState(false);
   const menuRef = useRef(null);
 
   const displayAddress = (token && (user?.wallet || address)) ? (user?.wallet || address) : (isConnected && address) ? address : null;
-  const explorerUrl = chainId && EXPLORER_BY_CHAIN[chainId] && displayAddress ? `${EXPLORER_BY_CHAIN[chainId]}/address/${displayAddress}` : null;
 
   useEffect(() => setPortalReady(true), []);
 
@@ -67,14 +54,6 @@ export default function Leaderboard() {
     if (addressMenuOpen) document.addEventListener("click", handleClickOutside);
     return () => document.removeEventListener("click", handleClickOutside);
   }, [addressMenuOpen]);
-
-  const handleCopyAddress = () => {
-    if (!displayAddress) return;
-    navigator.clipboard.writeText(displayAddress).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    });
-  };
 
   const handleDisconnect = () => {
     setAddressMenuOpen(false);
@@ -126,29 +105,6 @@ export default function Leaderboard() {
               </button>
               {addressMenuOpen && (
                 <div className="marketplace-page__dropdown">
-                  {user && (
-                    <div className="marketplace-page__user-summary">
-                      {user.avatar ? (
-                        <img src={getAvatarUrl(user.avatar)} alt="" className="marketplace-page__user-avatar" />
-                      ) : (
-                        <span className="marketplace-page__user-avatar marketplace-page__user-avatar--placeholder">@</span>
-                      )}
-                      <div className="marketplace-page__user-info">
-                        <span className="marketplace-page__user-name">{user.username ? `@${user.username}` : (user.name || "—")}</span>
-                        <span className="marketplace-page__user-wallet" title={displayAddress}>{displayAddress?.slice(0, 6)}…{displayAddress?.slice(-4)}</span>
-                        <span className="marketplace-page__user-meta">Trades: {user.totalTrades ?? 0}</span>
-                      </div>
-                    </div>
-                  )}
-                  {balanceData && (
-                    <div className="marketplace-page__dropdown-balance">
-                      {Number(formatEther(balanceData.value ?? 0n)).toFixed(4)} {balanceData.symbol ?? "BNB"}
-                    </div>
-                  )}
-                  <button type="button" onClick={handleCopyAddress}>{copied ? "Copied!" : "Copy address"}</button>
-                  {explorerUrl && <a href={explorerUrl} target="_blank" rel="noopener noreferrer">View on explorer</a>}
-                  <Link to="/dashboard" onClick={() => setAddressMenuOpen(false)}>My Dashboard</Link>
-                  <div className="marketplace-page__dropdown-divider" />
                   <button type="button" className="marketplace-page__dropdown-danger" onClick={handleDisconnect}>Disconnect</button>
                 </div>
               )}

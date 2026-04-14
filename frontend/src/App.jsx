@@ -5,6 +5,7 @@ import "./App.css";
 import { useAuth } from "./hooks/useAuth";
 import ParticleNetwork from "./components/ParticleNetwork";
 import SupportChat from "./components/SupportChat";
+import MobileBottomNav from "./components/MobileBottomNav";
 
 const BSC_TESTNET_CHAIN_ID = 97;
 
@@ -76,9 +77,11 @@ export default function App() {
   const isProfilePage = location.pathname === "/profile";
   const isProfileSetupPage = location.pathname === "/profile/setup";
   const isLandingPage = location.pathname === "/";
+  const showMobileBottomNav =
+    !/^\/profile\/setup/.test(location.pathname) && !/^\/user\//.test(location.pathname);
 
   return (
-    <div className="app">
+    <div className={`app${showMobileBottomNav ? " app--mobile-nav" : ""}`}>
       <ReconnectOnLoad />
       <ForceBscTestnet />
       <div className={`app-content${isLandingPage ? " app-content--landing" : ""}`}>
@@ -103,6 +106,7 @@ export default function App() {
           </Routes>
         </div>
       </div>
+      {showMobileBottomNav ? <MobileBottomNav /> : null}
     </div>
   );
 }

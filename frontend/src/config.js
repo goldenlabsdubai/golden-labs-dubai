@@ -1,5 +1,8 @@
 export const API = import.meta.env.VITE_API_URL ?? "";
 
+/** BNB logo — `frontend/public/bnb_logo.png` (wallet balance, modals). */
+export const BNB_LOGO_PUBLIC = "/bnb_logo.png";
+
 /** MarketplaceAndReservePoolContract – single address for marketplace + reserve (legacy: VITE_MARKETPLACE_CONTRACT). */
 export const MARKETPLACE_AND_RESERVE_POOL_ADDRESS = (
   import.meta.env.VITE_MARKETPLACE_AND_RESERVE_POOL_CONTRACT_ADDRESS ||

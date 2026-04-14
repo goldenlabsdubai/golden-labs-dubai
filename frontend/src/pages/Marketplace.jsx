@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { Link, useNavigate } from "react-router-dom";
-import { useAccount, useBalance, useDisconnect, useWriteContract, usePublicClient, useWatchContractEvent, useReadContract } from "wagmi";
+import { useBalance, useDisconnect, useWriteContract, usePublicClient, useWatchContractEvent, useReadContract } from "wagmi";
 import { formatEther, formatUnits } from "viem";
 import { useAuth } from "../hooks/useAuth";
 import { useWalletConnect } from "../hooks/useWalletConnect";
@@ -27,19 +27,10 @@ const USDT_ABI = [
   { name: "balanceOf", type: "function", stateMutability: "view", inputs: [{ name: "account", type: "address" }], outputs: [{ type: "uint256" }] },
 ];
 
-const EXPLORER_BY_CHAIN = {
-  1: "https://etherscan.io",
-  56: "https://bscscan.com",
-  97: "https://testnet.bscscan.com",
-  137: "https://polygonscan.com",
-  8453: "https://basescan.org",
-};
-
 export default function Marketplace() {
   const { user, token, refreshUser } = useAuth();
   const navigate = useNavigate();
   const { openModal, isConnected, address } = useWalletConnect();
-  const { chainId } = useAccount();
   const { data: balanceData } = useBalance({ address: address ?? undefined });
   const { disconnect: disconnectWallet } = useDisconnect();
   const [listings, setListings] = useState([]);
@@ -58,7 +49,6 @@ export default function Marketplace() {
   const [sortDropdownOpen, setSortDropdownOpen] = useState(false);
   const [sortBy, setSortBy] = useState("Oldest Listed");
   const [listLayout, setListLayout] = useState("grid-3");
-  const [copied, setCopied] = useState(false);
   const [portalReady, setPortalReady] = useState(false);
   const [insufficientBalanceType, setInsufficientBalanceType] = useState(null);
   const sortDropdownRef = useRef(null);
@@ -85,7 +75,6 @@ export default function Marketplace() {
   const bnbBalanceFormatted = balanceData?.value != null ? Number(formatEther(balanceData.value)).toFixed(4) : null;
   const displayAddress = (token && (user?.wallet || address)) ? (user?.wallet || address) : (isConnected && address) ? address : null;
   const currentWallet = (displayAddress || user?.wallet || address || "").toString().toLowerCase();
-  const explorerUrl = chainId && EXPLORER_BY_CHAIN[chainId] && displayAddress ? `${EXPLORER_BY_CHAIN[chainId]}/address/${displayAddress}` : null;
 
   useEffect(() => setPortalReady(true), []);
   const fetchListingsLatest = () => {
@@ -146,14 +135,6 @@ export default function Marketplace() {
 
   const handleConnect = () => { if (openModal) openModal(); };
   const handleDisconnect = () => { setAddressMenuOpen(false); disconnectWallet(); navigate("/", { replace: true }); };
-  const handleCopyAddress = async () => {
-    if (!displayAddress) return;
-    try {
-      await navigator.clipboard.writeText(displayAddress);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch (_) {}
-  };
   useEffect(() => {
     function handleClickOutside(e) {
       if (menuRef.current && !menuRef.current.contains(e.target)) setAddressMenuOpen(false);
@@ -408,32 +389,6 @@ export default function Marketplace() {
               </button>
               {addressMenuOpen && (
                 <div className="marketplace-page__dropdown">
-                  {user && (
-                    <div className="marketplace-page__user-summary">
-                      {user.avatar ? (
-                        <img src={getAvatarUrl(user.avatar)} alt="" className="marketplace-page__user-avatar" />
-                      ) : (
-                        <span className="marketplace-page__user-avatar marketplace-page__user-avatar--placeholder">@</span>
-                      )}
-                      <div className="marketplace-page__user-info">
-                        <span className="marketplace-page__user-name">{user.username ? `@${user.username}` : (user.name || "—")}</span>
-                        <span className="marketplace-page__user-wallet" title={displayAddress}>{displayAddress?.slice(0, 6)}…{displayAddress?.slice(-4)}</span>
-                        <span className="marketplace-page__user-meta">Status: {user.state ?? "—"} · Trades: {user.totalTrades ?? 0}</span>
-                        {(user.totalReferrals ?? 0) > 0 && (
-                          <span className="marketplace-page__user-meta">Referrals: {user.totalReferrals} · Earnings: ${(Number(user.referralEarningsTotal || "0") / 1e6).toFixed(2)} USDT <img src="/USDT_BEP20.png" alt="" className="usdt-logo-inline" aria-hidden="true" /></span>
-                        )}
-                      </div>
-                    </div>
-                  )}
-                  {balanceData && (
-                    <div className="marketplace-page__dropdown-balance">
-                      {Number(formatEther(balanceData.value ?? 0n)).toFixed(4)} {balanceData.symbol ?? "BNB"}
-                    </div>
-                  )}
-                  <button type="button" onClick={handleCopyAddress}>{copied ? "Copied!" : "Copy address"}</button>
-                  {explorerUrl && <a href={explorerUrl} target="_blank" rel="noopener noreferrer">View on explorer</a>}
-                  <Link to="/dashboard" onClick={() => setAddressMenuOpen(false)}>My Dashboard</Link>
-                  <div className="marketplace-page__dropdown-divider" />
                   <button type="button" className="marketplace-page__dropdown-danger" onClick={handleDisconnect}>Disconnect</button>
                 </div>
               )}
@@ -582,25 +537,11 @@ export default function Marketplace() {
                   </div>
                   <div className="profile-hub__nft-card-details">
                     <div className="profile-hub__nft-card-row">
-                      <span className="profile-hub__nft-id">
-                        GLFA #{l.tokenId}
-                        {l.listingTierLabel ? (
-                          <span className={`marketplace-page__tier-badge marketplace-page__tier-badge--${l.listingTier || "user"}`} title="Listing queue priority">
-                            {l.listingTierLabel}
-                          </span>
-                        ) : null}
-                      </span>
+                      <span className="profile-hub__nft-id">GLFA #{l.tokenId}</span>
                       <span className="profile-hub__nft-price">
                       <span className="profile-hub__nft-price-label">{l.priceFormatted ? l.priceFormatted.replace(/\s*USDT$/i, "").trim() : (Number(l.price) / 1e6).toFixed(0)} USDT <img src="/USDT_BEP20.png" alt="" className="usdt-logo-inline" aria-hidden="true" /></span>
                     </span>
                     </div>
-                    <p className="profile-hub__nft-owned-by">
-                      Owned by {l.sellerUsername ? (
-                        <Link to={`/user/${l.sellerUsername}`} className="profile-hub__nft-owned-by-link">@{l.sellerUsername}</Link>
-                      ) : (
-                        l.sellerName || (l.seller ? `${String(l.seller).slice(0, 6)}…${String(l.seller).slice(-4)}` : "—")
-                      )}
-                    </p>
                     <div className="profile-hub__nft-card-center">
                       {isMyListing ? (
                         <div className="profile-hub__nft-card-center-row">

@@ -1,5 +1,4 @@
-const BNB_LOGO =
-  "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='30' fill='%23111118'/%3E%3Cg fill='%23f3ba2f'%3E%3Cpath d='M32 10 40 18 32 26 24 18z'/%3E%3Cpath d='M20 22 26 28 20 34 14 28z'/%3E%3Cpath d='M44 22 50 28 44 34 38 28z'/%3E%3Cpath d='M32 26 38 32 32 38 26 32z'/%3E%3Cpath d='M32 38 44 50 32 62 20 50z'/%3E%3C/g%3E%3C/svg%3E";
+import { BNB_LOGO_PUBLIC } from "../config";
 
 export default function InsufficientBalanceModal({
   open,
@@ -21,7 +20,7 @@ export default function InsufficientBalanceModal({
   const balanceText = isUsdt
     ? `${usdtBalanceFormatted != null ? usdtBalanceFormatted : "—"} USDT TEST`
     : `${bnbBalanceFormatted != null ? bnbBalanceFormatted : "—"} BNB`;
-  const logoSrc = isUsdt ? "/USDT_BEP20.png" : BNB_LOGO;
+  const logoSrc = isUsdt ? "/USDT_BEP20.png" : BNB_LOGO_PUBLIC;
   const logoAlt = isUsdt ? "USDT" : "BNB";
 
   return (

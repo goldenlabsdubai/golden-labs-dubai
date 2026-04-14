@@ -5,7 +5,7 @@ import { useAccount, useBalance, useDisconnect, useReadContract, useWriteContrac
 import { formatEther, formatUnits } from "viem";
 import { useAuth } from "../hooks/useAuth";
 import { useWalletConnect } from "../hooks/useWalletConnect";
-import { API, getAvatarUrl, MARKETPLACE_AND_RESERVE_POOL_ADDRESS } from "../config";
+import { API, BNB_LOGO_PUBLIC, getAvatarUrl, MARKETPLACE_AND_RESERVE_POOL_ADDRESS } from "../config";
 import { fetchMyAssetsWithRetry } from "../utils/fetchMyAssets";
 import { detectInsufficientBalanceType, getTransactionErrorMessage } from "../utils/transactionError";
 import NFTMedia from "../components/NFTMedia";
@@ -63,7 +63,6 @@ export default function Dashboard() {
   const [buyStep, setBuyStep] = useState(null);
   const [error, setError] = useState("");
   const [addressMenuOpen, setAddressMenuOpen] = useState(false);
-  const [copied, setCopied] = useState(false);
   const [referralStats, setReferralStats] = useState(null);
   const [referralLinkCopied, setReferralLinkCopied] = useState(false);
   const [avatarError, setAvatarError] = useState(false);
@@ -114,7 +113,6 @@ export default function Dashboard() {
   const displayAddress = rawAddress ? String(rawAddress).toLowerCase() : null;
   const usdtBalanceFormatted = usdtBalanceRaw != null ? Number(formatUnits(usdtBalanceRaw, 6)).toFixed(2) : null;
   const bnbBalanceFormatted = balanceData?.value != null ? Number(formatEther(balanceData.value)).toFixed(4) : null;
-  const explorerUrl = chainId && EXPLORER_BY_CHAIN[chainId] && displayAddress ? `${EXPLORER_BY_CHAIN[chainId]}/address/${displayAddress}` : null;
 
   useEffect(() => {
     if (!token) return;
@@ -236,14 +234,6 @@ export default function Dashboard() {
 
   const handleConnect = () => { if (openModal) openModal(); };
   const handleDisconnect = () => { setAddressMenuOpen(false); disconnectWallet(); navigate("/", { replace: true }); };
-  const handleCopyAddress = async () => {
-    if (!displayAddress) return;
-    try {
-      await navigator.clipboard.writeText(displayAddress);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch (_) {}
-  };
   useEffect(() => {
     function handleClickOutside(e) {
       if (menuRef.current && !menuRef.current.contains(e.target)) setAddressMenuOpen(false);
@@ -472,7 +462,11 @@ export default function Dashboard() {
         <div className="marketplace-page__right" ref={menuRef}>
           {displayAddress ? (
             <>
-              <Link to="/profile" className="marketplace-page__nav-profile marketplace-page__profile-icon-btn" aria-label="Edit profile">
+              <div
+                className="marketplace-page__nav-profile marketplace-page__profile-icon-btn marketplace-page__nav-profile--static"
+                role="img"
+                aria-label="Your profile picture"
+              >
                 {user?.avatar && !avatarError ? (
                   <img src={getAvatarUrl(user.avatar)} alt="" className="marketplace-page__profile-icon-img" onError={() => setAvatarError(true)} />
                 ) : (
@@ -480,7 +474,7 @@ export default function Dashboard() {
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></svg>
                   </span>
                 )}
-              </Link>
+              </div>
               <button
                 type="button"
                 className="marketplace-page__wallet"
@@ -491,32 +485,6 @@ export default function Dashboard() {
               </button>
               {addressMenuOpen && (
                 <div className="marketplace-page__dropdown">
-                  {user && (
-                    <div className="marketplace-page__user-summary">
-                      {user.avatar ? (
-                        <img src={getAvatarUrl(user.avatar)} alt="" className="marketplace-page__user-avatar" />
-                      ) : (
-                        <span className="marketplace-page__user-avatar marketplace-page__user-avatar--placeholder">@</span>
-                      )}
-                      <div className="marketplace-page__user-info">
-                        <span className="marketplace-page__user-name">{user.username ? `@${user.username}` : (user.name || "—")}</span>
-                        <span className="marketplace-page__user-wallet" title={displayAddress}>{displayAddress?.slice(0, 6)}…{displayAddress?.slice(-4)}</span>
-                        <span className="marketplace-page__user-meta">Status: {user.state ?? "—"} · Trades: {user.totalTrades ?? 0}</span>
-                        {(user.totalReferrals ?? 0) > 0 && (
-                          <span className="marketplace-page__user-meta">Referrals: {user.totalReferrals} · Earnings: ${(Number(user.referralEarningsTotal || "0") / 1e6).toFixed(2)} USDT <img src="/USDT_BEP20.png" alt="" className="usdt-logo-inline" aria-hidden="true" /></span>
-                        )}
-                      </div>
-                    </div>
-                  )}
-                  {balanceData && (
-                    <div className="marketplace-page__dropdown-balance">
-                      {Number(formatEther(balanceData.value ?? 0n)).toFixed(4)} {balanceData.symbol ?? "BNB"}
-                    </div>
-                  )}
-                  <button type="button" onClick={handleCopyAddress}>{copied ? "Copied!" : "Copy address"}</button>
-                  {explorerUrl && <a href={explorerUrl} target="_blank" rel="noopener noreferrer">View on explorer</a>}
-                  <Link to="/dashboard" onClick={() => setAddressMenuOpen(false)}>My Dashboard</Link>
-                  <div className="marketplace-page__dropdown-divider" />
                   <button type="button" className="marketplace-page__dropdown-danger" onClick={handleDisconnect}>Disconnect</button>
                 </div>
               )}
@@ -528,41 +496,72 @@ export default function Dashboard() {
       </header>
 
       <div className="profile-hub__profile">
-        <div className="profile-hub__avatar-wrap">
-          {user?.avatar && !avatarError ? (
-            <img
-              src={getAvatarUrl(user.avatar)}
-              alt=""
-              className="profile-hub__avatar"
-              onError={() => setAvatarError(true)}
-            />
-          ) : (
-            <div className="profile-hub__avatar-placeholder" />
-          )}
-        </div>
-        <h1 className="profile-hub__name">
-          {user?.username || user?.name || "Unnamed"}
-        </h1>
-        <p className="profile-hub__address-label">Address</p>
-        <p className="profile-hub__address">{user?.wallet || displayAddress || "—"}</p>
-        {(user?.xUrl || user?.telegramUrl) && (
-          <div className="profile-hub__social">
-            {user?.xUrl && (
-              <a href={user.xUrl} target="_blank" rel="noopener noreferrer" className="profile-hub__social-link" aria-label="X (Twitter)">
-                <svg className="profile-hub__social-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
-                  <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
-                </svg>
-              </a>
-            )}
-            {user?.telegramUrl && (
-              <a href={user.telegramUrl} target="_blank" rel="noopener noreferrer" className="profile-hub__social-link" aria-label="Telegram">
-                <svg className="profile-hub__social-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
-                  <path d="M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.48.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z" />
-                </svg>
-              </a>
-            )}
+        <div className="profile-hub__profile-card">
+          <div className="profile-hub__profile-card-top">
+            <div className="profile-hub__avatar-wrap">
+              {user?.avatar && !avatarError ? (
+                <img
+                  src={getAvatarUrl(user.avatar)}
+                  alt=""
+                  className="profile-hub__avatar"
+                  onError={() => setAvatarError(true)}
+                />
+              ) : (
+                <div className="profile-hub__avatar-placeholder" />
+              )}
+            </div>
+            <div className="profile-hub__profile-info">
+              <div className="profile-hub__profile-head">
+                <div className="profile-hub__name-row">
+                  <h1 className="profile-hub__name">
+                    {user?.username || user?.name || "Unnamed"}
+                  </h1>
+                  <Link to="/profile" className="profile-hub__edit-profile-link" aria-label="Edit profile" title="Edit profile">
+                    <svg className="profile-hub__edit-profile-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+                      <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+                    </svg>
+                  </Link>
+                </div>
+                {(user?.xUrl || user?.telegramUrl) && (
+                  <div className="profile-hub__social profile-hub__social--in-card">
+                    {user?.xUrl && (
+                      <a href={user.xUrl} target="_blank" rel="noopener noreferrer" className="profile-hub__social-link" aria-label="X (Twitter)">
+                        <svg className="profile-hub__social-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+                          <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
+                        </svg>
+                      </a>
+                    )}
+                    {user?.telegramUrl && (
+                      <a href={user.telegramUrl} target="_blank" rel="noopener noreferrer" className="profile-hub__social-link" aria-label="Telegram">
+                        <svg className="profile-hub__social-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+                          <path d="M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.48.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z" />
+                        </svg>
+                      </a>
+                    )}
+                  </div>
+                )}
+              </div>
+              <p className="profile-hub__address-label">Address</p>
+              <p className="profile-hub__address">{user?.wallet || displayAddress || "—"}</p>
+              <div className="profile-hub__wallet-balances" aria-label="Wallet balances">
+                <p className="profile-hub__wallet-balances-title">User balance</p>
+                <div className="profile-hub__wallet-balance-row">
+                  <img src={BNB_LOGO_PUBLIC} alt="" className="profile-hub__wallet-token-logo profile-hub__wallet-token-logo--bnb" width="18" height="18" aria-hidden="true" />
+                  <span className="profile-hub__wallet-balance-value">
+                    {bnbBalanceFormatted != null ? `${bnbBalanceFormatted} BNB` : "—"}
+                  </span>
+                </div>
+                <div className="profile-hub__wallet-balance-row">
+                  <img src="/USDT_BEP20.png" alt="" className="profile-hub__wallet-token-logo profile-hub__wallet-token-logo--usdt" width="18" height="18" aria-hidden="true" />
+                  <span className="profile-hub__wallet-balance-value">
+                    {usdtBalanceFormatted != null ? `${usdtBalanceFormatted} USDT` : "—"}
+                  </span>
+                </div>
+              </div>
+            </div>
           </div>
-        )}
+        </div>
       </div>
 
       <main className="profile-hub__main">
