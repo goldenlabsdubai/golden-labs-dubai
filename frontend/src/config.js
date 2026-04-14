@@ -11,17 +11,19 @@ export const MARKETPLACE_AND_RESERVE_POOL_ADDRESS = (
 export const ASSET_IMAGE = "/gldass.png";
 
 /**
- * NFT card fallback video when metadata/IPFS fails.
- * 1) VITE_ASSET_VIDEO_URL if set (e.g. https://api…/uploads/nft-asset.mp4)
- * 2) Else derive from API origin: …/uploads/nft-asset.mp4 (file must exist on backend)
- * 3) Else public: /nft-asset.mp4 (add frontend/public/nft-asset.mp4 for local dev)
+ * Same-origin NFT clip from `frontend/public/nft asset.mp4` (space → %20 in URL).
+ * Vercel/build copies `public/` to site root — reliable, no CORS vs API.
+ */
+export const ASSET_VIDEO_PUBLIC = "/nft%20asset.mp4";
+
+/**
+ * NFT card video: optional override, else public asset above.
+ * Set VITE_ASSET_VIDEO_URL only if you host the clip elsewhere (CDN full URL).
  */
 export const ASSET_VIDEO =
-  (import.meta.env.VITE_ASSET_VIDEO_URL || "").trim() ||
-  (API ? `${API.replace(/\/api\/?$/i, "")}/uploads/nft-asset.mp4` : "") ||
-  "/nft-asset.mp4";
+  (import.meta.env.VITE_ASSET_VIDEO_URL || "").trim() || ASSET_VIDEO_PUBLIC;
 
-/** When true, NFT cards always play `ASSET_VIDEO` (backend `uploads/nft-asset.mp4`) — ignore metadata images. */
+/** When true, NFT cards always play `ASSET_VIDEO` — ignore metadata still images. */
 export const NFT_MEDIA_USE_UPLOAD_CLIP_ONLY =
   String(import.meta.env.VITE_NFT_MEDIA_USE_UPLOAD_CLIP_ONLY ?? "true").toLowerCase() === "true";
 
