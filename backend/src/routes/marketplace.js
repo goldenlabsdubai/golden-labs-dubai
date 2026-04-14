@@ -117,6 +117,44 @@ async function readWithRetry(fn, fallback, retries = 2, timeoutMs = 7000) {
   return fallback;
 }
 
+const NFT_TRANSFER_EVENT_ABI = ["event Transfer(address indexed from, address indexed to, uint256 indexed tokenId)"];
+
+/**
+ * Find token IDs ever transferred TO `wallet` (helps when `owned_token_ids` in Postgres was never set after mint).
+ * Bounded lookback to avoid huge eth_getLogs on public RPCs.
+ */
+async function discoverTokenIdsFromIncomingTransfers(provider, nftAddress, wallet) {
+  const w = (wallet || "").trim();
+  if (!w || !w.startsWith("0x")) return [];
+  let checksummed = w;
+  try {
+    checksummed = ethers.getAddress(w);
+  } catch (_) {
+    return [];
+  }
+  try {
+    const c = new ethers.Contract(nftAddress, NFT_TRANSFER_EVENT_ABI, provider);
+    const latest = await provider.getBlockNumber();
+    const lookback = Math.max(
+      50_000,
+      Math.min(Number(process.env.MY_ASSETS_TRANSFER_LOOKBACK_BLOCKS || 6_000_000), 30_000_000)
+    );
+    const fromBlock = Math.max(0, latest - lookback);
+    const filter = c.filters.Transfer(null, checksummed, null);
+    const events = await c.queryFilter(filter, fromBlock, latest);
+    const ids = new Set();
+    for (const e of events) {
+      const tid = e.args?.tokenId;
+      if (tid == null) continue;
+      ids.add(typeof tid === "bigint" ? tid.toString() : String(tid));
+    }
+    return [...ids];
+  } catch (e) {
+    console.warn("discoverTokenIdsFromIncomingTransfers:", e?.message || e);
+    return [];
+  }
+}
+
 // Listings: loop 1..totalMinted, call marketplace.listings(tokenId), keep where active. No events.
 router.get("/listings", async (_, res) => {
   try {
@@ -336,7 +374,7 @@ const NFT_VIEW_ABI = [
   "function tokenURI(uint256 tokenId) view returns (string)",
 ];
 
-// My assets: tokenIds you "own" = tracked in PostgreSQL owned_token_ids, enriched from on-chain listing/metadata.
+// My assets: tokenIds from PostgreSQL owned_token_ids + optional chain discover; on-chain enrich. Survives flaky RPC.
 router.get("/my-assets", async (req, res) => {
   try {
     const wallet = await getWalletForRequest(req);
@@ -346,24 +384,63 @@ router.get("/my-assets", async (req, res) => {
     const nftAddr = (process.env.NFT_CONTRACT_ADDRESS || "").trim();
     if (!marketAddr || !nftAddr) return res.json({ assets: [] });
 
-    // Read owned token ids from PostgreSQL (single row read)
-    const ownedTokenIds = await User.getOwnedTokenIds(wallet);
-    if (!Array.isArray(ownedTokenIds) || ownedTokenIds.length === 0) {
-      return res.json({ assets: [] });
+    const provider = getProvider();
+    let ownedTokenIds = await User.getOwnedTokenIds(wallet);
+    if (!Array.isArray(ownedTokenIds)) ownedTokenIds = [];
+
+    const nftBalAbi = ["function balanceOf(address owner) view returns (uint256)"];
+    const alwaysDiscover = String(process.env.MY_ASSETS_ALWAYS_DISCOVER || "").toLowerCase() === "true";
+    const shouldRunTransferDiscover = ownedTokenIds.length === 0 || alwaysDiscover;
+
+    // Self-heal: mint confirm may have failed to write Postgres — discover Transfer→wallet and merge.
+    if (shouldRunTransferDiscover) {
+      let mightHaveNft = ownedTokenIds.length === 0 || alwaysDiscover;
+      if (ownedTokenIds.length === 0) {
+        try {
+          const bal = await readWithRetry(
+            () =>
+              new ethers.Contract(nftAddr, nftBalAbi, provider)
+                .balanceOf(wallet)
+                .then((b) => b),
+            0n,
+            2,
+            8000
+          );
+          if (bal === 0n) mightHaveNft = false;
+        } catch (_) {
+          mightHaveNft = true;
+        }
+      }
+      if (mightHaveNft) {
+        const discovered = await discoverTokenIdsFromIncomingTransfers(provider, nftAddr, wallet);
+        for (const tid of discovered) {
+          try {
+            await User.addOwnedTokenId(wallet, tid);
+          } catch (_) {}
+        }
+        if (discovered.length > 0) {
+          ownedTokenIds = await User.getOwnedTokenIds(wallet);
+        }
+      }
     }
 
-    const provider = getProvider();
-    const nftContract = new ethers.Contract(nftAddr, NFT_VIEW_ABI, provider);
-    const marketContract = new ethers.Contract(marketAddr, MARKETPLACE_ABI, provider);
+    const dbTrustedSet = new Set((ownedTokenIds || []).map((x) => String(x)));
 
-    const tokens = ownedTokenIds
+    const tokens = [...new Set(ownedTokenIds.map((t) => String(t)))]
       .map((t) => Number(t))
-      .filter((n) => Number.isFinite(n) && n > 0);
+      .filter((n) => Number.isFinite(n) && n > 0)
+      .sort((a, b) => a - b);
 
     if (tokens.length === 0) return res.json({ assets: [] });
 
+    const nftContract = new ethers.Contract(nftAddr, NFT_VIEW_ABI, provider);
+    const marketContract = new ethers.Contract(marketAddr, MARKETPLACE_ABI, provider);
+
     const BATCH = 25;
     const assets = [];
+    const ownerRetries = Math.max(2, Math.min(Number(process.env.MY_ASSETS_OWNER_RETRY || 5), 8));
+    const ownerTimeoutMs = Math.max(5000, Math.min(Number(process.env.MY_ASSETS_OWNER_TIMEOUT_MS || 12000), 45000));
+
     for (let start = 0; start < tokens.length; start += BATCH) {
       const slice = tokens.slice(start, start + BATCH);
       const promises = slice.map((tokenId) =>
@@ -374,7 +451,9 @@ router.get("/my-assets", async (req, res) => {
                 .ownerOf(tokenId)
                 .then((o) => String(o || "").toLowerCase())
                 .catch(() => ""),
-            null
+            "",
+            ownerRetries,
+            ownerTimeoutMs
           ),
           readWithRetry(
             () =>
@@ -385,17 +464,26 @@ router.get("/my-assets", async (req, res) => {
                   seller: String(l?.[0] ?? "").toLowerCase(),
                   price: l?.[2],
                 })),
-            { active: false, seller: "", price: null }
+            { active: false, seller: "", price: null },
+            3,
+            ownerTimeoutMs
           ),
           readWithRetry(
             () => marketContract.saleCount(tokenId).then((c) => (c != null ? Number(c) : null)),
-            null
+            null,
+            2,
+            ownerTimeoutMs
           ),
-          readWithRetry(() => nftContract.tokenURI(tokenId), ""),
+          readWithRetry(() => nftContract.tokenURI(tokenId), "", 2, ownerTimeoutMs),
         ]).then(([owner, listing, saleCount, tokenURI]) => {
-          const inWallet = owner === wallet;
+          const ownerLower = (owner || "").toLowerCase();
+          const ownerRpcLikelyFailed = !ownerLower;
+          const inWallet = ownerLower && ownerLower === wallet;
           const isListedByMe = listing.active && listing.seller === wallet;
-          if (!inWallet && !isListedByMe) return null;
+          // Drop if someone else clearly holds and we're not the active lister (handles sold-away).
+          if (!inWallet && !isListedByMe) {
+            if (!(ownerRpcLikelyFailed && dbTrustedSet.has(String(tokenId)))) return null;
+          }
           const uri = ensureMetadataUri(tokenURI, tokenId);
           const listPriceUsdt = MARKETPLACE_LIST_PRICE_USDT;
           const listPriceWei = MARKETPLACE_LIST_PRICE_WEI;

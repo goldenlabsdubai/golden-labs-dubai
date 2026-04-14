@@ -21,6 +21,10 @@ export const ASSET_VIDEO =
   (API ? `${API.replace(/\/api\/?$/i, "")}/uploads/nft-asset.mp4` : "") ||
   "/nft-asset.mp4";
 
+/** When true, NFT cards always play `ASSET_VIDEO` (backend `uploads/nft-asset.mp4`) — ignore metadata images. */
+export const NFT_MEDIA_USE_UPLOAD_CLIP_ONLY =
+  String(import.meta.env.VITE_NFT_MEDIA_USE_UPLOAD_CLIP_ONLY ?? "true").toLowerCase() === "true";
+
 /** Backend origin (no /api). Use for avatar URLs when avatar is stored as relative path. Set VITE_API_URL in .env. */
 export const API_ORIGIN = API ? API.replace(/\/api\/?$/, "") : "";
 

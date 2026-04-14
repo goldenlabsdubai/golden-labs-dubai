@@ -6,6 +6,7 @@ import { formatEther, formatUnits } from "viem";
 import { useAuth } from "../hooks/useAuth";
 import { useWalletConnect } from "../hooks/useWalletConnect";
 import { API, getAvatarUrl, MARKETPLACE_AND_RESERVE_POOL_ADDRESS } from "../config";
+import { fetchMyAssetsWithRetry } from "../utils/fetchMyAssets";
 import { detectInsufficientBalanceType, getTransactionErrorMessage } from "../utils/transactionError";
 import NFTMedia from "../components/NFTMedia";
 import InsufficientBalanceModal from "../components/InsufficientBalanceModal";
@@ -134,13 +135,20 @@ export default function Dashboard() {
       setOwnedAssetsLoading(false);
       return;
     }
+    let cancelled = false;
     setOwnedAssetsLoading(true);
-    fetch(`${API}/marketplace/my-assets`, { headers: { Authorization: `Bearer ${token}` } })
-      .then((r) => r.json())
-      .then((d) => setMyAssets(d.assets || []))
+    fetchMyAssetsWithRetry(token, user?.state)
+      .then((assets) => {
+        if (!cancelled) setMyAssets(assets);
+      })
       .catch(() => {})
-      .finally(() => setOwnedAssetsLoading(false));
-  }, [token, user?.wallet]);
+      .finally(() => {
+        if (!cancelled) setOwnedAssetsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [token, user?.wallet, user?.state]);
   useEffect(() => {
     if (!token) return;
     fetch(`${API}/referral/stats`, { headers: { Authorization: `Bearer ${token}` } })
@@ -186,9 +194,8 @@ export default function Dashboard() {
       .then((r) => r.json())
       .then((d) => setListings(d.listings || []))
       .catch(() => {});
-    fetch(`${API}/marketplace/my-assets`, { headers: { Authorization: `Bearer ${token}` } })
-      .then((r) => r.json())
-      .then((d) => setMyAssets(d.assets || []))
+    fetchMyAssetsWithRetry(token, user?.state)
+      .then((assets) => setMyAssets(assets))
       .catch(() => {})
       .finally(() => setOwnedAssetsLoading(false));
   };

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { API, ASSET_IMAGE, ASSET_VIDEO } from "../config";
+import { API, ASSET_VIDEO, NFT_MEDIA_USE_UPLOAD_CLIP_ONLY } from "../config";
 
 const DEFAULT_IPFS_GATEWAY = "https://ipfs.io/ipfs/";
 
@@ -43,11 +43,13 @@ export default function NFTMedia({ tokenURI, tokenId, className, alt: altProp, .
   const [objectUrl, setObjectUrl] = useState(null);
   const objectUrlRef = useRef(null);
   const [videoLoadFailed, setVideoLoadFailed] = useState(false);
-  const [fallbackClipFailed, setFallbackClipFailed] = useState(false);
+  /** When fallback mp4 errors, retry once with cache-bust (don't swap to static placeholder img). */
+  const [clipRetry, setClipRetry] = useState(0);
 
   useEffect(() => {
     setVideoLoadFailed(false);
-    setFallbackClipFailed(false);
+    setClipRetry(0);
+    if (NFT_MEDIA_USE_UPLOAD_CLIP_ONLY) return;
     if (!tokenURI || !tokenURI.trim()) {
       setFailed(true);
       return;
@@ -109,6 +111,7 @@ export default function NFTMedia({ tokenURI, tokenId, className, alt: altProp, .
 
   // When gateway key is set, fetch media with key and use object URL (for access-controlled gateways)
   useEffect(() => {
+    if (NFT_MEDIA_USE_UPLOAD_CLIP_ONLY) return;
     if (!mediaUrl || !(import.meta.env.VITE_IPFS_GATEWAY_KEY || "").trim()) return;
     const gateway = getIpfsGateway();
     if (!mediaUrl.startsWith(gateway)) return;
@@ -135,6 +138,27 @@ export default function NFTMedia({ tokenURI, tokenId, className, alt: altProp, .
   }, [mediaUrl]);
 
   const alt = altProp ?? (tokenId != null ? `GLFA #${tokenId}` : "NFT");
+
+  // One canonical clip from API (uploads/nft-asset.mp4) — must render after all hooks.
+  if (NFT_MEDIA_USE_UPLOAD_CLIP_ONLY && ASSET_VIDEO) {
+    const src = clipRetry > 0 ? `${ASSET_VIDEO}${ASSET_VIDEO.includes("?") ? "&" : "?"}t=${clipRetry}` : ASSET_VIDEO;
+    return (
+      <video
+        key={src}
+        src={src}
+        className={className}
+        alt={alt}
+        muted
+        loop
+        playsInline
+        autoPlay
+        onError={() => setClipRetry((n) => (n < 2 ? n + 1 : n))}
+        style={{ objectFit: "cover", width: "100%", height: "100%", background: "#0a0a0a" }}
+        {...rest}
+      />
+    );
+  }
+
   // Use backend proxy for IPFS media to avoid CORS when loading video/img
   const gateway = getIpfsGateway();
   const useProxyForMedia = mediaUrl && (mediaUrl.startsWith(gateway) || mediaUrl.startsWith("ipfs://"));
@@ -146,23 +170,21 @@ export default function NFTMedia({ tokenURI, tokenId, className, alt: altProp, .
   const displayUrl = objectUrl || proxyMediaUrl || mediaUrl;
   const showFallbackVideo = failed || !displayUrl || videoLoadFailed;
 
-  // Fallback: /uploads/nft-asset.mp4 on API or public/nft-asset.mp4 — if that 404s, show placeholder image
+  // Fallback: API /uploads/nft-asset.mp4 — never substitute gldass.png (user wants the clip only).
   if (showFallbackVideo) {
-    if (fallbackClipFailed) {
-      return <img src={ASSET_IMAGE} alt={alt} className={className} {...rest} />;
-    }
+    const src = clipRetry > 0 ? `${ASSET_VIDEO}${ASSET_VIDEO.includes("?") ? "&" : "?"}t=${clipRetry}` : ASSET_VIDEO;
     return (
       <video
-        src={ASSET_VIDEO}
+        key={src}
+        src={src}
         className={className}
         alt={alt}
-        poster={ASSET_IMAGE}
         muted
         loop
         playsInline
         autoPlay
-        onError={() => setFallbackClipFailed(true)}
-        style={{ objectFit: "cover", width: "100%", height: "100%" }}
+        onError={() => setClipRetry((n) => (n < 2 ? n + 1 : n))}
+        style={{ objectFit: "cover", width: "100%", height: "100%", background: "#0a0a0a" }}
         {...rest}
       />
     );

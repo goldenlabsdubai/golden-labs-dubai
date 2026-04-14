@@ -6,6 +6,7 @@ import { formatEther, formatUnits } from "viem";
 import { useAuth } from "../hooks/useAuth";
 import { useWalletConnect } from "../hooks/useWalletConnect";
 import { API, getAvatarUrl, MARKETPLACE_AND_RESERVE_POOL_ADDRESS } from "../config";
+import { fetchMyAssetsWithRetry } from "../utils/fetchMyAssets";
 import { detectInsufficientBalanceType, getTransactionErrorMessage } from "../utils/transactionError";
 import NFTMedia from "../components/NFTMedia";
 import InsufficientBalanceModal from "../components/InsufficientBalanceModal";
@@ -104,10 +105,9 @@ export default function Marketplace() {
       return Promise.resolve();
     }
     const reqId = ++assetsReqIdRef.current;
-    return fetch(`${API}/marketplace/my-assets`, { headers: { Authorization: `Bearer ${token}` } })
-      .then((r) => r.json())
-      .then((d) => {
-        if (reqId === assetsReqIdRef.current) setMyAssets(d.assets || []);
+    return fetchMyAssetsWithRetry(token, user?.state)
+      .then((assets) => {
+        if (reqId === assetsReqIdRef.current) setMyAssets(assets);
       })
       .catch(() => {});
   };
@@ -115,7 +115,7 @@ export default function Marketplace() {
   useEffect(() => {
     setListingsLoading(true);
     Promise.all([fetchListingsLatest(), fetchMyAssetsLatest()]).finally(() => setListingsLoading(false));
-  }, [token]);
+  }, [token, user?.state]);
 
   const refetchData = () => {
     fetchListingsLatest();
