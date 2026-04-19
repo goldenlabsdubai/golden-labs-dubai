@@ -12,6 +12,8 @@ const BOT_SETTINGS_DOC = "bot_rules";
 const BOT_STATS_CACHE_TTL_MS = Number(process.env.BOT_STATS_CACHE_TTL_MS || 20000);
 const BOT_BALANCE_READ_TIMEOUT_MS = Number(process.env.BOT_BALANCE_READ_TIMEOUT_MS || 12000);
 const BOT_TRADES_READ_TIMEOUT_MS = Number(process.env.BOT_TRADES_READ_TIMEOUT_MS || 8000);
+/** Batch size when scanning listings(tokenId) for NFT holdings (was undefined → NaN → broken loop). */
+const BOT_NFT_LISTING_SCAN_BATCH = Math.max(5, Math.min(Number(process.env.BOT_NFT_LISTING_SCAN_BATCH || 25), 100));
 const providerByRpc = new Map();
 const botStatsCache = new Map();
 
@@ -113,9 +115,27 @@ export async function setBotSettings(settings, updatedBy) {
   return normalized;
 }
 
+function hasPgTradeActivity(pg) {
+  if (!pg || typeof pg !== "object") return false;
+  const tt = Number(pg.totalTrades ?? 0);
+  const bt = Number(pg.buyTrades ?? 0);
+  const st = Number(pg.sellTrades ?? 0);
+  return tt > 0 || bt > 0 || st > 0;
+}
+
+function pgTradesToShape(pg) {
+  return {
+    totalTrades: Number(pg.totalTrades ?? 0),
+    buyTrades: Number(pg.buyTrades ?? 0),
+    sellTrades: Number(pg.sellTrades ?? 0),
+    totalProfit: String(pg.totalProfit ?? "0"),
+  };
+}
+
 /** Get on-chain stats for one address: balances, buy/sell counts, total trades, total profit (USDT 6 decimals).
  * Options:
- *   - tradesFromChainOnly: true – skip Firestore trades; use only on-chain Sold events (e.g. admin panel to avoid quota). */
+ *   - tradesFromChainOnly: true – skip Postgres `user_activities`; use only on-chain Sold events (slow; can time out).
+ *   - default / false – use Postgres activity stats when present; otherwise fall back to chain (admin panel uses false). */
 export async function getBotStats(address, options = {}) {
   const tradesFromChainOnly = Boolean(options?.tradesFromChainOnly);
   const rpcUrl = (process.env.BOT_STATS_RPC_URL || process.env.RPC_URL || "").trim();
@@ -135,7 +155,7 @@ export async function getBotStats(address, options = {}) {
   }
   const addr = address.startsWith("0x") ? address : `0x${address}`;
   const provider = getProvider(rpcUrl);
-  const cacheKey = addr.toLowerCase() + (tradesFromChainOnly ? ":chain" : "");
+  const cacheKey = `${addr.toLowerCase()}${tradesFromChainOnly ? ":chain" : ":pg"}:v2`;
   const now = Date.now();
   const cached = botStatsCache.get(cacheKey);
   if (cached && now - cached.ts < Math.max(2000, BOT_STATS_CACHE_TTL_MS)) {
@@ -170,25 +190,26 @@ export async function getBotStats(address, options = {}) {
     dbTradesPromise,
   ]);
 
-  const tradesAndProfit =
-    dbTrades ||
-    (marketplaceAddress
-      ? await withTimeoutFallback(
-          getTradesAndProfit(provider, marketplaceAddress, addr),
-          Math.max(2000, BOT_TRADES_READ_TIMEOUT_MS),
-          {
-            totalTrades: cached?.data?.totalTrades ?? 0,
-            buyTrades: cached?.data?.buyTrades ?? 0,
-            sellTrades: cached?.data?.sellTrades ?? 0,
-            totalProfit: cached?.data?.totalProfit ?? "0",
-          }
-        )
-      : {
-          totalTrades: cached?.data?.totalTrades ?? 0,
-          buyTrades: cached?.data?.buyTrades ?? 0,
-          sellTrades: cached?.data?.sellTrades ?? 0,
-          totalProfit: cached?.data?.totalProfit ?? "0",
-        });
+  const chainTimeoutMs = Math.max(8000, BOT_TRADES_READ_TIMEOUT_MS, Number(process.env.BOT_STATS_CHAIN_FALLBACK_MS || 25000));
+  const emptyTrades = {
+    totalTrades: cached?.data?.totalTrades ?? 0,
+    buyTrades: cached?.data?.buyTrades ?? 0,
+    sellTrades: cached?.data?.sellTrades ?? 0,
+    totalProfit: cached?.data?.totalProfit ?? "0",
+  };
+
+  let tradesAndProfit;
+  if (hasPgTradeActivity(dbTrades)) {
+    tradesAndProfit = pgTradesToShape(dbTrades);
+  } else if (marketplaceAddress) {
+    tradesAndProfit = await withTimeoutFallback(
+      getTradesAndProfit(provider, marketplaceAddress, addr),
+      chainTimeoutMs,
+      emptyTrades
+    );
+  } else {
+    tradesAndProfit = emptyTrades;
+  }
 
   const data = {
     usdtBalance,
@@ -243,7 +264,7 @@ async function getNftHoldings(provider, marketplaceAddress, nftAddress, account)
       if (Number.isFinite(n) && n > 0) maxTokenId = Math.min(n + 10, 10000);
     } catch (_) {}
     maxTokenId = Math.max(1, Math.min(maxTokenId, 10000));
-    const batch = Math.max(10, Math.min(BOT_BUFFER_SCAN_BATCH, 100));
+    const batch = BOT_NFT_LISTING_SCAN_BATCH;
     for (let start = 1; start <= maxTokenId; start += batch) {
       const end = Math.min(start + batch - 1, maxTokenId);
       const rows = await Promise.all(

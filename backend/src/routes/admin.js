@@ -78,7 +78,7 @@ router.get("/bots", async (req, res) => {
     const settings = await BotService.getBotSettings();
     const settled = await Promise.allSettled(
       config.map((bot) =>
-        BotService.getBotStats(bot.address, { tradesFromChainOnly: true })
+        BotService.getBotStats(bot.address, { tradesFromChainOnly: false })
       )
     );
     const bots = config.map((bot, index) => {
