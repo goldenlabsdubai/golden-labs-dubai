@@ -7,6 +7,11 @@ import { useAuth } from "../hooks/useAuth";
 import { useWalletConnect } from "../hooks/useWalletConnect";
 import { API, ASSET_IMAGE } from "../config";
 import { detectInsufficientBalanceType, getTransactionErrorMessage } from "../utils/transactionError";
+import {
+  safeGasLimit,
+  DEFAULT_APPROVE_GAS,
+  DEFAULT_SUBSCRIBE_GAS,
+} from "../utils/safeContractGas";
 import InsufficientBalanceModal from "../components/InsufficientBalanceModal";
 
 // USDT (BEP20) – balance and approve. Use same chain as connected wallet.
@@ -18,21 +23,6 @@ const SUBSCRIPTION_ABI = [
   { name: "subscriptionPrice", type: "function", stateMutability: "view", inputs: [], outputs: [{ type: "uint256" }] },
   { name: "subscribe", type: "function", stateMutability: "nonpayable", inputs: [], outputs: [] },
 ];
-
-/** Per-tx gas must stay under the block gas limit (~16.7M on BSC). Bad RPC estimates can return 30M+ and revert with "gas limit too high". */
-const MAX_SAFE_TX_GAS = 12_000_000n;
-const DEFAULT_APPROVE_GAS = 120_000n;
-const DEFAULT_SUBSCRIBE_GAS = 800_000n;
-
-async function safeGasLimit(publicClient, estimateParams, fallbackGas) {
-  try {
-    const est = await publicClient.estimateContractGas(estimateParams);
-    if (est > MAX_SAFE_TX_GAS) return fallbackGas;
-    return (est * 120n) / 100n;
-  } catch {
-    return fallbackGas;
-  }
-}
 
 export default function Subscription() {
   const { token, refreshUser, user } = useAuth();

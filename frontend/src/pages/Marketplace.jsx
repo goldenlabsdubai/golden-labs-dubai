@@ -8,6 +8,14 @@ import { useWalletConnect } from "../hooks/useWalletConnect";
 import { API, getAvatarUrl, MARKETPLACE_AND_RESERVE_POOL_ADDRESS } from "../config";
 import { fetchMyAssetsWithRetry } from "../utils/fetchMyAssets";
 import { detectInsufficientBalanceType, getTransactionErrorMessage } from "../utils/transactionError";
+import {
+  safeGasLimit,
+  DEFAULT_APPROVE_GAS,
+  DEFAULT_MARKETPLACE_BUY_GAS,
+  DEFAULT_MARKETPLACE_LIST_GAS,
+  DEFAULT_MARKETPLACE_CANCEL_GAS,
+  DEFAULT_NFT_APPROVE_GAS,
+} from "../utils/safeContractGas";
 import NFTMedia from "../components/NFTMedia";
 import InsufficientBalanceModal from "../components/InsufficientBalanceModal";
 
@@ -152,7 +160,7 @@ export default function Marketplace() {
   }, [openMenuTokenId]);
 
   const handleDelist = async (tokenId) => {
-    if (!marketplaceAddressNormalized || !writeContractAsync || !publicClient) {
+    if (!marketplaceAddressNormalized || !writeContractAsync || !publicClient || !address) {
       setError("Wallet or contracts not ready.");
       return;
     }
@@ -160,11 +168,23 @@ export default function Marketplace() {
     setOpenMenuTokenId(null);
     setLoadingDelist(tokenId);
     try {
+      const gasCancel = await safeGasLimit(
+        publicClient,
+        {
+          address: marketplaceAddressNormalized,
+          abi: MARKETPLACE_ABI,
+          functionName: "cancelListing",
+          args: [BigInt(tokenId)],
+          account: address,
+        },
+        DEFAULT_MARKETPLACE_CANCEL_GAS
+      );
       const hash = await writeContractAsync({
         address: marketplaceAddressNormalized,
         abi: MARKETPLACE_ABI,
         functionName: "cancelListing",
         args: [BigInt(tokenId)],
+        gas: gasCancel,
       });
       await publicClient.waitForTransactionReceipt({ hash });
       refetchData();
@@ -183,7 +203,7 @@ export default function Marketplace() {
   };
 
   const handleBuy = async (tokenId, priceWei, referrer = "0x0000000000000000000000000000000000000000", seller = null) => {
-    if (!marketplaceAddressNormalized || !usdtAddressNormalized || !publicClient || !writeContractAsync) {
+    if (!marketplaceAddressNormalized || !usdtAddressNormalized || !publicClient || !writeContractAsync || !address) {
       setError("Wallet or contracts not ready.");
       return;
     }
@@ -196,6 +216,17 @@ export default function Marketplace() {
         abi: USDT_ABI,
         functionName: "approve",
         args: [marketplaceAddressNormalized, BigInt(priceWei)],
+        gas: await safeGasLimit(
+          publicClient,
+          {
+            address: usdtAddressNormalized,
+            abi: USDT_ABI,
+            functionName: "approve",
+            args: [marketplaceAddressNormalized, BigInt(priceWei)],
+            account: address,
+          },
+          DEFAULT_APPROVE_GAS
+        ),
       });
       await publicClient.waitForTransactionReceipt({ hash: hashApprove });
       setBuyStep("buy");
@@ -204,6 +235,17 @@ export default function Marketplace() {
         abi: MARKETPLACE_ABI,
         functionName: "buy",
         args: [BigInt(tokenId), referrer],
+        gas: await safeGasLimit(
+          publicClient,
+          {
+            address: marketplaceAddressNormalized,
+            abi: MARKETPLACE_ABI,
+            functionName: "buy",
+            args: [BigInt(tokenId), referrer],
+            account: address,
+          },
+          DEFAULT_MARKETPLACE_BUY_GAS
+        ),
       });
       await publicClient.waitForTransactionReceipt({ hash: hashBuy });
       setListings((prev) => prev.filter((l) => String(l.tokenId) !== String(tokenId)));
@@ -234,7 +276,7 @@ export default function Marketplace() {
   };
 
   const handleList = async (tokenId, listPriceWei) => {
-    if (!nftAddressNormalized || !marketplaceAddressNormalized || !publicClient || !writeContractAsync) {
+    if (!nftAddressNormalized || !marketplaceAddressNormalized || !publicClient || !writeContractAsync || !address) {
       setError("Wallet or contracts not ready.");
       return;
     }
@@ -247,6 +289,17 @@ export default function Marketplace() {
         abi: NFT_ABI,
         functionName: "approve",
         args: [marketplaceAddressNormalized, BigInt(tokenId)],
+        gas: await safeGasLimit(
+          publicClient,
+          {
+            address: nftAddressNormalized,
+            abi: NFT_ABI,
+            functionName: "approve",
+            args: [marketplaceAddressNormalized, BigInt(tokenId)],
+            account: address,
+          },
+          DEFAULT_NFT_APPROVE_GAS
+        ),
       });
       await publicClient.waitForTransactionReceipt({ hash: hashApprove });
       setListStep("list");
@@ -255,6 +308,17 @@ export default function Marketplace() {
         abi: MARKETPLACE_ABI,
         functionName: "list",
         args: [BigInt(tokenId), BigInt(listPriceWei)],
+        gas: await safeGasLimit(
+          publicClient,
+          {
+            address: marketplaceAddressNormalized,
+            abi: MARKETPLACE_ABI,
+            functionName: "list",
+            args: [BigInt(tokenId), BigInt(listPriceWei)],
+            account: address,
+          },
+          DEFAULT_MARKETPLACE_LIST_GAS
+        ),
       });
       await publicClient.waitForTransactionReceipt({ hash: hashList });
       refetchData();

@@ -2276,6 +2276,7 @@ a.profile-hub__refresh {
 
 .profile-hub__activity-th--asset { min-width: 140px; }
 .profile-hub__activity-th--price { min-width: 90px; }
+.profile-hub__activity-th--status { min-width: 72px; }
 .profile-hub__activity-th--date { min-width: 160px; }
 .profile-hub__activity-th--tx { min-width: 100px; }
 
@@ -2326,6 +2327,29 @@ a.profile-hub__refresh {
 .profile-hub__activity-td--price {
   font-weight: 600;
   color: var(--accent-bright);
+}
+
+.profile-hub__activity-td--status {
+  vertical-align: middle;
+}
+
+.profile-hub__activity-status {
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.profile-hub__activity-status--success {
+  color: var(--success, #34d399);
+}
+
+.profile-hub__activity-status--failed {
+  color: var(--error, #f87171);
+}
+
+.profile-hub__activity-status--muted {
+  color: var(--muted);
 }
 
 .profile-hub__activity-td--date {
@@ -3434,8 +3458,10 @@ div.marketplace-page__nav-profile.marketplace-page__profile-icon-btn {
   top: 100%;
   right: 0;
   margin-top: 0.25rem;
-  min-width: 260px;
-  padding: 0.5rem;
+  min-width: auto;
+  width: max-content;
+  max-width: calc(100vw - 1.5rem);
+  padding: 0.35rem;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -3518,8 +3544,24 @@ div.marketplace-page__nav-profile.marketplace-page__profile-icon-btn {
   margin: 0.25rem 0;
 }
 
-.marketplace-page__dropdown-danger:hover {
-  color: var(--error);
+/* Wallet menu: compact disconnect — gold theme (not error red) */
+.marketplace-page__dropdown .marketplace-page__dropdown-danger {
+  padding: 0.35rem 0.65rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--accent-bright);
+  background: rgba(212, 175, 55, 0.1);
+  border: 1px solid rgba(212, 175, 55, 0.28);
+  border-radius: 6px;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.marketplace-page__dropdown .marketplace-page__dropdown-danger:hover {
+  color: var(--accent);
+  background: rgba(212, 175, 55, 0.2);
+  border-color: rgba(212, 175, 55, 0.45);
 }
 
 .marketplace-page__connect {
@@ -4805,7 +4847,8 @@ div.marketplace-page__nav-profile.marketplace-page__profile-icon-btn {
     align-items: center;
   }
   .marketplace-page__dropdown {
-    min-width: 240px;
+    min-width: auto;
+    width: max-content;
     max-width: calc(100vw - 1.5rem);
   }
 }
@@ -5398,8 +5441,10 @@ div.marketplace-page__nav-profile.marketplace-page__profile-icon-btn {
   position: absolute;
   top: calc(100% + 0.5rem);
   right: 0;
-  min-width: 12rem;
-  padding: 0.5rem;
+  min-width: auto;
+  width: max-content;
+  max-width: calc(100vw - 1.5rem);
+  padding: 0.35rem;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 0.5rem;
@@ -5452,8 +5497,24 @@ div.marketplace-page__nav-profile.marketplace-page__profile-icon-btn {
 .landing-v2__address-menu-item--link {
   color: var(--accent-bright);
 }
-.landing-v2__address-menu-item--danger:hover {
-  color: var(--error);
+.landing-v2__address-menu-item.landing-v2__address-menu-item--danger {
+  padding: 0.35rem 0.65rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--accent-bright);
+  background: rgba(212, 175, 55, 0.1);
+  border: 1px solid rgba(212, 175, 55, 0.28);
+  border-radius: 6px;
+  text-align: center;
+  white-space: nowrap;
+  width: auto;
+}
+
+.landing-v2__address-menu-item.landing-v2__address-menu-item--danger:hover {
+  color: var(--accent);
+  background: rgba(212, 175, 55, 0.2);
+  border-color: rgba(212, 175, 55, 0.45);
 }
 
 /* Wallet connected popup: same front layer as support chat (full front) */
@@ -6567,7 +6628,8 @@ div.marketplace-page__nav-profile.marketplace-page__profile-icon-btn {
     padding: 0.3rem 0.6rem;
   }
   .landing-v2__address-menu {
-    min-width: 10rem;
+    min-width: auto;
+    width: max-content;
     right: -0.5rem;
   }
   .landing-v2__main {

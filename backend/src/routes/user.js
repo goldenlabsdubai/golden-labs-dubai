@@ -180,8 +180,18 @@ router.get("/me", async (req, res) => {
         updates.state = "ACTIVE_TRADER";
       }
       const currentTrades = user.totalTrades ?? 0;
-      const maxTrades = Math.max(buyCount, currentTrades);
-      if (maxTrades > currentTrades) updates.totalTrades = maxTrades;
+      let nextTrades = currentTrades;
+      try {
+        const activityStats = await User.getWalletTradeStatsFromActivity(wallet);
+        if (activityStats && typeof activityStats.totalTrades === "number") {
+          // Deduped buy/sell rows + exclude failed receipts (matches Activity tab).
+          nextTrades = activityStats.totalTrades;
+        }
+      } catch (_) {
+        /* PG or RPC unavailable — keep currentTrades */
+      }
+      const maxTrades = Math.max(buyCount ?? 0, nextTrades);
+      if (maxTrades !== currentTrades) updates.totalTrades = maxTrades;
       if (Object.keys(updates).length > 0) {
         updates.lastActivity = new Date();
         await User.updateUser(user.id, updates);

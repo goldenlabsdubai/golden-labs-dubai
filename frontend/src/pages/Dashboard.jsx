@@ -8,6 +8,14 @@ import { useWalletConnect } from "../hooks/useWalletConnect";
 import { API, BNB_LOGO_PUBLIC, getAvatarUrl, MARKETPLACE_AND_RESERVE_POOL_ADDRESS } from "../config";
 import { fetchMyAssetsWithRetry } from "../utils/fetchMyAssets";
 import { detectInsufficientBalanceType, getTransactionErrorMessage } from "../utils/transactionError";
+import {
+  safeGasLimit,
+  DEFAULT_APPROVE_GAS,
+  DEFAULT_MARKETPLACE_BUY_GAS,
+  DEFAULT_MARKETPLACE_LIST_GAS,
+  DEFAULT_MARKETPLACE_CANCEL_GAS,
+  DEFAULT_NFT_APPROVE_GAS,
+} from "../utils/safeContractGas";
 import NFTMedia from "../components/NFTMedia";
 import InsufficientBalanceModal from "../components/InsufficientBalanceModal";
 
@@ -251,7 +259,7 @@ export default function Dashboard() {
   }, [openMenuTokenId]);
 
   const handleDelist = async (tokenId) => {
-    if (!marketplaceAddressNormalized || !writeContractAsync) {
+    if (!marketplaceAddressNormalized || !writeContractAsync || !publicClient || !address) {
       setError("Wallet or contracts not ready.");
       return;
     }
@@ -259,11 +267,23 @@ export default function Dashboard() {
     setOpenMenuTokenId(null);
     setLoadingDelist(tokenId);
     try {
+      const gasCancel = await safeGasLimit(
+        publicClient,
+        {
+          address: marketplaceAddressNormalized,
+          abi: MARKETPLACE_ABI,
+          functionName: "cancelListing",
+          args: [BigInt(tokenId)],
+          account: address,
+        },
+        DEFAULT_MARKETPLACE_CANCEL_GAS
+      );
       const hash = await writeContractAsync({
         address: marketplaceAddressNormalized,
         abi: MARKETPLACE_ABI,
         functionName: "cancelListing",
         args: [BigInt(tokenId)],
+        gas: gasCancel,
       });
       await publicClient.waitForTransactionReceipt({ hash });
       refetchData();
@@ -325,7 +345,7 @@ export default function Dashboard() {
   };
 
   const handleList = async (tokenId, listPriceWei) => {
-    if (!nftAddressNormalized || !marketplaceAddressNormalized || !publicClient || !writeContractAsync) {
+    if (!nftAddressNormalized || !marketplaceAddressNormalized || !publicClient || !writeContractAsync || !address) {
       setError("Wallet or contracts not ready.");
       return;
     }
@@ -338,6 +358,17 @@ export default function Dashboard() {
         abi: NFT_ABI,
         functionName: "approve",
         args: [marketplaceAddressNormalized, BigInt(tokenId)],
+        gas: await safeGasLimit(
+          publicClient,
+          {
+            address: nftAddressNormalized,
+            abi: NFT_ABI,
+            functionName: "approve",
+            args: [marketplaceAddressNormalized, BigInt(tokenId)],
+            account: address,
+          },
+          DEFAULT_NFT_APPROVE_GAS
+        ),
       });
       await publicClient.waitForTransactionReceipt({ hash: hashApprove });
       setListStep("list");
@@ -346,6 +377,17 @@ export default function Dashboard() {
         abi: MARKETPLACE_ABI,
         functionName: "list",
         args: [BigInt(tokenId), BigInt(listPriceWei)],
+        gas: await safeGasLimit(
+          publicClient,
+          {
+            address: marketplaceAddressNormalized,
+            abi: MARKETPLACE_ABI,
+            functionName: "list",
+            args: [BigInt(tokenId), BigInt(listPriceWei)],
+            account: address,
+          },
+          DEFAULT_MARKETPLACE_LIST_GAS
+        ),
       });
       await publicClient.waitForTransactionReceipt({ hash: hashList });
       refetchData();
@@ -365,7 +407,7 @@ export default function Dashboard() {
   };
 
   const handleBuy = async (tokenId, priceWei, referrer = "0x0000000000000000000000000000000000000000", seller = null) => {
-    if (!marketplaceAddressNormalized || !usdtAddressNormalized || !publicClient || !writeContractAsync) {
+    if (!marketplaceAddressNormalized || !usdtAddressNormalized || !publicClient || !writeContractAsync || !address) {
       setError("Wallet or contracts not ready.");
       return;
     }
@@ -378,6 +420,17 @@ export default function Dashboard() {
         abi: USDT_ABI,
         functionName: "approve",
         args: [marketplaceAddressNormalized, BigInt(priceWei)],
+        gas: await safeGasLimit(
+          publicClient,
+          {
+            address: usdtAddressNormalized,
+            abi: USDT_ABI,
+            functionName: "approve",
+            args: [marketplaceAddressNormalized, BigInt(priceWei)],
+            account: address,
+          },
+          DEFAULT_APPROVE_GAS
+        ),
       });
       await publicClient.waitForTransactionReceipt({ hash: hashApprove });
       setBuyStep("buy");
@@ -386,6 +439,17 @@ export default function Dashboard() {
         abi: MARKETPLACE_ABI,
         functionName: "buy",
         args: [BigInt(tokenId), referrer],
+        gas: await safeGasLimit(
+          publicClient,
+          {
+            address: marketplaceAddressNormalized,
+            abi: MARKETPLACE_ABI,
+            functionName: "buy",
+            args: [BigInt(tokenId), referrer],
+            account: address,
+          },
+          DEFAULT_MARKETPLACE_BUY_GAS
+        ),
       });
       await publicClient.waitForTransactionReceipt({ hash: hashBuy });
       try {
@@ -605,6 +669,7 @@ export default function Dashboard() {
                             <tr>
                               <th className="profile-hub__activity-th profile-hub__activity-th--asset">Asset</th>
                               <th className="profile-hub__activity-th profile-hub__activity-th--price">Price</th>
+                              <th className="profile-hub__activity-th profile-hub__activity-th--status">Status</th>
                               <th className="profile-hub__activity-th profile-hub__activity-th--date">Date & Time</th>
                               <th className="profile-hub__activity-th profile-hub__activity-th--tx">Tx Hash</th>
                             </tr>
@@ -637,6 +702,15 @@ export default function Dashboard() {
                               const txHash = (a.txHash && typeof a.txHash === "string") ? a.txHash.trim() : null;
                               const txUrl = explorerBase && txHash ? `${explorerBase}/tx/${txHash}` : null;
                               const shortHash = txHash ? `${txHash.slice(0, 6)}…${txHash.slice(-4)}` : "—";
+                              const rawStatus = (a.txStatus || "success").toLowerCase();
+                              const statusLabel =
+                                rawStatus === "failed" ? "Failed" : rawStatus === "pending" ? "Pending" : rawStatus === "unknown" ? "Unknown" : "Success";
+                              const statusClass =
+                                rawStatus === "failed"
+                                  ? "profile-hub__activity-status--failed"
+                                  : rawStatus === "pending" || rawStatus === "unknown"
+                                    ? "profile-hub__activity-status--muted"
+                                    : "profile-hub__activity-status--success";
                               return (
                                 <tr key={a.id} className="profile-hub__activity-tr">
                                   <td className="profile-hub__activity-td profile-hub__activity-td--asset">
@@ -648,6 +722,9 @@ export default function Dashboard() {
                                     {(usdt != null && usdt !== "0") ? (
                                       <span className="profile-hub__usdt-with-logo">{usdt} USDT <img src="/USDT_BEP20.png" alt="" className="usdt-logo-inline" aria-hidden="true" /></span>
                                     ) : "—"}
+                                  </td>
+                                  <td className="profile-hub__activity-td profile-hub__activity-td--status">
+                                    <span className={`profile-hub__activity-status ${statusClass}`}>{statusLabel}</span>
                                   </td>
                                   <td className="profile-hub__activity-td profile-hub__activity-td--date">{dateTime}</td>
                                   <td className="profile-hub__activity-td profile-hub__activity-td--tx">

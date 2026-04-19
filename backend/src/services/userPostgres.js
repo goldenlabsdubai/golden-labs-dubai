@@ -3,6 +3,7 @@
  */
 import { query, getPool, getClient } from "../config/postgres.js";
 import { getTradingIncomePerSellWeiFromEnv } from "../utils/tradingIncomeWei.js";
+import { enrichActivitiesWithReceiptStatus, getTxReceiptStatusMap } from "./txReceiptStatus.js";
 
 function docIdWallet(wallet) {
   return (wallet || "").toLowerCase();
@@ -347,23 +348,53 @@ function isSuccessActivityType(type) {
   return false;
 }
 
+/** Remove duplicate buy/sell rows (same indexer + frontend recordPurchase). Keep first row (newest first in input). */
+function dedupeTradeActivityRows(rows) {
+  const seen = new Set();
+  const out = [];
+  for (const r of rows) {
+    const t = String(r.type || "").toLowerCase();
+    if (t === "buy" || t === "sell") {
+      const th = String(r.tx_hash || "").trim().toLowerCase();
+      if (th) {
+        const key = `${t}|${th}|${String(r.token_id ?? "")}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+      }
+    }
+    out.push(r);
+  }
+  return out;
+}
+
 export async function getTradeCountFromActivity(wallet) {
-  const w = (wallet || "").toLowerCase();
-  if (!w) return 0;
-  const { rows } = await query("SELECT type FROM user_activities WHERE wallet = $1", [w]);
-  return rows.filter((r) => { const t = (r.type || "").toLowerCase(); return t === "buy" || t === "sell"; }).length;
+  const stats = await getWalletTradeStatsFromActivity(wallet, 5000);
+  return stats ? stats.totalTrades : 0;
 }
 
 export async function getWalletTradeStatsFromActivity(wallet, maxRows = 5000) {
   const w = (wallet || "").toLowerCase();
   if (!w) return null;
   const limit = Math.max(100, Math.min(Number(maxRows) || 5000, 10000));
-  const { rows } = await query("SELECT type, price FROM user_activities WHERE wallet = $1 ORDER BY created_at DESC LIMIT $2", [w, limit]);
-  let buyTrades = 0, sellTrades = 0, profitOnly = 0n;
-  for (const r of rows) {
+  const { rows } = await query(
+    "SELECT type, price, tx_hash, token_id FROM user_activities WHERE wallet = $1 AND type IN ('buy', 'sell') ORDER BY created_at DESC LIMIT $2",
+    [w, limit]
+  );
+  const deduped = dedupeTradeActivityRows(rows);
+  const hashes = deduped.map((r) => r.tx_hash).filter(Boolean);
+  const statusMap = await getTxReceiptStatusMap(hashes);
+  let buyTrades = 0;
+  let sellTrades = 0;
+  let profitOnly = 0n;
+  for (const r of deduped) {
     const type = String(r.type || "").toLowerCase();
-    let price = 0n;
-    try { price = BigInt(r.price || "0"); } catch (_) {}
+    const th = String(r.tx_hash || "").trim().toLowerCase();
+    if (th) {
+      const st = statusMap.get(th);
+      if (st === "failed") continue;
+      if (st === "pending") continue;
+      // success, unknown, or missing map entry: count (unknown = RPC flake; match legacy behavior)
+    }
     if (type === "buy") buyTrades++;
     else if (type === "sell") {
       sellTrades++;
@@ -383,11 +414,17 @@ export async function getActivities(wallet, limit = 10, offset = 0) {
   const w = (wallet || "").toLowerCase();
   if (!w) return { activities: [], total: 0 };
   const safeLimit = Math.min(Math.max(1, Number(limit) || 10), 20);
+  const safeOffset = Math.max(0, Number(offset) || 0);
+  const fetchCap = Math.min(500, Math.max(safeLimit + safeOffset + 50, 80));
   const { rows } = await query(
     "SELECT id, type, token_id, price, tx_hash, created_at FROM user_activities WHERE wallet = $1 ORDER BY created_at DESC LIMIT $2",
-    [w, safeLimit]
+    [w, fetchCap]
   );
-  const docs = rows.filter((r) => isSuccessActivityType(r.type)).map((r) => ({
+  const filtered = rows.filter((r) => isSuccessActivityType(r.type));
+  const deduped = dedupeTradeActivityRows(filtered);
+  const total = deduped.length;
+  const slice = deduped.slice(safeOffset, safeOffset + safeLimit);
+  const docs = slice.map((r) => ({
     id: r.id,
     type: r.type,
     tokenId: r.token_id ?? null,
@@ -395,8 +432,7 @@ export async function getActivities(wallet, limit = 10, offset = 0) {
     txHash: r.tx_hash ?? null,
     createdAt: r.created_at instanceof Date ? r.created_at.toISOString() : r.created_at,
   }));
-  const total = docs.length;
-  const activities = docs.slice(Number(offset) || 0, (Number(offset) || 0) + safeLimit);
+  const activities = await enrichActivitiesWithReceiptStatus(docs);
   return { activities, total };
 }
 
@@ -408,9 +444,12 @@ export async function getActivitiesSince(wallet, since, limit = 10) {
   const safeLimit = Math.min(Math.max(1, Number(limit) || 10), 20);
   const { rows } = await query(
     "SELECT id, type, token_id, price, tx_hash, created_at FROM user_activities WHERE wallet = $1 AND created_at < $2 ORDER BY created_at DESC LIMIT $3",
-    [w, sinceDate.toISOString(), safeLimit]
+    [w, sinceDate.toISOString(), 200]
   );
-  const activities = rows.filter((r) => isSuccessActivityType(r.type)).map((r) => ({
+  const filtered = rows.filter((r) => isSuccessActivityType(r.type));
+  const deduped = dedupeTradeActivityRows(filtered);
+  const slice = deduped.slice(0, safeLimit);
+  const docs = slice.map((r) => ({
     id: r.id,
     type: r.type,
     tokenId: r.token_id ?? null,
@@ -418,6 +457,7 @@ export async function getActivitiesSince(wallet, since, limit = 10) {
     txHash: r.tx_hash ?? null,
     createdAt: r.created_at instanceof Date ? r.created_at.toISOString() : r.created_at,
   }));
+  const activities = await enrichActivitiesWithReceiptStatus(docs);
   return { activities };
 }
 
@@ -433,12 +473,17 @@ export async function recordPurchase(buyerWallet, sellerWallet, tokenId, price, 
   const client = await getClient();
   try {
     await client.query("BEGIN");
-    await client.query(
+    const insertPurchase = await client.query(
       `INSERT INTO nft_purchases (id, buyer, seller, token_id, price, tx_hash, event_id, block_number, created_at)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
-       ON CONFLICT (id) DO NOTHING`,
+       ON CONFLICT (id) DO NOTHING
+       RETURNING id`,
       [purchaseId, buyer, seller || null, tid, priceStr, txHash || null, eventId || null, Number.isFinite(Number(options.blockNumber)) ? Number(options.blockNumber) : null]
     );
+    if (insertPurchase.rowCount === 0) {
+      await client.query("ROLLBACK");
+      return;
+    }
     await client.query(
       "INSERT INTO user_activities (wallet, type, token_id, price, tx_hash, created_at) VALUES ($1, 'buy', $2, $3, $4, NOW())",
       [buyer, tid, priceStr, txHash || null]
