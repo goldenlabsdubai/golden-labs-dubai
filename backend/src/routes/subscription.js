@@ -1,6 +1,8 @@
 import { Router } from "express";
 import * as User from "../services/user.js";
 import { getOnChainUserStatus } from "../services/onChainUser.js";
+import { isConfiguredBotWallet } from "../services/botService.js";
+import { notifyActivity } from "../services/telegramNotify.js";
 
 const router = Router();
 
@@ -25,6 +27,9 @@ router.post("/confirm", async (req, res) => {
     await User.updateUser(user.id, { state: "SUBSCRIBED", lastActivity: new Date() });
     const txHash = (req.body && req.body.txHash) ? String(req.body.txHash).trim() : null;
     await User.logActivity(wallet, "subscription", { price: "10000000", ...(txHash ? { txHash } : {}) });
+    if (!isConfiguredBotWallet(wallet)) {
+      notifyActivity("subscription", { address: wallet, ...(txHash ? { txHash } : {}) }).catch(() => {});
+    }
     const updated = await User.getUser(req);
     res.json({
       user: { wallet: updated.wallet, state: updated.state },

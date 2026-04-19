@@ -3,6 +3,8 @@ import { getPool } from "../config/postgres.js";
 import { getMarketplaceAndReservePoolAddress } from "../config/contractsEnv.js";
 import * as User from "./user.js";
 import * as MetaPg from "./metaPostgres.js";
+import { isConfiguredBotWallet } from "./botService.js";
+import { notifyActivity } from "./telegramNotify.js";
 
 const ABI = [
   "event Sold(uint256 indexed tokenId, address seller, address buyer, uint256 price)",
@@ -73,6 +75,13 @@ function saleEventId(evt) {
   const tx = String(evt?.transactionHash || "").toLowerCase();
   const logIndex = Number(evt?.logIndex ?? -1);
   return tx && logIndex >= 0 ? `${tx}_${logIndex}` : "";
+}
+
+/** Dedup key for Listed logs (stored in marketplace_processed_sales like sale ids). */
+function listingDedupId(evt) {
+  const tx = String(evt?.transactionHash || "").toLowerCase();
+  const logIndex = Number(evt?.logIndex ?? -1);
+  return tx && logIndex >= 0 ? `listed_${tx}_${logIndex}` : "";
 }
 
 async function isProcessed(eventId) {
@@ -206,6 +215,17 @@ async function runMarketplaceActivityIndexerPoll(provider, contract) {
         blockNumber: Number(evt.blockNumber ?? 0),
       });
       await markProcessed(id, payload);
+      const buyerBot = isConfiguredBotWallet(buyer);
+      const sellerBot = Boolean(seller) && isConfiguredBotWallet(seller);
+      if (!(buyerBot && sellerBot)) {
+        notifyActivity("bought", {
+          buyer,
+          seller: seller || "",
+          tokenId: String(tokenId),
+          priceWei: String(evt.args?.price ?? 0n),
+          ...(txHash ? { txHash } : {}),
+        }).catch(() => {});
+      }
     }
     if (listedEvents.length > 0) {
       const uniqueBlocks = [...new Set(listedEvents.map((e) => e.blockNumber))];
@@ -224,7 +244,22 @@ async function runMarketplaceActivityIndexerPoll(provider, contract) {
         const blockNumber = Number(evt.blockNumber ?? 0);
         const existing = listingBlocks[tokenId];
         if (existing && existing.blockNumber >= blockNumber) continue;
+
+        const lid = listingDedupId(evt);
+        if (!lid || (await isProcessed(lid))) continue;
+
         listingBlocks[tokenId] = { blockNumber, timestamp: blockTs[blockNumber] ?? 0 };
+
+        const seller = evt.args?.seller ? String(evt.args.seller).toLowerCase() : "";
+        const priceWei = evt.args?.price != null ? String(evt.args.price) : "";
+        await markProcessed(lid, {
+          type: "listed",
+          tokenId,
+          seller: seller || null,
+          price: priceWei,
+          blockNumber,
+        });
+        notifyActivity("listed", { seller, tokenId, priceWei }).catch(() => {});
       }
     }
     processedUpTo = chunkTo;
