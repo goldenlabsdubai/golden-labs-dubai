@@ -11,9 +11,18 @@ import { getMarketplaceAndReservePoolAddress } from "../config/contractsEnv.js";
 const BOT_SETTINGS_DOC = "bot_rules";
 const BOT_STATS_CACHE_TTL_MS = Number(process.env.BOT_STATS_CACHE_TTL_MS || 20000);
 const BOT_BALANCE_READ_TIMEOUT_MS = Number(process.env.BOT_BALANCE_READ_TIMEOUT_MS || 12000);
+/** USDT/BNB reads: default 25s (public RPCs often slow when competing with heavy work). */
+const BOT_BALANCE_FETCH_MS = Math.max(25000, BOT_BALANCE_READ_TIMEOUT_MS);
+/** NFT listing scan can be many RPC calls — separate budget so it does not race USDT balanceOf. */
+const BOT_NFT_HOLDINGS_TIMEOUT_MS = Math.max(20000, Number(process.env.BOT_NFT_HOLDINGS_TIMEOUT_MS || 45000));
 const BOT_TRADES_READ_TIMEOUT_MS = Number(process.env.BOT_TRADES_READ_TIMEOUT_MS || 8000);
 /** Batch size when scanning listings(tokenId) for NFT holdings (was undefined → NaN → broken loop). */
 const BOT_NFT_LISTING_SCAN_BATCH = Math.max(5, Math.min(Number(process.env.BOT_NFT_LISTING_SCAN_BATCH || 25), 100));
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 const providerByRpc = new Map();
 const botStatsCache = new Map();
 
@@ -171,24 +180,33 @@ export async function getBotStats(address, options = {}) {
           null
         );
 
-  const [usdtBalance, bnbBalance, nftBalance, dbTrades] = await Promise.all([
-    withTimeoutFallback(
+  /**
+   * USDT/BNB must not run in the same Promise.all as getNftHoldings — listing scans flood the RPC
+   * and balanceOf often times out → "0" cached. Fetch balances + PG trades first, NFT after.
+   */
+  const staleUsdt = cached?.data?.usdtBalance != null ? String(cached.data.usdtBalance) : "0";
+  const staleBnb = cached?.data?.bnbBalance != null ? String(cached.data.bnbBalance) : "0";
+
+  const [usdtBalanceRaw, bnbBalanceRaw, dbTrades] = await Promise.all([
+    Promise.race([
       usdtAddress ? getUsdtBalance(provider, usdtAddress, addr) : Promise.resolve("0"),
-      Math.max(1500, BOT_BALANCE_READ_TIMEOUT_MS),
-      cached?.data?.usdtBalance ?? "0"
-    ),
-    withTimeoutFallback(
+      delay(BOT_BALANCE_FETCH_MS).then(() => ({ __timeout: true })),
+    ]).then((r) => (r && r.__timeout ? staleUsdt : r)),
+    Promise.race([
       withRpcRetry(() => provider.getBalance(addr)).then((b) => b.toString()),
-      Math.max(1500, BOT_BALANCE_READ_TIMEOUT_MS),
-      cached?.data?.bnbBalance ?? "0"
-    ),
-    withTimeoutFallback(
-      nftAddress && marketplaceAddress ? getNftHoldings(provider, marketplaceAddress, nftAddress, addr) : Promise.resolve(0),
-      Math.max(5000, BOT_BALANCE_READ_TIMEOUT_MS),
-      cached?.data?.nftBalance ?? 0
-    ),
+      delay(BOT_BALANCE_FETCH_MS).then(() => ({ __timeout: true })),
+    ]).then((r) => (r && r.__timeout ? staleBnb : r)),
     dbTradesPromise,
   ]);
+
+  const usdtBalance = usdtBalanceRaw;
+  const bnbBalance = bnbBalanceRaw;
+
+  const nftBalance = await withTimeoutFallback(
+    nftAddress && marketplaceAddress ? getNftHoldings(provider, marketplaceAddress, nftAddress, addr) : Promise.resolve(0),
+    BOT_NFT_HOLDINGS_TIMEOUT_MS,
+    cached?.data?.nftBalance ?? 0
+  );
 
   const chainTimeoutMs = Math.max(8000, BOT_TRADES_READ_TIMEOUT_MS, Number(process.env.BOT_STATS_CHAIN_FALLBACK_MS || 25000));
   const emptyTrades = {
