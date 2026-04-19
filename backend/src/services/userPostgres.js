@@ -2,7 +2,7 @@
  * User data in PostgreSQL (AWS RDS) — requires PGHOST, PGDATABASE, PGUSER in .env.
  */
 import { query, getPool, getClient } from "../config/postgres.js";
-import { getTradingIncomePerSellWeiFromEnv } from "../utils/tradingIncomeWei.js";
+import { resolveTradingIncomePerSellWeiFromChain } from "../utils/tradingIncomeWei.js";
 import { enrichActivitiesWithReceiptStatus, getTxReceiptStatusMap } from "./txReceiptStatus.js";
 
 function docIdWallet(wallet) {
@@ -383,6 +383,8 @@ export async function getWalletTradeStatsFromActivity(wallet, maxRows = 5000) {
   const deduped = dedupeTradeActivityRows(rows);
   const hashes = deduped.map((r) => r.tx_hash).filter(Boolean);
   const statusMap = await getTxReceiptStatusMap(hashes);
+  /** Seller USDT wei per successful sale — from chain `tradingIncomeAmount()` with env fallback (not a magic number in stats). */
+  const incomePerSellWei = await resolveTradingIncomePerSellWeiFromChain();
   let buyTrades = 0;
   let sellTrades = 0;
   let profitOnly = 0n;
@@ -392,13 +394,13 @@ export async function getWalletTradeStatsFromActivity(wallet, maxRows = 5000) {
     if (th) {
       const st = statusMap.get(th);
       if (st === "failed") continue;
-      if (st === "pending") continue;
-      // success, unknown, or missing map entry: count (unknown = RPC flake; match legacy behavior)
+      // Do not skip "pending": receipt often lags briefly and excluding it made totals flip (e.g. 0.75 vs 1.50). Only confirmed failures are excluded.
+      // success, pending, unknown: count toward trades + trade income (pending/unknown match typical indexer + /me timing).
     }
     if (type === "buy") buyTrades++;
     else if (type === "sell") {
       sellTrades++;
-      profitOnly += getTradingIncomePerSellWeiFromEnv();
+      profitOnly += incomePerSellWei;
     }
   }
   return {
