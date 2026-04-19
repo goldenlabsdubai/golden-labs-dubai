@@ -1,19 +1,67 @@
 /**
  * Telegram activity alerts — wallet addresses only (no usernames / display names).
+ *
+ * Sends text either:
+ * 1) Preferred: HTTP POST to the standalone `telegram-bot` process (TELEGRAM_BRIDGE_URL),
+ *    so only that PM2 app holds TELEGRAM_BOT_TOKEN and talks to Telegram API.
+ * 2) Legacy: TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID on this backend (direct send).
  */
 import TelegramBot from "node-telegram-bot-api";
 
-let bot = null;
+let directBot = null;
 
-function getBot() {
+function getDirectBot() {
   const token = (process.env.TELEGRAM_BOT_TOKEN || "").trim();
   if (!token) return null;
-  if (!bot) bot = new TelegramBot(token, { polling: false });
-  return bot;
+  if (!directBot) directBot = new TelegramBot(token, { polling: false });
+  return directBot;
+}
+
+function bridgeUrl() {
+  return (process.env.TELEGRAM_BRIDGE_URL || "").trim().replace(/\/$/, "");
+}
+
+function canSendViaBridge() {
+  return Boolean(bridgeUrl());
+}
+
+function canSendDirect() {
+  return Boolean(getDirectBot() && (process.env.TELEGRAM_CHAT_ID || "").trim());
 }
 
 function canSend() {
-  return Boolean(getBot() && (process.env.TELEGRAM_CHAT_ID || "").trim());
+  return canSendViaBridge() || canSendDirect();
+}
+
+/** True if alerts can be sent (bridge URL and/or direct token+chat). */
+export function isTelegramSendConfigured() {
+  return canSend();
+}
+
+async function postToTelegramBotBridge(message) {
+  const base = bridgeUrl();
+  const url = `${base}/alert`;
+  const secret = (process.env.TELEGRAM_BRIDGE_SECRET || "").trim();
+  const headers = {
+    "Content-Type": "application/json",
+    ...(secret ? { "X-Telegram-Bridge-Secret": secret } : {}),
+  };
+  const ac = new AbortController();
+  const t = setTimeout(() => ac.abort(), 15000);
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ message }),
+      signal: ac.signal,
+    });
+    const text = await res.text();
+    if (!res.ok) {
+      throw new Error(`Bridge ${res.status}: ${text.slice(0, 200)}`);
+    }
+  } finally {
+    clearTimeout(t);
+  }
 }
 
 function addr(a) {
@@ -82,12 +130,16 @@ export function formatActivityMessage(kind, fields) {
  */
 export async function sendTelegramText(text, options = {}) {
   if (!canSend()) {
-    if (options.throwOnError) throw new Error("Telegram not configured");
+    if (options.throwOnError) throw new Error("Telegram not configured (set TELEGRAM_BRIDGE_URL or TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID)");
     return;
   }
-  const chatId = (process.env.TELEGRAM_CHAT_ID || "").trim();
   try {
-    await getBot().sendMessage(chatId, text);
+    if (canSendViaBridge()) {
+      await postToTelegramBotBridge(text);
+      return;
+    }
+    const chatId = (process.env.TELEGRAM_CHAT_ID || "").trim();
+    await getDirectBot().sendMessage(chatId, text);
   } catch (e) {
     console.warn("Telegram notify:", e?.message || e);
     if (options.throwOnError) throw e;
@@ -99,6 +151,22 @@ export async function sendTelegramText(text, options = {}) {
  * @param {Record<string, string|null|undefined>} fields
  */
 export async function notifyActivity(kind, fields) {
-  const text = formatActivityMessage(kind, fields);
-  await sendTelegramText(text);
+  const t = formatActivityMessage(kind, fields);
+  await sendTelegramText(t);
+}
+
+/** Call once on server startup so logs show whether Telegram is wired for alerts. */
+export function logTelegramAlertsStatus() {
+  const bridge = bridgeUrl();
+  const direct = canSendDirect();
+  if (bridge) {
+    console.log(`[telegram] Activity alerts: enabled via bridge (${bridge})`);
+  } else if (direct) {
+    console.log("[telegram] Activity alerts: enabled (direct API on backend — legacy)");
+  } else {
+    console.warn(
+      "[telegram] Activity alerts: DISABLED — set TELEGRAM_BRIDGE_URL=http://127.0.0.1:3847 " +
+        "to use the PM2 telegram-bot, or set TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID on the backend."
+    );
+  }
 }
