@@ -656,23 +656,6 @@ export default function Marketplace() {
       </div>
 
       <footer className="marketplace-page__footer">
-        <div className="marketplace-page__footer-inner">
-          <Link to="/" className="marketplace-page__footer-logo">Golden Labs</Link>
-          <div className="marketplace-page__footer-links">
-            <div className="marketplace-page__footer-col">
-              <h4>Marketplace</h4>
-              <Link to="/marketplace">All Assets</Link>
-              <Link to="/leaderboard">Leaderboard</Link>
-              <Link to="/dashboard">My Dashboard</Link>
-            </div>
-            <div className="marketplace-page__footer-col">
-              <h4>Resources</h4>
-              <Link to="/profile">Profile</Link>
-              <a href="/#">Privacy Policy</a>
-              <a href="/#">Terms of Service</a>
-            </div>
-          </div>
-        </div>
         <p className="marketplace-page__footer-copy">© {new Date().getFullYear()} Golden Labs. All rights reserved.</p>
       </footer>
     </div>

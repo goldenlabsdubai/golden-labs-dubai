@@ -121,6 +121,31 @@ export default function Dashboard() {
   const displayAddress = rawAddress ? String(rawAddress).toLowerCase() : null;
   const usdtBalanceFormatted = usdtBalanceRaw != null ? Number(formatUnits(usdtBalanceRaw, 6)).toFixed(2) : null;
   const bnbBalanceFormatted = balanceData?.value != null ? Number(formatEther(balanceData.value)).toFixed(4) : null;
+  const totalTradeIncomeUsdtFormatted = (() => {
+    const w = user?.totalTradeIncomeWei;
+    if (w == null || w === "") return null;
+    try {
+      return Number(formatUnits(BigInt(w), 6)).toLocaleString(undefined, {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      });
+    } catch {
+      return null;
+    }
+  })();
+  const totalReferralIncomeUsdtFormatted = (() => {
+    const w = user?.referralEarningsTotal;
+    if (w == null || w === "") return null;
+    try {
+      const intStr = String(w).replace(/\..*$/, "") || "0";
+      return Number(formatUnits(BigInt(intStr), 6)).toLocaleString(undefined, {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      });
+    } catch {
+      return null;
+    }
+  })();
 
   useEffect(() => {
     if (!token) return;
@@ -608,19 +633,51 @@ export default function Dashboard() {
               </div>
               <p className="profile-hub__address-label">Address</p>
               <p className="profile-hub__address">{user?.wallet || displayAddress || "—"}</p>
-              <div className="profile-hub__wallet-balances" aria-label="Wallet balances">
-                <p className="profile-hub__wallet-balances-title">User balance</p>
-                <div className="profile-hub__wallet-balance-row">
-                  <img src={BNB_LOGO_PUBLIC} alt="" className="profile-hub__wallet-token-logo profile-hub__wallet-token-logo--bnb" width="18" height="18" aria-hidden="true" />
-                  <span className="profile-hub__wallet-balance-value">
-                    {bnbBalanceFormatted != null ? `${bnbBalanceFormatted} BNB` : "—"}
-                  </span>
+              <div className="profile-hub__balances-income-grid">
+                <div className="profile-hub__wallet-balances" aria-label="Wallet balances">
+                  <p className="profile-hub__wallet-balances-title">User balance</p>
+                  <div className="profile-hub__wallet-balance-row">
+                    <img src={BNB_LOGO_PUBLIC} alt="" className="profile-hub__wallet-token-logo profile-hub__wallet-token-logo--bnb" width="18" height="18" aria-hidden="true" />
+                    <span className="profile-hub__wallet-balance-value">
+                      {bnbBalanceFormatted != null ? `${bnbBalanceFormatted} BNB` : "—"}
+                    </span>
+                  </div>
+                  <div className="profile-hub__wallet-balance-row">
+                    <img src="/USDT_BEP20.png" alt="" className="profile-hub__wallet-token-logo profile-hub__wallet-token-logo--usdt" width="18" height="18" aria-hidden="true" />
+                    <span className="profile-hub__wallet-balance-value">
+                      {usdtBalanceFormatted != null ? `${usdtBalanceFormatted} USDT` : "—"}
+                    </span>
+                  </div>
                 </div>
-                <div className="profile-hub__wallet-balance-row">
-                  <img src="/USDT_BEP20.png" alt="" className="profile-hub__wallet-token-logo profile-hub__wallet-token-logo--usdt" width="18" height="18" aria-hidden="true" />
-                  <span className="profile-hub__wallet-balance-value">
-                    {usdtBalanceFormatted != null ? `${usdtBalanceFormatted} USDT` : "—"}
-                  </span>
+                <div className="profile-hub__income-column">
+                  <div className="profile-hub__trade-income" aria-label="Total trade income">
+                    <div className="profile-hub__trade-income-line">
+                      <span className="profile-hub__trade-income-label-group">
+                        <span className="profile-hub__trade-income-title">Total trade income</span>
+                        <span className="profile-hub__trade-income-colon" aria-hidden="true">:</span>
+                      </span>
+                      <span className="profile-hub__trade-income-amount">
+                        <img src="/USDT_BEP20.png" alt="" className="profile-hub__wallet-token-logo profile-hub__wallet-token-logo--usdt" width="18" height="18" aria-hidden="true" />
+                        <span className="profile-hub__wallet-balance-value">
+                          {totalTradeIncomeUsdtFormatted != null ? `${totalTradeIncomeUsdtFormatted} USDT` : "—"}
+                        </span>
+                      </span>
+                    </div>
+                  </div>
+                  <div className="profile-hub__trade-income" aria-label="Total referral income">
+                    <div className="profile-hub__trade-income-line">
+                      <span className="profile-hub__trade-income-label-group">
+                        <span className="profile-hub__trade-income-title">Total referral income</span>
+                        <span className="profile-hub__trade-income-colon" aria-hidden="true">:</span>
+                      </span>
+                      <span className="profile-hub__trade-income-amount">
+                        <img src="/USDT_BEP20.png" alt="" className="profile-hub__wallet-token-logo profile-hub__wallet-token-logo--usdt" width="18" height="18" aria-hidden="true" />
+                        <span className="profile-hub__wallet-balance-value">
+                          {totalReferralIncomeUsdtFormatted != null ? `${totalReferralIncomeUsdtFormatted} USDT` : "—"}
+                        </span>
+                      </span>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -907,21 +964,6 @@ export default function Dashboard() {
       </main>
 
       <footer className="profile-hub__footer">
-        <div className="profile-hub__footer-inner">
-          <Link to="/" className="profile-hub__footer-logo">Golden Labs</Link>
-          <div className="profile-hub__footer-links">
-            <div className="profile-hub__footer-col">
-              <h4>Marketplace</h4>
-              <Link to="/marketplace">All Assets</Link>
-              <Link to="/leaderboard">Leaderboard</Link>
-            </div>
-            <div className="profile-hub__footer-col">
-              <h4>Resources</h4>
-              <Link to="/profile">Profile</Link>
-              <Link to="/dashboard">My Dashboard</Link>
-            </div>
-          </div>
-        </div>
         <p className="profile-hub__footer-copy">© {new Date().getFullYear()} Golden Labs. All rights reserved.</p>
       </footer>
     </div>

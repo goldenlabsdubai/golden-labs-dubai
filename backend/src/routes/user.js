@@ -141,6 +141,9 @@ router.get("/me", async (req, res) => {
     let user = await User.getUser(req);
     if (!user) return res.status(404).json({ error: "User not found" });
 
+    /** USDT wei (6 decimals): cumulative seller trading income from recorded sales (matches Activity tab). */
+    let totalTradeIncomeWei = "0";
+
     // Use connected wallet for on-chain check when frontend sends it and it matches signed-in user
     const userWallet = (user.wallet || req.wallet || "").toLowerCase();
     const connectedWalletHeader = (req.headers["x-connected-wallet"] || "").trim().toLowerCase();
@@ -186,6 +189,9 @@ router.get("/me", async (req, res) => {
         if (activityStats && typeof activityStats.totalTrades === "number") {
           // Deduped buy/sell rows + exclude failed receipts (matches Activity tab).
           nextTrades = activityStats.totalTrades;
+        }
+        if (activityStats?.totalProfit != null && String(activityStats.totalProfit).trim() !== "") {
+          totalTradeIncomeWei = String(activityStats.totalProfit);
         }
       } catch (_) {
         /* PG or RPC unavailable — keep currentTrades */
@@ -233,7 +239,10 @@ router.get("/me", async (req, res) => {
       userForResponse = { ...user, referrerUsername: referrerUser?.username ?? null };
     }
     const response = toMeResponse(userForResponse);
-    if (response) response.isAdmin = await isAdminWallet(req.wallet || user.wallet);
+    if (response) {
+      response.isAdmin = await isAdminWallet(req.wallet || user.wallet);
+      response.totalTradeIncomeWei = totalTradeIncomeWei;
+    }
     res.json(response || {});
   } catch (e) {
     res.status(500).json({ error: e.message });

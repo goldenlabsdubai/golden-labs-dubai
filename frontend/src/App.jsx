@@ -74,11 +74,15 @@ function ProtectedRoute({ children, require }) {
 
 export default function App() {
   const location = useLocation();
+  const { isConnected } = useAccount();
   const isProfilePage = location.pathname === "/profile";
   const isProfileSetupPage = location.pathname === "/profile/setup";
   const isLandingPage = location.pathname === "/";
+  /** Bottom tab bar only when wallet is connected — avoids dead-end taps that redirect to home while disconnected. */
   const showMobileBottomNav =
-    !/^\/profile\/setup/.test(location.pathname) && !/^\/user\//.test(location.pathname);
+    Boolean(isConnected) &&
+    !/^\/profile\/setup/.test(location.pathname) &&
+    !/^\/user\//.test(location.pathname);
 
   return (
     <div className={`app${showMobileBottomNav ? " app--mobile-nav" : ""}`}>

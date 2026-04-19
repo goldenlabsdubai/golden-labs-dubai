@@ -19,6 +19,37 @@ function formatTrades(n) {
 const RECENT_LISTINGS_LIMIT = 12;
 const POLL_RECENT_LISTINGS_MS = 10000;
 
+/** Copy uses asset / GLFA / Golden Labs asset — not “NFT”. Shown after Recently Listed (main + overlay). */
+function AboutGoldenLabsSection() {
+  return (
+    <section className="landing-v2__section landing-v2__section--about-gl" aria-label="About Golden Labs">
+      <h2 className="landing-v2__section-title">About Golden Labs</h2>
+      <div className="landing-v2__about-gl">
+        <p className="landing-v2__about-gl-lead">
+          Golden Labs is a community-driven platform where each <strong>Golden Labs asset</strong> (GLFA) is a unique on-chain collectible you can mint, list, and trade with USDT on BNB Smart Chain.
+        </p>
+        <ul className="landing-v2__about-gl-list">
+          <li>
+            <strong>Subscribe</strong> — unlock minting and marketplace access for your wallet.
+          </li>
+          <li>
+            <strong>Mint</strong> — claim your GLFA asset and add it to your collection.
+          </li>
+          <li>
+            <strong>Trade</strong> — buy and sell listed assets at clear, fixed pricing.
+          </li>
+          <li>
+            <strong>Refer</strong> — invite friends and family and earn as the network grows.
+          </li>
+        </ul>
+        <p className="landing-v2__about-gl-note">
+          Your Golden Labs asset is yours to hold, list on the marketplace, or pick up from other members—built for transparency and true ownership in the Golden Labs ecosystem.
+        </p>
+      </div>
+    </section>
+  );
+}
+
 export default function Landing() {
   const navigate = useNavigate();
   const { connect, token, user, setSession, refreshUser, logout } = useAuth();
@@ -282,8 +313,10 @@ export default function Landing() {
           <div className="landing-v2__hero-bg" aria-hidden="true" />
           <div className="landing-v2__hero-row">
             <div className="landing-v2__hero-content">
-              <h1 className="landing-v2__hero-title">Subscribe, Mint, Trade & Refer With Friends & Family</h1>
-              <p className="landing-v2__hero-sub">Subscribe, Mint Asset & Trade on Golden Labs. Connect with 390+ wallets.</p>
+              <h1 className="landing-v2__hero-title">Bring friends &amp; family into the Golden Labs marketplace</h1>
+              <p className="landing-v2__hero-sub">
+                Subscribe, mint your GLFA, trade with USDT, and earn referrals. 390+ wallets supported.
+              </p>
             </div>
             <div className="landing-v2__hero-cta-row">
               <img
@@ -380,6 +413,8 @@ export default function Landing() {
             )}
           </div>
         </section>
+
+        <AboutGoldenLabsSection />
         </div>
 
         <section className="landing-v2__banner">
@@ -390,26 +425,6 @@ export default function Landing() {
         </section>
 
         <footer className="landing-v2__footer">
-          <div className="landing-v2__footer-inner">
-            <span className="landing-v2__footer-logo">Golden Labs</span>
-            <div className="landing-v2__footer-links">
-              <div className="landing-v2__footer-col">
-                <h4 className="landing-v2__footer-col-title">JOIN & follow</h4>
-                <div className="landing-v2__footer-social">
-                  <a href="https://twitter.com" target="_blank" rel="noopener noreferrer" aria-label="Twitter" className="landing-v2__footer-social-link">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-                      <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
-                    </svg>
-                  </a>
-                  <a href="https://t.me" target="_blank" rel="noopener noreferrer" aria-label="Telegram" className="landing-v2__footer-social-link">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-                      <path d="M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.48.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z" />
-                    </svg>
-                  </a>
-                </div>
-              </div>
-            </div>
-          </div>
           <p className="landing-v2__footer-copy">© {new Date().getFullYear()} Golden Labs. All rights reserved.</p>
         </footer>
       </main>
@@ -515,6 +530,8 @@ export default function Landing() {
                   )}
                 </div>
               </section>
+
+              <AboutGoldenLabsSection />
             </div>
           </>,
           document.getElementById("cards-overlay")

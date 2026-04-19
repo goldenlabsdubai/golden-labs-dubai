@@ -141,8 +141,7 @@ export default function UserProfile() {
       </div>
 
       <footer className="user-profile__footer">
-        <Link to="/marketplace" className="user-profile__footer-logo">Golden Labs</Link>
-        <p className="user-profile__footer-copy">© {new Date().getFullYear()} Golden Labs</p>
+        <p className="user-profile__footer-copy">© {new Date().getFullYear()} Golden Labs. All rights reserved.</p>
       </footer>
     </div>
   );
