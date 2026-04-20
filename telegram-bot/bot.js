@@ -1,13 +1,15 @@
 /**
- * Telegram alerts service (PM2)
- * - Long-polls Telegram (optional receive logging)
- * - Listens on localhost for POST /alert from the backend with { "message": "..." }
+ * Golden Labs Telegram app (PM2) — token, formatting, and sending live here only.
+ * Backend only POSTs JSON to /alert (no Telegram SDK on the server).
  *
- * Backend must set TELEGRAM_BRIDGE_URL=http://127.0.0.1:3847 (and optional TELEGRAM_BRIDGE_SECRET on both sides).
+ * POST /alert body:
+ *   { "kind": "subscription", "address": "0x...", "txHash": "..." }  → formatted here
+ *   { "message": "raw text" }  → sent as-is (e.g. /api/telegram/alert)
  */
 require("dotenv").config();
 const http = require("http");
 const TelegramBot = require("node-telegram-bot-api");
+const { formatActivityMessage } = require("./alertFormat");
 
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const CHAT_ID = process.env.TELEGRAM_CHAT_ID;
@@ -73,15 +75,24 @@ const server = http.createServer(async (req, res) => {
   try {
     const raw = await readBody(req);
     const json = raw ? JSON.parse(raw) : {};
-    const msg =
-      typeof json.message === "string"
-        ? json.message
-        : typeof json.text === "string"
-          ? json.text
-          : "";
+
+    let msg = "";
+    if (typeof json.message === "string" && json.message) {
+      msg = json.message;
+    } else if (typeof json.text === "string" && json.text) {
+      msg = json.text;
+    } else if (typeof json.kind === "string" && json.kind) {
+      const { kind, ...fields } = json;
+      msg = formatActivityMessage(kind, fields);
+    }
+
     if (!msg) {
       res.writeHead(400, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: 'Expected JSON body with "message" string' }));
+      res.end(
+        JSON.stringify({
+          error: 'Send { "kind": "subscription"|"mint"|... , ...fields } or { "message": "..." }',
+        })
+      );
       return;
     }
     await sendAlert(msg);

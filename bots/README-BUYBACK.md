@@ -28,6 +28,21 @@
 | `BOT_RELIST_AFTER_BUY_MAX_ATTEMPTS` | 4 | Approve + `list` retries after a successful buy |
 | `BOT_RELIST_RETRY_GAP_MS` | 2500 | Gap between relist retries |
 | `BOT_LOCK_TTL_MS` | 120000 | Stale lock expiry if a bot crashes mid-flight |
+| `BOT_STATIC_SIMULATE` | `true` | `eth_call` simulation before `buy` / `list` — skip broadcasting if the call would revert (saves BNB vs failed txs) |
+| `BOT_SKIP_USDT_APPROVE_IF_OK` | `true` | Skip `usdt.approve` when allowance already covers list price |
+| `BOT_SKIP_NFT_APPROVE_IF_OK` | `true` | Skip `nft.approve` when marketplace is already approved for that token |
+| `BOT_ACTIVE_LISTINGS_SWEEP_MS` | 12000 | How often the full active-listing scan runs — **raise** (e.g. 60000) to reduce RPC + fewer buy attempts when idle |
+| `BOT_RELIST_CHECK_MS` | 30000 | How often relist-recovery runs — **raise** to cut gas from repeated list tries |
+| `BOT_APPROVE_TX_CONFIRMATIONS` | `1` | Block confirmations for `approve` receipts (`wait(n)`). Use `2` on flaky RPCs |
+| `BOT_POST_APPROVE_DELAY_MS` | `2000` | Pause (ms) after USDT approve is confirmed, before `buy` |
+| `BOT_POST_NFT_APPROVE_DELAY_MS` | same as USDT | Pause (ms) after NFT approve is confirmed, before `list` |
+
+## Saving BNB on gas (failed txs)
+
+1. **Simulation (default on)** — `BOT_STATIC_SIMULATE=true` runs `buy` / `list` as `staticCall` first. If it would revert (not subscribed, suspended, bad state), the bot **does not** send a real tx.
+2. **Skip redundant approvals** — avoids extra approve txs when USDT allowance or NFT approval is already set.
+3. **Slow down scans** — increase `BOT_ACTIVE_LISTINGS_SWEEP_MS` and `BOT_RELIST_CHECK_MS` if bots hammer the chain when nothing is buyable.
+4. **Retries** — keep `BOT_BUY_MAX_ATTEMPTS` low (e.g. 2); failures after simulation are usually races or network — not fixed by spamming txs.
 
 ## Requirements on-chain
 

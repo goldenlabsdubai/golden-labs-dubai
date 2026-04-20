@@ -49,11 +49,25 @@ const RELIST_AFTER_BUY_MAX_ATTEMPTS = Math.max(1, Math.min(Number(process.env.BO
 const RELIST_RETRY_GAP_MS = Math.max(500, Number(process.env.BOT_RELIST_RETRY_GAP_MS || 2500));
 const BUY_RETRY_GAP_MS = Math.max(500, Number(process.env.BOT_BUY_RETRY_GAP_MS || 2000));
 const POST_APPROVE_DELAY_MS = Number(process.env.BOT_POST_APPROVE_DELAY_MS || 2000);
+/** Extra wait after NFT approve is mined, before `list` (defaults to same as USDT delay). */
+const POST_NFT_APPROVE_DELAY_MS =
+  process.env.BOT_POST_NFT_APPROVE_DELAY_MS !== undefined && String(process.env.BOT_POST_NFT_APPROVE_DELAY_MS).trim() !== ""
+    ? Number(process.env.BOT_POST_NFT_APPROVE_DELAY_MS)
+    : POST_APPROVE_DELAY_MS;
+/** Block confirmations to wait on approve txs (1 = first receipt, 2+ = safer on reorgs). */
+const APPROVE_TX_CONFIRMATIONS = Math.max(1, Math.min(Number(process.env.BOT_APPROVE_TX_CONFIRMATIONS || 1), 32));
 const RPC_POLLING_INTERVAL_MS = Number(process.env.BOT_RPC_POLLING_INTERVAL_MS || 12000);
 const BOT_TX_GAS_GWEI = Number(process.env.BOT_TX_GAS_GWEI || 3);
 const BOT_GAS_LIMIT_APPROVE = Number(process.env.BOT_GAS_LIMIT_APPROVE || 120000);
 const BOT_GAS_LIMIT_BUY = Number(process.env.BOT_GAS_LIMIT_BUY || 350000);
 const BOT_GAS_LIMIT_LIST = Number(process.env.BOT_GAS_LIMIT_LIST || 350000);
+/** eth_call simulation before buy/list — avoids broadcasting txs that would revert (saves BNB). Default on. */
+const BOT_STATIC_SIMULATE =
+  String(process.env.BOT_STATIC_SIMULATE ?? "true").toLowerCase() !== "false";
+const BOT_SKIP_USDT_APPROVE_IF_OK =
+  String(process.env.BOT_SKIP_USDT_APPROVE_IF_OK ?? "true").toLowerCase() !== "false";
+const BOT_SKIP_NFT_APPROVE_IF_OK =
+  String(process.env.BOT_SKIP_NFT_APPROVE_IF_OK ?? "true").toLowerCase() !== "false";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -84,6 +98,7 @@ const marketplaceAbi = [
 ];
 const nftAbi = [
   "function approve(address, uint256) returns (bool)",
+  "function getApproved(uint256 tokenId) view returns (address)",
   "function ownerOf(uint256 tokenId) view returns (address)",
   "function totalMinted() view returns (uint256)",
 ];
@@ -321,6 +336,39 @@ function txOverrides(kind = "default") {
   return base;
 }
 
+  /** eth_call — if this fails, broadcasting buy() would revert too (saves gas). */
+  async function simulateBuyCall(tokenId) {
+    if (!BOT_STATIC_SIMULATE) return true;
+    try {
+      await marketplace.buy.staticCall(tokenId, ethers.ZeroAddress);
+      return true;
+    } catch (e) {
+      console.log(
+        `Bot ${botId}: buy simulation would revert, skip token ${tokenId.toString()}`,
+        e?.shortMessage || e?.message || e
+      );
+      return false;
+    }
+  }
+
+  async function simulateListCall(tokenId) {
+    if (!BOT_STATIC_SIMULATE) return true;
+    try {
+      await marketplace.list.staticCall(tokenId, LIST_PRICE_WEI);
+      return true;
+    } catch (e) {
+      console.log(
+        `Bot ${botId}: list simulation would revert token ${tokenId.toString()}`,
+        e?.shortMessage || e?.message || e
+      );
+      return false;
+    }
+  }
+
+  async function delayMs(ms) {
+    if (ms > 0) await new Promise((r) => setTimeout(r, ms));
+  }
+
   async function hasAnyActiveUserListing(force = false) {
     const now = Date.now();
     if (!force && now - lastUserListingsCheckAt < Math.max(2000, USER_LISTINGS_CACHE_MS)) {
@@ -423,14 +471,16 @@ function txOverrides(kind = "default") {
         return;
       }
 
-      const approveUsdtTx = await usdt.approve(MARKETPLACE_ADDR, priceBn, txOverrides("approve"));
-      await approveUsdtTx.wait();
-      if (POST_APPROVE_DELAY_MS > 0) {
-        await new Promise((r) => setTimeout(r, POST_APPROVE_DELAY_MS));
+      let allowanceNow = await usdt.allowance(wallet.address, MARKETPLACE_ADDR);
+      const needsUsdtApprove = !BOT_SKIP_USDT_APPROVE_IF_OK || allowanceNow < priceBn;
+      if (needsUsdtApprove) {
+        const approveUsdtTx = await usdt.approve(MARKETPLACE_ADDR, priceBn, txOverrides("approve"));
+        await approveUsdtTx.wait(APPROVE_TX_CONFIRMATIONS);
+        await delayMs(POST_APPROVE_DELAY_MS);
+        allowanceNow = await usdt.allowance(wallet.address, MARKETPLACE_ADDR);
       }
-      const allowanceNow = await usdt.allowance(wallet.address, MARKETPLACE_ADDR);
       if (allowanceNow < priceBn) {
-        console.log(`Bot ${botId}: USDT allowance not ready after approve, skip token ${tokenIdStr}`);
+        console.log(`Bot ${botId}: USDT allowance not ready, skip token ${tokenIdStr}`);
         return;
       }
       const listingAgain = await marketplace.listings(tokenId);
@@ -448,6 +498,7 @@ function txOverrides(kind = "default") {
           return;
         }
         if (BigInt((live.price || 0).toString()) !== priceBn) return;
+        if (!(await simulateBuyCall(tokenId))) return;
         try {
           buyTx = await marketplace.buy(tokenId, ethers.ZeroAddress, txOverrides("buy"));
           buyReceipt = await buyTx.wait();
@@ -481,8 +532,26 @@ function txOverrides(kind = "default") {
       let relistOk = false;
       for (let attempt = 1; attempt <= RELIST_AFTER_BUY_MAX_ATTEMPTS; attempt++) {
         try {
-          const approveNftTx = await nft.approve(MARKETPLACE_ADDR, tokenId, txOverrides("approve"));
-          await approveNftTx.wait();
+          if (!(await simulateListCall(tokenId))) {
+            if (attempt < RELIST_AFTER_BUY_MAX_ATTEMPTS) {
+              await new Promise((r) => setTimeout(r, RELIST_RETRY_GAP_MS * attempt));
+            }
+            continue;
+          }
+          let skipNftApprove = false;
+          if (BOT_SKIP_NFT_APPROVE_IF_OK) {
+            try {
+              const curApproved = await nft.getApproved(tokenId);
+              if (String(curApproved).toLowerCase() === String(MARKETPLACE_ADDR).toLowerCase()) {
+                skipNftApprove = true;
+              }
+            } catch (_) {}
+          }
+          if (!skipNftApprove) {
+            const approveNftTx = await nft.approve(MARKETPLACE_ADDR, tokenId, txOverrides("approve"));
+            await approveNftTx.wait(APPROVE_TX_CONFIRMATIONS);
+            await delayMs(POST_NFT_APPROVE_DELAY_MS);
+          }
           const listTx = await marketplace.list(tokenId, LIST_PRICE_WEI, txOverrides("list"));
           await listTx.wait();
           relistOk = true;
@@ -608,8 +677,22 @@ function txOverrides(kind = "default") {
       const owner = (await nft.ownerOf(tokenId)).toString().toLowerCase();
       if (owner !== self) return false; // not held anymore
 
-      const approveTx = await nft.approve(MARKETPLACE_ADDR, tokenId, txOverrides("approve"));
-      await approveTx.wait();
+      if (!(await simulateListCall(tokenId))) return false;
+
+      let skipNftApprove = false;
+      if (BOT_SKIP_NFT_APPROVE_IF_OK) {
+        try {
+          const curApproved = await nft.getApproved(tokenId);
+          if (String(curApproved).toLowerCase() === String(MARKETPLACE_ADDR).toLowerCase()) {
+            skipNftApprove = true;
+          }
+        } catch (_) {}
+      }
+      if (!skipNftApprove) {
+        const approveTx = await nft.approve(MARKETPLACE_ADDR, tokenId, txOverrides("approve"));
+        await approveTx.wait(APPROVE_TX_CONFIRMATIONS);
+        await delayMs(POST_NFT_APPROVE_DELAY_MS);
+      }
       const listTx = await marketplace.list(tokenId, LIST_PRICE_WEI, txOverrides("list"));
       await listTx.wait();
       console.log(`Bot ${botId}: relisted held token ${tokenIdStr} (${source})`);
