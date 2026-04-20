@@ -117,6 +117,21 @@ async function readWithRetry(fn, fallback, retries = 2, timeoutMs = 7000) {
   return fallback;
 }
 
+/** ethers v6 may return struct as Result with numeric indices, named fields, or both. */
+function parseMarketplaceListingTuple(l) {
+  if (l == null) return { active: false, seller: "", price: null };
+  const sellerRaw = l.seller !== undefined ? l.seller : l[0];
+  const price = l.price !== undefined ? l.price : l[2];
+  let active = false;
+  if (typeof l.active === "boolean") active = l.active;
+  else if (l[3] !== undefined && l[3] !== null) active = Boolean(l[3]);
+  return {
+    active,
+    seller: String(sellerRaw ?? "").toLowerCase(),
+    price,
+  };
+}
+
 /**
  * Token IDs where `wallet` is the active listing seller (NFT held by marketplace contract).
  * Needed because `owned_token_ids` may be empty/stale while the listing is still live on-chain.
@@ -133,8 +148,7 @@ async function collectTokenIdsWithActiveListingBySeller(provider, marketAddr, wa
       Array.from({ length: end - start + 1 }, (_, i) => start + i).map(async (tid) => {
         try {
           const l = await marketContract.listings(tid);
-          const active = Boolean(l?.[3]);
-          const seller = String(l?.[0] ?? "").toLowerCase();
+          const { active, seller } = parseMarketplaceListingTuple(l);
           if (active && seller === w) return String(tid);
         } catch (_) {}
         return null;
@@ -221,10 +235,9 @@ router.get("/listings", async (_, res) => {
             readWithRetry(() => nftContract.tokenURI(tokenId), "", 1, 5000),
           ]).then(async ([listing, tokenURI]) => {
             if (!listing) return null;
-            const active = listing?.[3];
-            const seller = listing?.[0];
-            const price = listing?.[2];
-            if (active && seller && price != null) {
+            const { active, seller: sellerLower, price } = parseMarketplaceListingTuple(listing);
+            const seller = listing?.seller ?? listing?.[0];
+            if (active && sellerLower && price != null) {
               let listedAtSec = 0;
               try {
                 const la = await readWithRetry(() => marketContract.listingListedAt(tokenId), 0n, 1, 5000);
@@ -367,11 +380,9 @@ router.get("/my-listings", async (req, res) => {
         promises.push(
           marketContract.listings(tokenId).then(
             (listing) => {
-              const active = listing?.[3];
-              const seller = String(listing?.[0] ?? "").toLowerCase();
-              const price = listing?.[2];
+              const { active, seller, price } = parseMarketplaceListingTuple(listing);
               if (active && seller === wallet && price != null) {
-                return { tokenId: String(tokenId), seller: listing[0], price: String(price) };
+                return { tokenId: String(tokenId), seller: listing?.seller ?? listing?.[0], price: String(price) };
               }
               return null;
             },
@@ -455,12 +466,21 @@ router.get("/my-assets", async (req, res) => {
     const dbTokenSet = new Set((ownedTokenIds || []).map((x) => String(x)));
 
     const maxScan = Math.max(1, Math.min(Number(process.env.MARKETPLACE_MY_ASSETS_MAX_TOKENS || 1500), 100_000));
-    let totalMintedForScan = 0;
+    // Use null fallback so RPC failure is not confused with totalMinted() === 0 (which means no scan).
+    let scanUpTo = 0;
     try {
       const nftMini = new ethers.Contract(nftAddr, ["function totalMinted() view returns (uint256)"], provider);
-      totalMintedForScan = Number(await readWithRetry(() => nftMini.totalMinted(), 0, 2, 8000));
-    } catch (_) {}
-    const scanUpTo = Math.min(maxScan, Number.isFinite(totalMintedForScan) && totalMintedForScan > 0 ? totalMintedForScan : 0);
+      const totalMintedRaw = await readWithRetry(() => nftMini.totalMinted(), null, 2, 8000);
+      if (totalMintedRaw != null) {
+        const n = Number(totalMintedRaw);
+        if (Number.isFinite(n) && n > 0) scanUpTo = Math.min(maxScan, n);
+      } else {
+        // totalMinted unreadable — still scan listings up to maxScan so listed-in-escrow NFTs can merge.
+        scanUpTo = maxScan;
+      }
+    } catch (_) {
+      scanUpTo = maxScan;
+    }
 
     const tokenIdSet = new Set((ownedTokenIds || []).map((x) => String(x)));
     if (scanUpTo > 0) {
@@ -501,11 +521,7 @@ router.get("/my-assets", async (req, res) => {
             () =>
               marketContract
                 .listings(tokenId)
-                .then((l) => ({
-                  active: !!l?.[3],
-                  seller: String(l?.[0] ?? "").toLowerCase(),
-                  price: l?.[2],
-                })),
+                .then((l) => parseMarketplaceListingTuple(l)),
             { active: false, seller: "", price: null },
             3,
             ownerTimeoutMs
@@ -590,7 +606,7 @@ router.get("/my-nfts", async (req, res) => {
               null
             ),
             readWithRetry(
-              () => marketContract.listings(tokenId).then((l) => ({ active: !!l?.[3], seller: String(l?.[0] ?? "").toLowerCase(), price: l?.[2] })),
+              () => marketContract.listings(tokenId).then((l) => parseMarketplaceListingTuple(l)),
               { active: false, seller: "", price: null }
             ),
             readWithRetry(
