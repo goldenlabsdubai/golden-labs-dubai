@@ -424,7 +424,7 @@ router.get("/my-assets", async (req, res) => {
       }
     }
 
-    const dbTrustedSet = new Set((ownedTokenIds || []).map((x) => String(x)));
+    const dbTokenSet = new Set((ownedTokenIds || []).map((x) => String(x)));
 
     const tokens = [...new Set(ownedTokenIds.map((t) => String(t)))]
       .map((t) => Number(t))
@@ -477,12 +477,15 @@ router.get("/my-assets", async (req, res) => {
           readWithRetry(() => nftContract.tokenURI(tokenId), "", 2, ownerTimeoutMs),
         ]).then(([owner, listing, saleCount, tokenURI]) => {
           const ownerLower = (owner || "").toLowerCase();
-          const ownerRpcLikelyFailed = !ownerLower;
-          const inWallet = ownerLower && ownerLower === wallet;
-          const isListedByMe = listing.active && listing.seller === wallet;
-          // Drop if someone else clearly holds and we're not the active lister (handles sold-away).
+          const inWallet = Boolean(ownerLower && ownerLower === wallet);
+          const isListedByMe = Boolean(listing.active && listing.seller === wallet);
+          // Show only if wallet holds NFT OR has an active listing as seller (escrow: owner = marketplace).
+          // Do not trust Postgres alone: stale owned_token_ids after a sale used to ghost-list $30 here.
           if (!inWallet && !isListedByMe) {
-            if (!(ownerRpcLikelyFailed && dbTrustedSet.has(String(tokenId)))) return null;
+            if (dbTokenSet.has(String(tokenId))) {
+              User.removeOwnedTokenId(wallet, tokenId).catch(() => {});
+            }
+            return null;
           }
           const uri = ensureMetadataUri(tokenURI, tokenId);
           const listPriceUsdt = MARKETPLACE_LIST_PRICE_USDT;
