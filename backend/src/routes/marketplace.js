@@ -483,10 +483,14 @@ router.get("/my-assets", async (req, res) => {
     }
 
     const tokenIdSet = new Set((ownedTokenIds || []).map((x) => String(x)));
+    /** Used again during enrich: same scan can succeed while readWithRetry listing/owner calls time out. */
+    let listedBySeller = new Set();
     if (scanUpTo > 0) {
-      const listedBySeller = await collectTokenIdsWithActiveListingBySeller(provider, marketAddr, wallet, scanUpTo);
+      listedBySeller = await collectTokenIdsWithActiveListingBySeller(provider, marketAddr, wallet, scanUpTo);
       listedBySeller.forEach((id) => tokenIdSet.add(id));
     }
+
+    const marketAddrLower = marketAddr.toLowerCase();
 
     const tokens = [...tokenIdSet]
       .map((t) => Number(t))
@@ -535,12 +539,28 @@ router.get("/my-assets", async (req, res) => {
           readWithRetry(() => nftContract.tokenURI(tokenId), "", 2, ownerTimeoutMs),
         ]).then(([owner, listing, saleCount, tokenURI]) => {
           const ownerLower = (owner || "").toLowerCase();
-          const inWallet = Boolean(ownerLower && ownerLower === wallet);
-          const isListedByMe = Boolean(listing.active && listing.seller === wallet);
-          // Show only if wallet holds NFT OR has an active listing as seller (escrow: owner = marketplace).
-          // Do not trust Postgres alone: stale owned_token_ids after a sale used to ghost-list $30 here.
-          if (!inWallet && !isListedByMe) {
-            if (dbTokenSet.has(String(tokenId))) {
+          const ownerKnown = ownerLower.length > 0;
+          const inWallet = Boolean(ownerKnown && ownerLower === wallet);
+          const tidStr = String(tokenId);
+          const fromSellerScan = listedBySeller.has(tidStr);
+          const listingSaysListed = Boolean(listing.active && listing.seller === wallet);
+          const isEscrow = ownerKnown && ownerLower === marketAddrLower;
+          // Listing enrich can fail (timeout) while the initial seller scan succeeded — still treat as listed.
+          const isListedByMe =
+            listingSaysListed || (fromSellerScan && (isEscrow || !ownerKnown));
+          // If ownerOf timed out, keep showing when DB or seller-scan says this token belongs in the grid.
+          const trustWhenOwnerUnknown =
+            !ownerKnown && (dbTokenSet.has(tidStr) || fromSellerScan);
+          const show =
+            inWallet || isListedByMe || trustWhenOwnerUnknown;
+          // Only strip Postgres when owner read succeeded and a non-user, non-marketplace address holds the NFT (sold/transferred).
+          if (!show) {
+            if (
+              dbTokenSet.has(tidStr) &&
+              ownerKnown &&
+              ownerLower !== wallet &&
+              ownerLower !== marketAddrLower
+            ) {
               User.removeOwnedTokenId(wallet, tokenId).catch(() => {});
             }
             return null;
@@ -548,12 +568,13 @@ router.get("/my-assets", async (req, res) => {
           const uri = ensureMetadataUri(tokenURI, tokenId);
           const listPriceUsdt = MARKETPLACE_LIST_PRICE_USDT;
           const listPriceWei = MARKETPLACE_LIST_PRICE_WEI;
+          const listedForUi = listingSaysListed || (fromSellerScan && (isEscrow || !ownerKnown));
           return {
-            tokenId: String(tokenId),
+            tokenId: tidStr,
             saleCount: saleCount == null ? undefined : saleCount,
             listPriceUsdt,
             listPriceWei,
-            isListed: isListedByMe,
+            isListed: listedForUi,
             price: listing.price != null ? String(listing.price) : listPriceWei,
             tokenURI: uri,
           };
