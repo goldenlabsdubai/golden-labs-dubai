@@ -117,6 +117,34 @@ async function readWithRetry(fn, fallback, retries = 2, timeoutMs = 7000) {
   return fallback;
 }
 
+/**
+ * Token IDs where `wallet` is the active listing seller (NFT held by marketplace contract).
+ * Needed because `owned_token_ids` may be empty/stale while the listing is still live on-chain.
+ */
+async function collectTokenIdsWithActiveListingBySeller(provider, marketAddr, wallet, maxTokenId) {
+  const w = (wallet || "").toLowerCase();
+  if (!marketAddr || !w || maxTokenId < 1) return new Set();
+  const marketContract = new ethers.Contract(marketAddr, MARKETPLACE_ABI, provider);
+  const BATCH = Math.max(10, Math.min(Number(process.env.MARKETPLACE_MY_ASSETS_LISTING_SCAN_BATCH || 50), 80));
+  const out = new Set();
+  for (let start = 1; start <= maxTokenId; start += BATCH) {
+    const end = Math.min(maxTokenId, start + BATCH - 1);
+    const chunk = await Promise.all(
+      Array.from({ length: end - start + 1 }, (_, i) => start + i).map(async (tid) => {
+        try {
+          const l = await marketContract.listings(tid);
+          const active = Boolean(l?.[3]);
+          const seller = String(l?.[0] ?? "").toLowerCase();
+          if (active && seller === w) return String(tid);
+        } catch (_) {}
+        return null;
+      })
+    );
+    chunk.filter(Boolean).forEach((tid) => out.add(tid));
+  }
+  return out;
+}
+
 const NFT_TRANSFER_EVENT_ABI = ["event Transfer(address indexed from, address indexed to, uint256 indexed tokenId)"];
 
 /**
@@ -426,7 +454,21 @@ router.get("/my-assets", async (req, res) => {
 
     const dbTokenSet = new Set((ownedTokenIds || []).map((x) => String(x)));
 
-    const tokens = [...new Set(ownedTokenIds.map((t) => String(t)))]
+    const maxScan = Math.max(1, Math.min(Number(process.env.MARKETPLACE_MY_ASSETS_MAX_TOKENS || 1500), 100_000));
+    let totalMintedForScan = 0;
+    try {
+      const nftMini = new ethers.Contract(nftAddr, ["function totalMinted() view returns (uint256)"], provider);
+      totalMintedForScan = Number(await readWithRetry(() => nftMini.totalMinted(), 0, 2, 8000));
+    } catch (_) {}
+    const scanUpTo = Math.min(maxScan, Number.isFinite(totalMintedForScan) && totalMintedForScan > 0 ? totalMintedForScan : 0);
+
+    const tokenIdSet = new Set((ownedTokenIds || []).map((x) => String(x)));
+    if (scanUpTo > 0) {
+      const listedBySeller = await collectTokenIdsWithActiveListingBySeller(provider, marketAddr, wallet, scanUpTo);
+      listedBySeller.forEach((id) => tokenIdSet.add(id));
+    }
+
+    const tokens = [...tokenIdSet]
       .map((t) => Number(t))
       .filter((n) => Number.isFinite(n) && n > 0)
       .sort((a, b) => a - b);
