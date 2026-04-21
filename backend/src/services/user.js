@@ -69,6 +69,3 @@ export async function getOwnedTokenIds(wallet) {
 export async function removeOwnedTokenId(wallet, tokenId) {
   return UserPg.removeOwnedTokenId(wallet, tokenId);
 }
-export async function repairOwnedTokenIdsAfterPurchase(buyerWallet, sellerWallet, tokenId) {
-  return UserPg.repairOwnedTokenIdsAfterPurchase(buyerWallet, sellerWallet, tokenId);
-}

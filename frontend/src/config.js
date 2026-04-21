@@ -1,4 +1,7 @@
-export const API = import.meta.env.VITE_API_URL ?? "";
+/** Backend `/api` base. In dev, default to same-origin `/api` when unset — requires `vite.config` proxy to the Node server. */
+export const API =
+  (import.meta.env.VITE_API_URL || "").trim() ||
+  (import.meta.env.DEV ? "/api" : "");
 
 /** BNB logo — `frontend/public/bnb_logo.png` (wallet balance, modals). */
 export const BNB_LOGO_PUBLIC = "/bnb_logo.png";

@@ -117,48 +117,6 @@ async function readWithRetry(fn, fallback, retries = 2, timeoutMs = 7000) {
   return fallback;
 }
 
-/** ethers v6 may return struct as Result with numeric indices, named fields, or both. */
-function parseMarketplaceListingTuple(l) {
-  if (l == null) return { active: false, seller: "", price: null };
-  const sellerRaw = l.seller !== undefined ? l.seller : l[0];
-  const price = l.price !== undefined ? l.price : l[2];
-  let active = false;
-  if (typeof l.active === "boolean") active = l.active;
-  else if (l[3] !== undefined && l[3] !== null) active = Boolean(l[3]);
-  return {
-    active,
-    seller: String(sellerRaw ?? "").toLowerCase(),
-    price,
-  };
-}
-
-/**
- * Token IDs where `wallet` is the active listing seller (NFT held by marketplace contract).
- * Needed because `owned_token_ids` may be empty/stale while the listing is still live on-chain.
- */
-async function collectTokenIdsWithActiveListingBySeller(provider, marketAddr, wallet, maxTokenId) {
-  const w = (wallet || "").toLowerCase();
-  if (!marketAddr || !w || maxTokenId < 1) return new Set();
-  const marketContract = new ethers.Contract(marketAddr, MARKETPLACE_ABI, provider);
-  const BATCH = Math.max(10, Math.min(Number(process.env.MARKETPLACE_MY_ASSETS_LISTING_SCAN_BATCH || 50), 80));
-  const out = new Set();
-  for (let start = 1; start <= maxTokenId; start += BATCH) {
-    const end = Math.min(maxTokenId, start + BATCH - 1);
-    const chunk = await Promise.all(
-      Array.from({ length: end - start + 1 }, (_, i) => start + i).map(async (tid) => {
-        try {
-          const l = await marketContract.listings(tid);
-          const { active, seller } = parseMarketplaceListingTuple(l);
-          if (active && seller === w) return String(tid);
-        } catch (_) {}
-        return null;
-      })
-    );
-    chunk.filter(Boolean).forEach((tid) => out.add(tid));
-  }
-  return out;
-}
-
 const NFT_TRANSFER_EVENT_ABI = ["event Transfer(address indexed from, address indexed to, uint256 indexed tokenId)"];
 
 /**
@@ -235,9 +193,10 @@ router.get("/listings", async (_, res) => {
             readWithRetry(() => nftContract.tokenURI(tokenId), "", 1, 5000),
           ]).then(async ([listing, tokenURI]) => {
             if (!listing) return null;
-            const { active, seller: sellerLower, price } = parseMarketplaceListingTuple(listing);
-            const seller = listing?.seller ?? listing?.[0];
-            if (active && sellerLower && price != null) {
+            const active = listing?.[3];
+            const seller = listing?.[0];
+            const price = listing?.[2];
+            if (active && seller && price != null) {
               let listedAtSec = 0;
               try {
                 const la = await readWithRetry(() => marketContract.listingListedAt(tokenId), 0n, 1, 5000);
@@ -368,7 +327,7 @@ router.get("/my-listings", async (req, res) => {
     if (!Number.isFinite(totalMinted) || totalMinted === 0) return res.json({ listings: [] });
     const maxTokens = Math.max(
       1,
-      Math.min(Number(process.env.MARKETPLACE_MY_ASSETS_MAX_TOKENS || 1500), totalMinted)
+      Math.min(Number(process.env.MARKETPLACE_MY_ASSETS_MAX_TOKENS || 10000), totalMinted)
     );
 
     const listings = [];
@@ -380,9 +339,11 @@ router.get("/my-listings", async (req, res) => {
         promises.push(
           marketContract.listings(tokenId).then(
             (listing) => {
-              const { active, seller, price } = parseMarketplaceListingTuple(listing);
+              const active = listing?.[3];
+              const seller = String(listing?.[0] ?? "").toLowerCase();
+              const price = listing?.[2];
               if (active && seller === wallet && price != null) {
-                return { tokenId: String(tokenId), seller: listing?.seller ?? listing?.[0], price: String(price) };
+                return { tokenId: String(tokenId), seller: listing[0], price: String(price) };
               }
               return null;
             },
@@ -413,7 +374,51 @@ const NFT_VIEW_ABI = [
   "function tokenURI(uint256 tokenId) view returns (string)",
 ];
 
-// My assets: tokenIds from PostgreSQL owned_token_ids + optional chain discover; on-chain enrich. Survives flaky RPC.
+/**
+ * Scan 1..maxMinted: token IDs where wallet holds NFT or has an active listing as seller.
+ * Matches /my-nfts logic so dashboard works even when Postgres owned_token_ids is empty or stale.
+ */
+async function collectChainOwnedOrListedTokenIds(wallet, provider, nftAddr, marketAddr, totalMinted) {
+  const maxTokens = Math.max(
+    1,
+    Math.min(Number(process.env.MARKETPLACE_MY_ASSETS_MAX_TOKENS || 10000), totalMinted)
+  );
+  const timeBudgetMs = Math.max(5000, Number(process.env.MARKETPLACE_MY_ASSETS_MAX_MS || 60000));
+  const startedAt = Date.now();
+  const BATCH = Math.max(10, Math.min(Number(process.env.MARKETPLACE_MY_ASSETS_BATCH || 25), 60));
+  const nftContract = new ethers.Contract(nftAddr, NFT_VIEW_ABI, provider);
+  const marketContract = new ethers.Contract(marketAddr, MARKETPLACE_ABI, provider);
+  const found = new Set();
+  for (let start = 1; start <= maxTokens; start += BATCH) {
+    if (Date.now() - startedAt > timeBudgetMs) break;
+    const end = Math.min(start + BATCH - 1, maxTokens);
+    const promises = [];
+    for (let tokenId = start; tokenId <= end; tokenId++) {
+      promises.push(
+        Promise.all([
+          readWithRetry(() => nftContract.ownerOf(tokenId).then((o) => String(o || "").toLowerCase()), null, 2, 8000),
+          readWithRetry(
+            () =>
+              marketContract
+                .listings(tokenId)
+                .then((l) => ({ active: !!l?.[3], seller: String(l?.[0] ?? "").toLowerCase() })),
+            { active: false, seller: "" },
+            2,
+            8000
+          ),
+        ]).then(([owner, listing]) => {
+          const inWallet = owner === wallet;
+          const isListedByMe = listing.active && listing.seller === wallet;
+          if (inWallet || isListedByMe) found.add(String(tokenId));
+        })
+      );
+    }
+    await Promise.all(promises);
+  }
+  return found;
+}
+
+// My assets: Postgres + transfer discover + on-chain scan; enrich with ownerOf/listing; strict — sold NFTs drop off.
 router.get("/my-assets", async (req, res) => {
   try {
     const wallet = await getWalletForRequest(req);
@@ -463,36 +468,24 @@ router.get("/my-assets", async (req, res) => {
       }
     }
 
-    const dbTokenSet = new Set((ownedTokenIds || []).map((x) => String(x)));
-
-    const maxScan = Math.max(1, Math.min(Number(process.env.MARKETPLACE_MY_ASSETS_MAX_TOKENS || 1500), 100_000));
-    // Use null fallback so RPC failure is not confused with totalMinted() === 0 (which means no scan).
-    let scanUpTo = 0;
+    let totalMinted = 0;
     try {
       const nftMini = new ethers.Contract(nftAddr, ["function totalMinted() view returns (uint256)"], provider);
-      const totalMintedRaw = await readWithRetry(() => nftMini.totalMinted(), null, 2, 8000);
-      if (totalMintedRaw != null) {
-        const n = Number(totalMintedRaw);
-        if (Number.isFinite(n) && n > 0) scanUpTo = Math.min(maxScan, n);
-      } else {
-        // totalMinted unreadable — still scan listings up to maxScan so listed-in-escrow NFTs can merge.
-        scanUpTo = maxScan;
+      totalMinted = Number(await readWithRetry(() => nftMini.totalMinted(), 0, 2, 8000));
+    } catch (_) {}
+
+    let chainIdSet = new Set();
+    if (Number.isFinite(totalMinted) && totalMinted > 0) {
+      try {
+        chainIdSet = await collectChainOwnedOrListedTokenIds(wallet, provider, nftAddr, marketAddr, totalMinted);
+      } catch (e) {
+        console.warn("my-assets chain scan:", e?.message || e);
       }
-    } catch (_) {
-      scanUpTo = maxScan;
     }
 
-    const tokenIdSet = new Set((ownedTokenIds || []).map((x) => String(x)));
-    /** Used again during enrich: same scan can succeed while readWithRetry listing/owner calls time out. */
-    let listedBySeller = new Set();
-    if (scanUpTo > 0) {
-      listedBySeller = await collectTokenIdsWithActiveListingBySeller(provider, marketAddr, wallet, scanUpTo);
-      listedBySeller.forEach((id) => tokenIdSet.add(id));
-    }
-
-    const marketAddrLower = marketAddr.toLowerCase();
-
-    const tokens = [...tokenIdSet]
+    const tokens = [
+      ...new Set([...(ownedTokenIds || []).map((t) => String(t)), ...chainIdSet]),
+    ]
       .map((t) => Number(t))
       .filter((n) => Number.isFinite(n) && n > 0)
       .sort((a, b) => a - b);
@@ -525,7 +518,11 @@ router.get("/my-assets", async (req, res) => {
             () =>
               marketContract
                 .listings(tokenId)
-                .then((l) => parseMarketplaceListingTuple(l)),
+                .then((l) => ({
+                  active: !!l?.[3],
+                  seller: String(l?.[0] ?? "").toLowerCase(),
+                  price: l?.[2],
+                })),
             { active: false, seller: "", price: null },
             3,
             ownerTimeoutMs
@@ -539,42 +536,22 @@ router.get("/my-assets", async (req, res) => {
           readWithRetry(() => nftContract.tokenURI(tokenId), "", 2, ownerTimeoutMs),
         ]).then(([owner, listing, saleCount, tokenURI]) => {
           const ownerLower = (owner || "").toLowerCase();
-          const ownerKnown = ownerLower.length > 0;
-          const inWallet = Boolean(ownerKnown && ownerLower === wallet);
-          const tidStr = String(tokenId);
-          const fromSellerScan = listedBySeller.has(tidStr);
-          const listingSaysListed = Boolean(listing.active && listing.seller === wallet);
-          const isEscrow = ownerKnown && ownerLower === marketAddrLower;
-          // Listing enrich can fail (timeout) while the initial seller scan succeeded — still treat as listed.
-          const isListedByMe =
-            listingSaysListed || (fromSellerScan && (isEscrow || !ownerKnown));
-          // If ownerOf timed out, keep showing when DB or seller-scan says this token belongs in the grid.
-          const trustWhenOwnerUnknown =
-            !ownerKnown && (dbTokenSet.has(tidStr) || fromSellerScan);
-          const show =
-            inWallet || isListedByMe || trustWhenOwnerUnknown;
-          // Only strip Postgres when owner read succeeded and a non-user, non-marketplace address holds the NFT (sold/transferred).
-          if (!show) {
-            if (
-              dbTokenSet.has(tidStr) &&
-              ownerKnown &&
-              ownerLower !== wallet &&
-              ownerLower !== marketAddrLower
-            ) {
-              User.removeOwnedTokenId(wallet, tokenId).catch(() => {});
-            }
+          const inWallet = ownerLower && ownerLower === wallet;
+          const isListedByMe = listing.active && listing.seller === wallet;
+          // Strict: only show if we still hold the NFT or we are the active seller (escrow). No DB ghost rows.
+          if (!inWallet && !isListedByMe) {
+            if (ownerLower) User.removeOwnedTokenId(wallet, tokenId).catch(() => {});
             return null;
           }
           const uri = ensureMetadataUri(tokenURI, tokenId);
           const listPriceUsdt = MARKETPLACE_LIST_PRICE_USDT;
           const listPriceWei = MARKETPLACE_LIST_PRICE_WEI;
-          const listedForUi = listingSaysListed || (fromSellerScan && (isEscrow || !ownerKnown));
           return {
-            tokenId: tidStr,
+            tokenId: String(tokenId),
             saleCount: saleCount == null ? undefined : saleCount,
             listPriceUsdt,
             listPriceWei,
-            isListed: listedForUi,
+            isListed: isListedByMe,
             price: listing.price != null ? String(listing.price) : listPriceWei,
             tokenURI: uri,
           };
@@ -609,9 +586,9 @@ router.get("/my-nfts", async (req, res) => {
     if (!Number.isFinite(totalMinted) || totalMinted === 0) return res.json({ nfts: [] });
     const maxTokens = Math.max(
       1,
-      Math.min(Number(process.env.MARKETPLACE_MY_ASSETS_MAX_TOKENS || 1500), totalMinted)
+      Math.min(Number(process.env.MARKETPLACE_MY_ASSETS_MAX_TOKENS || 10000), totalMinted)
     );
-    const timeBudgetMs = Math.max(5000, Number(process.env.MARKETPLACE_MY_ASSETS_MAX_MS || 15000));
+    const timeBudgetMs = Math.max(5000, Number(process.env.MARKETPLACE_MY_ASSETS_MAX_MS || 60000));
     const startedAt = Date.now();
     const nfts = [];
     const BATCH = Math.max(10, Math.min(Number(process.env.MARKETPLACE_MY_ASSETS_BATCH || 25), 60));
@@ -627,7 +604,7 @@ router.get("/my-nfts", async (req, res) => {
               null
             ),
             readWithRetry(
-              () => marketContract.listings(tokenId).then((l) => parseMarketplaceListingTuple(l)),
+              () => marketContract.listings(tokenId).then((l) => ({ active: !!l?.[3], seller: String(l?.[0] ?? "").toLowerCase(), price: l?.[2] })),
               { active: false, seller: "", price: null }
             ),
             readWithRetry(

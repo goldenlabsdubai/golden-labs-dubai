@@ -4,7 +4,7 @@ import { API } from "../config";
  * Loads `/marketplace/my-assets`. If the API briefly returns [] while RPC/DB catches up,
  * retries once after a delay when the user is expected to hold a minted NFT.
  */
-export async function fetchMyAssetsWithRetry(token, userState) {
+export async function fetchMyAssetsWithRetry(token, _userState) {
   if (!token) return [];
   const headers = { Authorization: `Bearer ${token}` };
   const load = async () => {
@@ -15,8 +15,8 @@ export async function fetchMyAssetsWithRetry(token, userState) {
   };
   try {
     let assets = await load();
-    const expectHold = userState === "MINTED" || userState === "ACTIVE_TRADER";
-    if (assets.length === 0 && expectHold) {
+    // Second load after a short delay: RPC/DB can lag after mint, buy, or list; works for any logged-in user.
+    if (assets.length === 0) {
       await new Promise((resolve) => setTimeout(resolve, 1900));
       assets = await load();
     }

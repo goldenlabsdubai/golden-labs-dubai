@@ -484,7 +484,6 @@ export async function recordPurchase(buyerWallet, sellerWallet, tokenId, price, 
     );
     if (insertPurchase.rowCount === 0) {
       await client.query("ROLLBACK");
-      await repairOwnedTokenIdsAfterPurchase(buyer, seller, tid).catch(() => {});
       return;
     }
     await client.query(
@@ -540,7 +539,7 @@ export async function addOwnedTokenId(wallet, tokenId) {
   await query("UPDATE users SET owned_token_ids = $1::jsonb, last_activity = NOW() WHERE id = $2", [JSON.stringify(arr), id]);
 }
 
-/** Remove token id from user's owned_token_ids (e.g. sold on-chain but DB stale). */
+/** Remove token from user's owned_token_ids (e.g. after sale when DB was stale). */
 export async function removeOwnedTokenId(wallet, tokenId) {
   const id = docIdWallet(wallet);
   if (!id || tokenId == null) return;
@@ -548,38 +547,9 @@ export async function removeOwnedTokenId(wallet, tokenId) {
   const { rows } = await query("SELECT owned_token_ids FROM users WHERE id = $1", [id]);
   let arr = rows[0]?.owned_token_ids ?? [];
   if (!Array.isArray(arr)) arr = typeof arr === "string" ? (() => { try { return JSON.parse(arr); } catch { return []; } })() : [];
-  const next = arr.filter((x) => String(x) !== tid);
+  const next = arr.map(String).filter((x) => x !== tid);
   if (next.length === arr.length) return;
   await query("UPDATE users SET owned_token_ids = $1::jsonb, last_activity = NOW() WHERE id = $2", [JSON.stringify(next), id]);
-}
-
-/**
- * Idempotent: after a sale, buyer has token, seller does not. Used when nft_purchases insert was duplicate
- * but owned_token_ids might still be wrong (indexer edge cases).
- */
-export async function repairOwnedTokenIdsAfterPurchase(buyerWallet, sellerWallet, tokenId) {
-  const buyer = (buyerWallet || "").toLowerCase();
-  const seller = (sellerWallet || "").toLowerCase();
-  const tid = String(tokenId || "");
-  if (!buyer || !tid) return;
-  const buyerId = docIdWallet(buyer);
-  if (buyerId) {
-    const { rows } = await query("SELECT owned_token_ids FROM users WHERE id = $1", [buyerId]);
-    let ids = rows[0]?.owned_token_ids ?? [];
-    if (!Array.isArray(ids)) ids = typeof ids === "string" ? (() => { try { return JSON.parse(ids); } catch { return []; } })() : [];
-    if (!ids.includes(tid)) ids.push(tid);
-    await query("UPDATE users SET owned_token_ids = $1::jsonb, last_activity = NOW() WHERE id = $2", [JSON.stringify(ids), buyerId]);
-  }
-  if (seller) {
-    const sellerId = docIdWallet(seller);
-    if (sellerId) {
-      const { rows } = await query("SELECT owned_token_ids FROM users WHERE id = $1", [sellerId]);
-      let sIds = rows[0]?.owned_token_ids ?? [];
-      if (!Array.isArray(sIds)) sIds = typeof sIds === "string" ? (() => { try { return JSON.parse(sIds); } catch { return []; } })() : [];
-      sIds = sIds.filter((x) => String(x) !== tid);
-      await query("UPDATE users SET owned_token_ids = $1::jsonb, last_activity = NOW() WHERE id = $2", [JSON.stringify(sIds), sellerId]);
-    }
-  }
 }
 
 export async function getOwnedTokenIds(wallet) {
