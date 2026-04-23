@@ -28,10 +28,13 @@ function resolveAppMetadataUrl() {
   return raw;
 }
 
+// Local dev: WalletConnect warns if metadata.url ≠ actual page URL; always use current origin on localhost.
 const appMetadataUrl =
-  resolveAppMetadataUrl() ||
-  (typeof window !== "undefined" ? window.location.origin : "") ||
-  "https://goldenlabs.finance";
+  import.meta.env.DEV && typeof window !== "undefined"
+    ? window.location.origin
+    : resolveAppMetadataUrl() ||
+      (typeof window !== "undefined" ? window.location.origin : "") ||
+      "https://goldenlabs.finance";
 
 const metadata = {
   name: "Golden Labs",

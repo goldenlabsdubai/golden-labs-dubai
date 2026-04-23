@@ -5,9 +5,10 @@ import { useAccount, useBalance, useDisconnect, useReadContract, useWriteContrac
 import { formatEther, formatUnits } from "viem";
 import { useAuth } from "../hooks/useAuth";
 import { useWalletConnect } from "../hooks/useWalletConnect";
-import { API, BNB_LOGO_PUBLIC, getAvatarUrl, MARKETPLACE_AND_RESERVE_POOL_ADDRESS } from "../config";
+import { API, BNB_LOGO_PUBLIC, EXPLORER_BY_CHAIN, getAvatarUrl, MARKETPLACE_AND_RESERVE_POOL_ADDRESS } from "../config";
 import { fetchMyAssetsWithRetry } from "../utils/fetchMyAssets";
-import { detectInsufficientBalanceType, getTransactionErrorMessage } from "../utils/transactionError";
+import { applyWalletTxError } from "../utils/transactionError";
+import { resolveSellerReferrerRoot } from "../utils/marketplaceReferrer";
 import {
   safeGasLimit,
   DEFAULT_APPROVE_GAS,
@@ -39,14 +40,6 @@ const REFERRAL_ABI = [
   { name: "referralEarnings", type: "function", stateMutability: "view", inputs: [{ name: "account", type: "address" }], outputs: [{ type: "uint256" }] },
   { name: "referralWithdrawChunk", type: "function", stateMutability: "view", inputs: [], outputs: [{ type: "uint256" }] },
 ];
-
-const EXPLORER_BY_CHAIN = {
-  1: "https://etherscan.io",
-  56: "https://bscscan.com",
-  97: "https://testnet.bscscan.com",
-  137: "https://polygonscan.com",
-  8453: "https://basescan.org",
-};
 
 const TABS = ["Owned", "Referral earnings", "Activity"];
 
@@ -313,14 +306,12 @@ export default function Dashboard() {
       await publicClient.waitForTransactionReceipt({ hash });
       refetchData();
     } catch (e) {
-      const insufficientType = detectInsufficientBalanceType(e);
-      if (insufficientType) {
-        setInsufficientBalanceType(insufficientType);
-        if (insufficientType === "usdt") refetchUsdtBalance?.();
-        setError("");
-      } else {
-        setError(getTransactionErrorMessage(e, "Delist failed"));
-      }
+      applyWalletTxError(e, {
+        setInsufficientBalanceType,
+        setError,
+        refetchUsdt: refetchUsdtBalance,
+        fallbackMessage: "Delist failed",
+      });
     } finally {
       setLoadingDelist(null);
     }
@@ -363,7 +354,12 @@ export default function Dashboard() {
       }
       refreshUser();
     } catch (e) {
-      setError(getTransactionErrorMessage(e, "Withdraw failed"));
+      applyWalletTxError(e, {
+        setInsufficientBalanceType,
+        setError,
+        refetchUsdt: refetchUsdtBalance,
+        fallbackMessage: "Withdraw failed",
+      });
     } finally {
       setLoadingWithdraw(false);
     }
@@ -417,21 +413,19 @@ export default function Dashboard() {
       await publicClient.waitForTransactionReceipt({ hash: hashList });
       refetchData();
     } catch (e) {
-      const insufficientType = detectInsufficientBalanceType(e);
-      if (insufficientType) {
-        setInsufficientBalanceType(insufficientType);
-        if (insufficientType === "usdt") refetchUsdtBalance?.();
-        setError("");
-      } else {
-        setError(getTransactionErrorMessage(e, "List failed"));
-      }
+      applyWalletTxError(e, {
+        setInsufficientBalanceType,
+        setError,
+        refetchUsdt: refetchUsdtBalance,
+        fallbackMessage: "List failed",
+      });
     } finally {
       setLoadingList(null);
       setListStep(null);
     }
   };
 
-  const handleBuy = async (tokenId, priceWei, referrer = "0x0000000000000000000000000000000000000000", seller = null) => {
+  const handleBuy = async (tokenId, priceWei, seller = null) => {
     if (!marketplaceAddressNormalized || !usdtAddressNormalized || !publicClient || !writeContractAsync || !address) {
       setError("Wallet or contracts not ready.");
       return;
@@ -440,6 +434,7 @@ export default function Dashboard() {
     setLoadingBuy(tokenId);
     setBuyStep("approve");
     try {
+      const tradeReferrerRoot = await resolveSellerReferrerRoot(publicClient, referralAddressNormalized, seller);
       const hashApprove = await writeContractAsync({
         address: usdtAddressNormalized,
         abi: USDT_ABI,
@@ -463,14 +458,14 @@ export default function Dashboard() {
         address: marketplaceAddressNormalized,
         abi: MARKETPLACE_ABI,
         functionName: "buy",
-        args: [BigInt(tokenId), referrer],
+        args: [BigInt(tokenId), tradeReferrerRoot],
         gas: await safeGasLimit(
           publicClient,
           {
             address: marketplaceAddressNormalized,
             abi: MARKETPLACE_ABI,
             functionName: "buy",
-            args: [BigInt(tokenId), referrer],
+            args: [BigInt(tokenId), tradeReferrerRoot],
             account: address,
           },
           DEFAULT_MARKETPLACE_BUY_GAS
@@ -486,14 +481,12 @@ export default function Dashboard() {
       } catch (_) {}
       refetchData();
     } catch (e) {
-      const insufficientType = detectInsufficientBalanceType(e);
-      if (insufficientType) {
-        setInsufficientBalanceType(insufficientType);
-        if (insufficientType === "usdt") refetchUsdtBalance?.();
-        setError("");
-      } else {
-        setError(getTransactionErrorMessage(e, "Buy failed"));
-      }
+      applyWalletTxError(e, {
+        setInsufficientBalanceType,
+        setError,
+        refetchUsdt: refetchUsdtBalance,
+        fallbackMessage: "Buy failed",
+      });
     } finally {
       setLoadingBuy(null);
       setBuyStep(null);

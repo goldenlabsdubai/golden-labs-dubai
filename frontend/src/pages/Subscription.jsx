@@ -6,7 +6,7 @@ import { formatEther, formatUnits, parseUnits } from "viem";
 import { useAuth } from "../hooks/useAuth";
 import { useWalletConnect } from "../hooks/useWalletConnect";
 import { API, ASSET_IMAGE } from "../config";
-import { detectInsufficientBalanceType, getTransactionErrorMessage } from "../utils/transactionError";
+import { applyWalletTxError } from "../utils/transactionError";
 import {
   safeGasLimit,
   DEFAULT_APPROVE_GAS,
@@ -175,14 +175,12 @@ export default function Subscription() {
       refetchUsdtBalance?.();
       navigate("/mint");
     } catch (e) {
-      const insufficientType = detectInsufficientBalanceType(e);
-      if (insufficientType) {
-        setInsufficientBalanceType(insufficientType);
-        if (insufficientType === "usdt") refetchUsdtBalance?.();
-        setError("");
-      } else {
-        setError(getTransactionErrorMessage(e, "Payment failed"));
-      }
+      applyWalletTxError(e, {
+        setInsufficientBalanceType,
+        setError,
+        refetchUsdt: refetchUsdtBalance,
+        fallbackMessage: "Payment failed",
+      });
     } finally {
       setLoading(false);
       setPayStep(null);

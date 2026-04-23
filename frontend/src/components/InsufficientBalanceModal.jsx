@@ -1,5 +1,13 @@
 import { BNB_LOGO_PUBLIC } from "../config";
 
+/**
+ * @param {object} props
+ * @param {boolean} props.open
+ * @param {"usdt"|"bnb"|"rejected"|null|undefined} props.type
+ * @param {() => void} props.onClose
+ * @param {string|null|undefined} props.usdtBalanceFormatted
+ * @param {string|null|undefined} props.bnbBalanceFormatted
+ */
 export default function InsufficientBalanceModal({
   open,
   type,
@@ -8,6 +16,21 @@ export default function InsufficientBalanceModal({
   bnbBalanceFormatted,
 }) {
   if (!open || !type) return null;
+
+  if (type === "rejected") {
+    return (
+      <div className="marketplace-page__insufficient-overlay" role="dialog" aria-modal="true" aria-labelledby="wallet-rejected-title">
+        <div className="marketplace-page__insufficient-modal">
+          <h2 id="wallet-rejected-title" className="marketplace-page__insufficient-title">Transaction cancelled</h2>
+          <p className="marketplace-page__insufficient-desc">You rejected the request in your wallet. Nothing was sent to the network.</p>
+          <p className="marketplace-page__insufficient-hint">Try again when you’re ready to confirm.</p>
+          <button type="button" className="marketplace-page__insufficient-close" onClick={onClose}>
+            Close
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   const isUsdt = type === "usdt";
   const title = isUsdt ? "Insufficient USDT" : "Insufficient BNB";
@@ -18,7 +41,7 @@ export default function InsufficientBalanceModal({
     ? "Top up USDT and keep some BNB for gas."
     : "Top up BNB to pay gas and try again.";
   const balanceText = isUsdt
-    ? `${usdtBalanceFormatted != null ? usdtBalanceFormatted : "—"} USDT TEST`
+    ? `${usdtBalanceFormatted != null ? usdtBalanceFormatted : "—"} USDT`
     : `${bnbBalanceFormatted != null ? bnbBalanceFormatted : "—"} BNB`;
   const logoSrc = isUsdt ? "/USDT_BEP20.png" : BNB_LOGO_PUBLIC;
   const logoAlt = isUsdt ? "USDT" : "BNB";

@@ -7,7 +7,8 @@ import { useAuth } from "../hooks/useAuth";
 import { useWalletConnect } from "../hooks/useWalletConnect";
 import { API, getAvatarUrl, MARKETPLACE_AND_RESERVE_POOL_ADDRESS } from "../config";
 import { fetchMyAssetsWithRetry } from "../utils/fetchMyAssets";
-import { detectInsufficientBalanceType, getTransactionErrorMessage } from "../utils/transactionError";
+import { applyWalletTxError } from "../utils/transactionError";
+import { resolveSellerReferrerRoot } from "../utils/marketplaceReferrer";
 import {
   safeGasLimit,
   DEFAULT_APPROVE_GAS,
@@ -73,6 +74,8 @@ export default function Marketplace() {
   const nftAddressNormalized = nftAddress?.startsWith("0x") ? nftAddress : nftAddress ? `0x${nftAddress}` : "";
   const usdtAddress = (import.meta.env.VITE_USDT_ADDRESS || "").trim();
   const usdtAddressNormalized = usdtAddress?.startsWith("0x") ? usdtAddress : usdtAddress ? `0x${usdtAddress}` : "";
+  const referralAddress = (import.meta.env.VITE_REFERRAL_CONTRACT || "").trim();
+  const referralAddressNormalized = referralAddress?.startsWith("0x") ? referralAddress : referralAddress ? `0x${referralAddress}` : "";
   const { data: usdtBalanceRaw, refetch: refetchUsdtBalance } = useReadContract({
     address: usdtAddressNormalized || undefined,
     abi: USDT_ABI,
@@ -189,20 +192,18 @@ export default function Marketplace() {
       await publicClient.waitForTransactionReceipt({ hash });
       refetchData();
     } catch (e) {
-      const insufficientType = detectInsufficientBalanceType(e);
-      if (insufficientType) {
-        setInsufficientBalanceType(insufficientType);
-        if (insufficientType === "usdt") refetchUsdtBalance?.();
-        setError("");
-      } else {
-        setError(getTransactionErrorMessage(e, "Delist failed"));
-      }
+      applyWalletTxError(e, {
+        setInsufficientBalanceType,
+        setError,
+        refetchUsdt: refetchUsdtBalance,
+        fallbackMessage: "Delist failed",
+      });
     } finally {
       setLoadingDelist(null);
     }
   };
 
-  const handleBuy = async (tokenId, priceWei, referrer = "0x0000000000000000000000000000000000000000", seller = null) => {
+  const handleBuy = async (tokenId, priceWei, seller = null) => {
     if (!marketplaceAddressNormalized || !usdtAddressNormalized || !publicClient || !writeContractAsync || !address) {
       setError("Wallet or contracts not ready.");
       return;
@@ -211,6 +212,7 @@ export default function Marketplace() {
     setLoadingBuy(tokenId);
     setBuyStep("approve");
     try {
+      const tradeReferrerRoot = await resolveSellerReferrerRoot(publicClient, referralAddressNormalized, seller);
       const hashApprove = await writeContractAsync({
         address: usdtAddressNormalized,
         abi: USDT_ABI,
@@ -234,14 +236,14 @@ export default function Marketplace() {
         address: marketplaceAddressNormalized,
         abi: MARKETPLACE_ABI,
         functionName: "buy",
-        args: [BigInt(tokenId), referrer],
+        args: [BigInt(tokenId), tradeReferrerRoot],
         gas: await safeGasLimit(
           publicClient,
           {
             address: marketplaceAddressNormalized,
             abi: MARKETPLACE_ABI,
             functionName: "buy",
-            args: [BigInt(tokenId), referrer],
+            args: [BigInt(tokenId), tradeReferrerRoot],
             account: address,
           },
           DEFAULT_MARKETPLACE_BUY_GAS
@@ -261,14 +263,12 @@ export default function Marketplace() {
       refetchData();
       setTimeout(() => refetchData(), 1500);
     } catch (e) {
-      const insufficientType = detectInsufficientBalanceType(e);
-      if (insufficientType) {
-        setInsufficientBalanceType(insufficientType);
-        if (insufficientType === "usdt") refetchUsdtBalance?.();
-        setError("");
-      } else {
-        setError(getTransactionErrorMessage(e, "Buy failed"));
-      }
+      applyWalletTxError(e, {
+        setInsufficientBalanceType,
+        setError,
+        refetchUsdt: refetchUsdtBalance,
+        fallbackMessage: "Buy failed",
+      });
     } finally {
       setLoadingBuy(null);
       setBuyStep(null);
@@ -323,14 +323,12 @@ export default function Marketplace() {
       await publicClient.waitForTransactionReceipt({ hash: hashList });
       refetchData();
     } catch (e) {
-      const insufficientType = detectInsufficientBalanceType(e);
-      if (insufficientType) {
-        setInsufficientBalanceType(insufficientType);
-        if (insufficientType === "usdt") refetchUsdtBalance?.();
-        setError("");
-      } else {
-        setError(getTransactionErrorMessage(e, "List failed"));
-      }
+      applyWalletTxError(e, {
+        setInsufficientBalanceType,
+        setError,
+        refetchUsdt: refetchUsdtBalance,
+        fallbackMessage: "List failed",
+      });
     } finally {
       setLoadingList(null);
       setListStep(null);
@@ -638,7 +636,7 @@ export default function Marketplace() {
                         <button
                           type="button"
                           className="profile-hub__nft-btn"
-                          onClick={() => handleBuy(l.tokenId, l.price, (user?.referrer && /^0x[a-fA-F0-9]{40}$/.test(user.referrer) ? user.referrer : "0x0000000000000000000000000000000000000000"), l.seller)}
+                          onClick={() => handleBuy(l.tokenId, l.price, l.seller)}
                           disabled={loadingBuy != null}
                         >
                           {loadingBuy === l.tokenId ? (buyStep === "approve" ? "1/2 Approving…" : "2/2 Buying…") : "Buy Now"}

@@ -39,13 +39,19 @@ function upperLevelsZero(refUser) {
 }
 
 router.get("/info", (_, res) => {
+  const withdrawChunkWei = String(REFERRAL_WITHDRAW_CHUNK_WEI || "10000000");
+  let withdrawChunkUsdt = 10;
+  try {
+    withdrawChunkUsdt = Number(withdrawChunkWei) / 1e6;
+  } catch {
+    withdrawChunkUsdt = 10;
+  }
   res.json({
-    rate: "fixed $2 / trade",
+    rate: "fixed $2 / trade (marketplace referralTotalAmount; on-chain config)",
     levels: REFERRAL_LEVELS,
     contractAddress: process.env.REFERRAL_CONTRACT_ADDRESS || "",
-    /** On-chain default: 10 USDT (6 decimals). Must match ReferralContract.referralWithdrawChunk unless admin changes it. */
-    withdrawChunkWei: "10000000",
-    withdrawChunkUsdt: 10,
+    withdrawChunkWei,
+    withdrawChunkUsdt,
   });
 });
 

@@ -5,8 +5,8 @@ import { useAccount, useBalance, useDisconnect, useReadContract, useWriteContrac
 import { formatEther, formatUnits, parseUnits } from "viem";
 import { useAuth } from "../hooks/useAuth";
 import { useWalletConnect } from "../hooks/useWalletConnect";
-import { API, ASSET_IMAGE } from "../config";
-import { detectInsufficientBalanceType, getTransactionErrorMessage } from "../utils/transactionError";
+import { API, ASSET_IMAGE, EXPLORER_BY_CHAIN } from "../config";
+import { applyWalletTxError } from "../utils/transactionError";
 import InsufficientBalanceModal from "../components/InsufficientBalanceModal";
 
 const USDT_ABI = [
@@ -188,14 +188,12 @@ export default function Mint() {
       refetchUsdtBalance?.();
       navigate("/dashboard");
     } catch (e) {
-      const insufficientType = detectInsufficientBalanceType(e);
-      if (insufficientType) {
-        setInsufficientBalanceType(insufficientType);
-        if (insufficientType === "usdt") refetchUsdtBalance?.();
-        setError("");
-      } else {
-        setError(getTransactionErrorMessage(e, "Mint failed"));
-      }
+      applyWalletTxError(e, {
+        setInsufficientBalanceType,
+        setError,
+        refetchUsdt: refetchUsdtBalance,
+        fallbackMessage: "Mint failed",
+      });
     } finally {
       setLoading(false);
       setMintStep(null);

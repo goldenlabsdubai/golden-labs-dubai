@@ -1,12 +1,17 @@
 import { useState, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { Link, useNavigate } from "react-router-dom";
-import { useDisconnect, useWriteContract, usePublicClient } from "wagmi";
+import { useAccount, useBalance, useDisconnect, useReadContract, useWriteContract, usePublicClient } from "wagmi";
+import { formatEther, formatUnits, getAddress } from "viem";
 import { useAuth } from "../hooks/useAuth";
 import { useWalletConnect } from "../hooks/useWalletConnect";
 import { API, getAvatarUrl, ASSET_IMAGE } from "../config";
-import { getTransactionErrorMessage } from "../utils/transactionError";
+import { applyWalletTxError, getTransactionErrorMessage } from "../utils/transactionError";
+import InsufficientBalanceModal from "../components/InsufficientBalanceModal";
 
+const USDT_ABI = [
+  { name: "balanceOf", type: "function", stateMutability: "view", inputs: [{ name: "account", type: "address" }], outputs: [{ type: "uint256" }] },
+];
 const REFERRAL_ABI = [
   { name: "setMyReferrer", type: "function", stateMutability: "nonpayable", inputs: [{ name: "referrer", type: "address" }], outputs: [] },
 ];
@@ -15,6 +20,7 @@ export default function Profile() {
   const { user, token, setSession, refreshUser, connect, logout } = useAuth();
   const navigate = useNavigate();
   const { openModal, isConnected, address } = useWalletConnect();
+  const { chainId } = useAccount();
   const { disconnect: disconnectWallet } = useDisconnect();
   const publicClient = usePublicClient();
   const { writeContractAsync } = useWriteContract();
@@ -37,7 +43,22 @@ export default function Profile() {
   const [portalReady, setPortalReady] = useState(false);
   const [addressMenuOpen, setAddressMenuOpen] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
+  const [insufficientBalanceType, setInsufficientBalanceType] = useState(null);
   const menuRef = useRef(null);
+
+  const usdtAddress = (import.meta.env.VITE_USDT_ADDRESS || "").trim();
+  const usdtAddressNormalized = usdtAddress && usdtAddress.startsWith("0x") ? usdtAddress : usdtAddress ? `0x${usdtAddress}` : "";
+  const walletForReads = address || (token && user?.wallet ? user.wallet : null) || undefined;
+  const { data: balanceData } = useBalance({ address: walletForReads });
+  const { data: usdtBalanceRaw, refetch: refetchUsdtBalance } = useReadContract({
+    address: usdtAddressNormalized || undefined,
+    abi: USDT_ABI,
+    functionName: "balanceOf",
+    args: walletForReads ? [walletForReads] : undefined,
+    ...(chainId != null && { chainId }),
+  });
+  const usdtBalance = usdtBalanceRaw != null ? Number(formatUnits(usdtBalanceRaw, 6)) : null;
+  const bnbBalanceFormatted = balanceData?.value != null ? Number(formatEther(balanceData.value)).toFixed(4) : null;
 
   const displayAddress = (token && user?.wallet) ? user.wallet : (isConnected && address) ? address : null;
   const handleConnect = () => {
@@ -171,19 +192,33 @@ export default function Profile() {
       if (!res.ok) throw new Error(data.error || "Save failed");
       setSession(token, data.user);
       await refreshUser();
-      // If user just set a referrer (referral code), have them sign setMyReferrer on-chain so L2–L9 payouts work
+      // On-chain tree for marketplace payReferral: must match backend referrer wallet (L1–L10 walk via referrerOf).
       if (data.user?.referrer && referralAddressNormalized && writeContractAsync && address) {
         try {
-          const referrerAddr = (data.user.referrer.startsWith("0x") ? data.user.referrer : `0x${data.user.referrer}`).toLowerCase();
-          const hash = await writeContractAsync({
-            address: referralAddressNormalized,
-            abi: REFERRAL_ABI,
-            functionName: "setMyReferrer",
-            args: [referrerAddr],
+          const raw = String(data.user.referrer).trim();
+          const with0x = raw.startsWith("0x") ? raw : `0x${raw}`;
+          let referrerAddr;
+          try {
+            referrerAddr = getAddress(with0x);
+          } catch {
+            referrerAddr = null;
+          }
+          if (referrerAddr) {
+            const hash = await writeContractAsync({
+              address: referralAddressNormalized,
+              abi: REFERRAL_ABI,
+              functionName: "setMyReferrer",
+              args: [referrerAddr],
+            });
+            if (publicClient && hash) await publicClient.waitForTransactionReceipt({ hash });
+          }
+        } catch (e) {
+          applyWalletTxError(e, {
+            setInsufficientBalanceType,
+            setError,
+            refetchUsdt: refetchUsdtBalance,
+            fallbackMessage: "Couldn’t confirm referrer on-chain. Your profile was saved; you can try again later.",
           });
-          if (publicClient && hash) await publicClient.waitForTransactionReceipt({ hash });
-        } catch (_) {
-          // User rejected tx or it failed; profile is already saved, on-chain referrer can be set later
         }
       }
       if (user?.username?.trim()) {
@@ -225,6 +260,13 @@ export default function Profile() {
 
   return (
     <div className="profile-modern">
+      <InsufficientBalanceModal
+        open={Boolean(insufficientBalanceType)}
+        type={insufficientBalanceType}
+        onClose={() => setInsufficientBalanceType(null)}
+        usdtBalanceFormatted={usdtBalance != null ? usdtBalance.toFixed(2) : null}
+        bnbBalanceFormatted={bnbBalanceFormatted}
+      />
       {portalReady && portalContainer && createPortal(profileBg, portalContainer)}
 
       <header className="profile-modern__header landing-v2__header">

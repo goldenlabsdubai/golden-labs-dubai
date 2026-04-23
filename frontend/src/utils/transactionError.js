@@ -6,11 +6,23 @@ const USER_REJECTED_MESSAGE = "User rejected";
 
 export function isUserRejection(error) {
   if (!error) return false;
+  const name = String(error.name || "");
+  if (name === "UserRejectedRequestError" || name.includes("UserRejected")) return true;
   const msg = (error.message || error.shortMessage || String(error)).toLowerCase();
-  const code = error.code ?? error.error?.code;
+  const causeMsg = String(error.cause?.message || error.cause?.shortMessage || "").toLowerCase();
+  const combined = `${msg} ${causeMsg}`;
+  const code = error.code ?? error.error?.code ?? error.cause?.code;
   if (code === 4001 || code === "4001") return true;
-  if (msg.includes("user rejected") || msg.includes("user denied") || msg.includes("rejected the request") || msg.includes("rejected the transaction")) return true;
-  if (msg.includes("denied transaction") || msg.includes("rejected")) return true;
+  if (
+    combined.includes("user rejected") ||
+    combined.includes("user denied") ||
+    combined.includes("rejected the request") ||
+    combined.includes("rejected the transaction") ||
+    combined.includes("request rejected")
+  )
+    return true;
+  if (combined.includes("denied transaction") || combined.includes("action_rejected")) return true;
+  if (msg.includes("rejected") && (msg.includes("user") || msg.includes("wallet") || msg.includes("request"))) return true;
   return false;
 }
 
@@ -56,4 +68,35 @@ export function detectInsufficientBalanceType(error) {
   }
 
   return null;
+}
+
+/**
+ * Map wallet / contract tx errors to insufficient modal, user-rejected modal, or inline error.
+ * @param {unknown} error
+ * @param {{ setInsufficientBalanceType: (v: string | null) => void; setError: (s: string) => void; refetchUsdt?: () => unknown; fallbackMessage?: string }} opts
+ * @returns {boolean} true if handled by a modal (insufficient or rejected)
+ */
+export function applyWalletTxError(error, opts) {
+  const {
+    setInsufficientBalanceType,
+    setError,
+    refetchUsdt,
+    fallbackMessage = "Transaction failed",
+  } = opts || {};
+  if (!setInsufficientBalanceType || !setError) return false;
+
+  const insufficientType = detectInsufficientBalanceType(error);
+  if (insufficientType) {
+    setInsufficientBalanceType(insufficientType);
+    if (insufficientType === "usdt") refetchUsdt?.();
+    setError("");
+    return true;
+  }
+  if (isUserRejection(error)) {
+    setInsufficientBalanceType("rejected");
+    setError("");
+    return true;
+  }
+  setError(getTransactionErrorMessage(error, fallbackMessage));
+  return false;
 }

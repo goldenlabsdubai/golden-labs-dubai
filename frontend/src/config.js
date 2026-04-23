@@ -13,6 +13,15 @@ export const MARKETPLACE_AND_RESERVE_POOL_ADDRESS = (
   ""
 ).trim();
 
+/** Block explorer base URLs by `chainId` (EIP-155) for address/tx links. */
+export const EXPLORER_BY_CHAIN = {
+  1: "https://etherscan.io",
+  56: "https://bscscan.com",
+  97: "https://testnet.bscscan.com",
+  137: "https://polygonscan.com",
+  8453: "https://basescan.org",
+};
+
 /** Fallback / placeholder image for panels (Mint, Subscription, Profile). Public path. */
 export const ASSET_IMAGE = "/gldass.png";
 
