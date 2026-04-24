@@ -40,8 +40,23 @@ export function getTransactionErrorMessage(error, fallback = "Something went wro
   return error?.message || error?.shortMessage || fallback;
 }
 
+/** Flatten viem/wagmi error chain (message, shortMessage, details, cause). */
 function normalizeMessage(error) {
-  return (error?.message || error?.shortMessage || String(error || "")).toLowerCase();
+  const parts = [];
+  let cur = error;
+  let depth = 0;
+  while (cur != null && depth < 10) {
+    if (typeof cur === "string") {
+      parts.push(cur);
+      break;
+    }
+    parts.push(String(cur.message || ""));
+    parts.push(String(cur.shortMessage || ""));
+    parts.push(String(cur.details || ""));
+    cur = cur.cause;
+    depth++;
+  }
+  return parts.join(" ").toLowerCase();
 }
 
 export function detectInsufficientBalanceType(error) {
@@ -50,9 +65,13 @@ export function detectInsufficientBalanceType(error) {
   // Gas/native token shortage should take priority over generic "insufficient".
   if (
     msg.includes("insufficient funds for gas") ||
+    msg.includes("gas * gas fee + value") ||
     msg.includes("gas * price + value") ||
+    (msg.includes("total cost") && msg.includes("exceeds the balance")) ||
     msg.includes("intrinsic gas too low") ||
-    msg.includes("insufficient balance for transfer")
+    msg.includes("insufficient balance for transfer") ||
+    msg.includes("insufficient funds for intrinsic transaction cost") ||
+    (msg.includes("insufficient funds") && !msg.includes("transfer amount exceeds"))
   ) {
     return "bnb";
   }
@@ -61,6 +80,8 @@ export function detectInsufficientBalanceType(error) {
     msg.includes("insufficient usdt") ||
     msg.includes("transfer amount exceeds balance") ||
     msg.includes("erc20: insufficient balance") ||
+    msg.includes("bep20: transfer amount exceeds balance") ||
+    msg.includes("bep20: insufficient balance") ||
     msg.includes("insufficient token balance") ||
     (msg.includes("insufficient") && msg.includes("usdt"))
   ) {

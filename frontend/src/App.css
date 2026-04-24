@@ -3707,11 +3707,11 @@ div.marketplace-page__nav-profile.marketplace-page__profile-icon-btn {
   border: 1px solid var(--border);
 }
 
-/* Insufficient USDT modal */
+/* Insufficient USDT / BNB / rejected-tx modal — above mobile tab bar (10050) & support panel (99998), below wallet popup (max int) */
 .marketplace-page__insufficient-overlay {
   position: fixed;
   inset: 0;
-  z-index: 1000;
+  z-index: 100500;
   background: rgba(0, 0, 0, 0.6);
   display: flex;
   align-items: center;

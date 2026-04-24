@@ -1,3 +1,4 @@
+import { createPortal } from "react-dom";
 import { BNB_LOGO_PUBLIC } from "../config";
 
 /**
@@ -17,8 +18,10 @@ export default function InsufficientBalanceModal({
 }) {
   if (!open || !type) return null;
 
+  const root = typeof document !== "undefined" ? document.body : null;
+
   if (type === "rejected") {
-    return (
+    const el = (
       <div className="marketplace-page__insufficient-overlay" role="dialog" aria-modal="true" aria-labelledby="wallet-rejected-title">
         <div className="marketplace-page__insufficient-modal">
           <h2 id="wallet-rejected-title" className="marketplace-page__insufficient-title">Transaction cancelled</h2>
@@ -30,6 +33,7 @@ export default function InsufficientBalanceModal({
         </div>
       </div>
     );
+    return root ? createPortal(el, root) : el;
   }
 
   const isUsdt = type === "usdt";
@@ -46,7 +50,7 @@ export default function InsufficientBalanceModal({
   const logoSrc = isUsdt ? "/USDT_BEP20.png" : BNB_LOGO_PUBLIC;
   const logoAlt = isUsdt ? "USDT" : "BNB";
 
-  return (
+  const el = (
     <div className="marketplace-page__insufficient-overlay" role="dialog" aria-modal="true" aria-labelledby="insufficient-balance-title">
       <div className="marketplace-page__insufficient-modal">
         <h2 id="insufficient-balance-title" className="marketplace-page__insufficient-title">{title}</h2>
@@ -62,4 +66,5 @@ export default function InsufficientBalanceModal({
       </div>
     </div>
   );
+  return root ? createPortal(el, root) : el;
 }
