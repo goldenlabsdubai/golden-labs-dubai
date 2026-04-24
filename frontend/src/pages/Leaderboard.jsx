@@ -119,7 +119,7 @@ export default function Leaderboard() {
       <main className="leaderboard-page__main">
         <div className="leaderboard-page__header">
           <h2 className="leaderboard-page__section-title">Leaderboard</h2>
-          <p className="leaderboard-page__subtitle">Top 10 sellers by total trades</p>
+          <p className="leaderboard-page__subtitle">Top 10 by lifetime earnings (trade + referral)</p>
         </div>
 
         {loading ? (

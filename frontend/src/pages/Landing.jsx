@@ -348,7 +348,7 @@ export default function Landing() {
 
         <div ref={continuityRef} className="landing-v2__continuity" style={{ visibility: "hidden" }} aria-hidden="true">
         <section className="landing-v2__section">
-          <h2 className="landing-v2__section-title">Top Sellers</h2>
+          <h2 className="landing-v2__section-title">Top sellers · lifetime earnings</h2>
           <div className="landing-v2__marquee-wrap">
             {topSellersLoading ? (
               <div className="landing-v2__top-sellers-loading">Loading...</div>
@@ -466,7 +466,7 @@ export default function Landing() {
             <div style={{ height: continuityTop, minHeight: 0 }} aria-hidden="true" />
             <div className="landing-v2__continuity landing-v2__continuity--overlay">
               <section className="landing-v2__section">
-                <h2 className="landing-v2__section-title">Top Sellers</h2>
+                <h2 className="landing-v2__section-title">Top sellers · lifetime earnings</h2>
                 <div className="landing-v2__marquee-wrap">
                   {topSellersLoading ? (
                     <div className="landing-v2__top-sellers-loading">Loading...</div>

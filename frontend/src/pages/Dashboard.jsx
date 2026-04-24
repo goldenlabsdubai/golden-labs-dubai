@@ -140,6 +140,27 @@ export default function Dashboard() {
       return null;
     }
   })();
+  /** Trade income (from /me) + referral lifetime total — same components as the two lines above. */
+  const lifetimeEarningsUsdtFormatted = (() => {
+    try {
+      const t =
+        user?.totalTradeIncomeWei != null && user.totalTradeIncomeWei !== ""
+          ? BigInt(String(user.totalTradeIncomeWei).replace(/\..*$/, ""))
+          : 0n;
+      const refSrc = referralStats?.referralEarningsTotal ?? user?.referralEarningsTotal;
+      const r =
+        refSrc != null && refSrc !== ""
+          ? BigInt(String(refSrc).replace(/\..*$/, ""))
+          : 0n;
+      const sum = t + r;
+      return Number(formatUnits(sum, 6)).toLocaleString(undefined, {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      });
+    } catch {
+      return null;
+    }
+  })();
 
   useEffect(() => {
     if (!token) return;
@@ -882,7 +903,10 @@ export default function Dashboard() {
                     <div className="profile-hub__referral-stats-grid">
                       <div className="profile-hub__referral-stat">
                         <span className="profile-hub__referral-stat-label">Lifetime earnings</span>
-                        <span className="profile-hub__referral-stat-value">${referralStats != null ? formatUsdt(referralStats.referralEarningsTotal || "0") : formatUsdt(user?.referralEarningsTotal || "0")} USDT <img src="/USDT_BEP20.png" alt="" className="usdt-logo-inline" aria-hidden="true" /></span>
+                        <span className="profile-hub__referral-stat-value">
+                          ${lifetimeEarningsUsdtFormatted != null ? lifetimeEarningsUsdtFormatted : "0.00"} USDT{" "}
+                          <img src="/USDT_BEP20.png" alt="" className="usdt-logo-inline" aria-hidden="true" />
+                        </span>
                       </div>
                       <div className="profile-hub__referral-stat">
                         <span className="profile-hub__referral-stat-label">Available to claim</span>

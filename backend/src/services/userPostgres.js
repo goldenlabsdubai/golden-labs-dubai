@@ -185,19 +185,61 @@ export function getDocId(req) {
   return null;
 }
 
+/**
+ * Leaderboard: rank by lifetime earnings = seller trade income (sell count × on-chain tradingIncome wei) + referral_earnings_total.
+ * Sell count uses distinct (wallet, tx_hash, token_id) on sell rows (matches dashboard trade income model without per-tx receipt batch).
+ */
 export async function getTopSellers(limit = 10) {
-  const { rows } = await query(
-    "SELECT * FROM users ORDER BY total_trades DESC NULLS LAST LIMIT $1",
-    [Math.max(1, Math.min(Number(limit) || 10, 100))]
-  );
-  return rows.map((r, index) => {
+  const safeLimit = Math.max(1, Math.min(Number(limit) || 10, 100));
+  const incomePerSellWei = BigInt(await resolveTradingIncomePerSellWeiFromChain());
+
+  const { rows: sellRows } = await query(`
+    SELECT wlt, COUNT(*)::text AS sell_n
+    FROM (
+      SELECT LOWER(TRIM(wallet)) AS wlt, tx_hash, COALESCE(token_id::text, '') AS tid
+      FROM user_activities
+      WHERE type = 'sell' AND tx_hash IS NOT NULL AND BTRIM(tx_hash) <> ''
+      GROUP BY LOWER(TRIM(wallet)), tx_hash, COALESCE(token_id::text, '')
+    ) deduped
+    GROUP BY wlt
+  `);
+  const sellMap = new Map();
+  for (const row of sellRows) {
+    if (row.wlt) sellMap.set(String(row.wlt).toLowerCase(), BigInt(row.sell_n || "0"));
+  }
+
+  const { rows } = await query("SELECT * FROM users WHERE wallet IS NOT NULL AND BTRIM(wallet) <> ''");
+  const scored = [];
+  for (const r of rows) {
     const u = rowToUser(r);
+    const w = (u.wallet || "").toLowerCase();
+    if (!w.startsWith("0x")) continue;
+    const sells = sellMap.get(w) ?? 0n;
+    const tradeWei = sells * incomePerSellWei;
+    let refWei = 0n;
+    try {
+      refWei = BigInt(String(u.referralEarningsTotal ?? "0").replace(/\..*$/, "") || "0");
+    } catch {
+      refWei = 0n;
+    }
+    const lifetime = tradeWei + refWei;
+    scored.push({ r, u, lifetime });
+  }
+
+  scored.sort((a, b) => {
+    if (a.lifetime < b.lifetime) return 1;
+    if (a.lifetime > b.lifetime) return -1;
+    return (b.u.totalTrades ?? 0) - (a.u.totalTrades ?? 0);
+  });
+
+  return scored.slice(0, safeLimit).map((item, index) => {
+    const u = item.u;
     return {
       rank: index + 1,
       username: u.username || (u.wallet ? u.wallet.slice(0, 8) + "…" : "Anonymous"),
       trades: u.totalTrades,
       referrals: u.totalReferrals ?? 0,
-      earnings: u.referralEarningsTotal ?? "0",
+      earnings: item.lifetime.toString(),
       avatar: u.avatar || null,
       wallet: u.wallet || null,
     };

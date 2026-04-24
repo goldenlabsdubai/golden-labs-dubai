@@ -1,6 +1,6 @@
 /**
- * Top sellers / leaderboard – PostgreSQL users.total_trades.
- * GET /api/top-sellers – no auth, returns top 10 by totalTrades (desc).
+ * Leaderboard – lifetime earnings (trade income from recorded sells + referral_earnings_total), sorted desc.
+ * GET /api/top-sellers – no auth, returns top N (default 10).
  * POST /api/top-sellers/record-trade – auth required, increments current user's trades (call from marketplace buy/sell when trade completes).
  */
 import { Router } from "express";
