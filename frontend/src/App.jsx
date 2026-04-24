@@ -9,6 +9,24 @@ import MobileBottomNav from "./components/MobileBottomNav";
 
 const BSC_TESTNET_CHAIN_ID = 97;
 
+/** Same keys as useAuth — read without waiting for context (fixes MM in-app race + deep links). */
+function readStoredAuth() {
+  if (typeof window === "undefined") return { lsToken: null, lsUser: null };
+  try {
+    const lsToken = localStorage.getItem("gl_token");
+    if (!lsToken) return { lsToken: null, lsUser: null };
+    let lsUser = null;
+    try {
+      lsUser = JSON.parse(localStorage.getItem("gl_user") || "null");
+    } catch {
+      /* ignore */
+    }
+    return { lsToken, lsUser };
+  } catch {
+    return { lsToken: null, lsUser: null };
+  }
+}
+
 function ForceBscTestnet() {
   const { isConnected, chainId } = useAccount();
   const { switchChainAsync } = useSwitchChain();
@@ -55,23 +73,49 @@ import UserProfile from "./pages/UserProfile";
  * active subscription + mint on the server’s configured contracts (env addresses + RPC).
  */
 function ProtectedRoute({ children, require }) {
-  const { token, user, loading } = useAuth();
+  const { token, user, loading, setSession } = useAuth();
   const location = useLocation();
+  const storageSyncRef = useRef({ lastToken: null, didSync: false });
+  const { lsToken, lsUser } = readStoredAuth();
+  const effectiveToken = token || lsToken;
+  const effectiveUser = user ?? lsUser;
+
+  useEffect(() => {
+    if (token) {
+      storageSyncRef.current = { lastToken: token, didSync: false };
+      return;
+    }
+    if (!lsToken) {
+      storageSyncRef.current = { lastToken: null, didSync: false };
+      return;
+    }
+    const { lastToken, didSync } = storageSyncRef.current;
+    if (didSync && lastToken === lsToken) return;
+    storageSyncRef.current = { lastToken: lsToken, didSync: true };
+    let u = null;
+    try {
+      u = JSON.parse(localStorage.getItem("gl_user") || "null");
+    } catch {
+      /* ignore */
+    }
+    setSession(lsToken, u);
+  }, [token, lsToken, setSession]);
 
   if (loading) return <div className="app-loading">Loading...</div>;
-  if (!token) return <Navigate to="/" replace />;
+  if (!effectiveToken) return <Navigate to="/" replace />;
 
-  const active = user?.state === "SUBSCRIBED" || user?.state === "MINTED" || user?.state === "ACTIVE_TRADER";
+  const active =
+    effectiveUser?.state === "SUBSCRIBED" || effectiveUser?.state === "MINTED" || effectiveUser?.state === "ACTIVE_TRADER";
 
   // Suspended: only /subscription allowed; send to subscription for any other path
-  if (user?.state === "SUSPENDED") {
+  if (effectiveUser?.state === "SUSPENDED") {
     if (require === "subscription") return children;
     return <Navigate to="/subscription" replace state={{ from: location.pathname }} />;
   }
 
   // Not subscribed (and not suspended): profile then subscription; block mint + marketplace
   if (!active) {
-    if (!user?.username && location.pathname !== "/profile") return <Navigate to="/profile" replace />;
+    if (!effectiveUser?.username && location.pathname !== "/profile") return <Navigate to="/profile" replace />;
     if (require === "profile") return children;
     if (require === "subscription") return children;
     // Trying to visit mint or marketplace without active subscription → subscription
@@ -79,7 +123,7 @@ function ProtectedRoute({ children, require }) {
   }
 
   // Subscribed but not minted: block marketplace / dashboard / leaderboard → mint first
-  if (user?.state === "SUBSCRIBED" && require === "marketplace") {
+  if (effectiveUser?.state === "SUBSCRIBED" && require === "marketplace") {
     return <Navigate to="/mint" replace state={{ from: location.pathname }} />;
   }
 

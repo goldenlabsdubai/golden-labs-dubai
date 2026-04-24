@@ -1,4 +1,5 @@
 import { createContext, useContext, useState, useEffect, useCallback } from "react";
+import { flushSync } from "react-dom";
 import { useAccount } from "wagmi";
 import { ethers } from "ethers";
 import { SiweMessage } from "siwe";
@@ -51,8 +52,10 @@ export function AuthProvider({ children }) {
         // 401: bad token. 404: user row gone (e.g. DB wiped) while JWT still decodes — drop stale gl_user.
         localStorage.removeItem(TOKEN_KEY);
         localStorage.removeItem(USER_KEY);
-        setToken(null);
-        setUser(null);
+        flushSync(() => {
+          setToken(null);
+          setUser(null);
+        });
       }
     } catch {
       // Network error etc – avoid spamming console
@@ -94,8 +97,10 @@ export function AuthProvider({ children }) {
 
       localStorage.setItem(TOKEN_KEY, data.token);
       localStorage.setItem(USER_KEY, JSON.stringify(data.user));
-      setToken(data.token);
-      setUser(data.user);
+      flushSync(() => {
+        setToken(data.token);
+        setUser(data.user);
+      });
       return data.redirect;
     } catch (e) {
       console.error(e);
@@ -103,19 +108,23 @@ export function AuthProvider({ children }) {
     }
   };
 
-  const logout = () => {
+  const logout = useCallback(() => {
     localStorage.removeItem(TOKEN_KEY);
     localStorage.removeItem(USER_KEY);
-    setToken(null);
-    setUser(null);
-  };
+    flushSync(() => {
+      setToken(null);
+      setUser(null);
+    });
+  }, []);
 
-  const setSession = (newToken, newUser) => {
-    if (newToken) localStorage.setItem(TOKEN_KEY, newToken);
-    if (newUser) localStorage.setItem(USER_KEY, JSON.stringify(newUser));
-    setToken(newToken || null);
-    setUser(newUser || null);
-  };
+  const setSession = useCallback((newToken, newUser) => {
+    flushSync(() => {
+      if (newToken) localStorage.setItem(TOKEN_KEY, newToken);
+      if (newUser) localStorage.setItem(USER_KEY, JSON.stringify(newUser));
+      setToken(newToken || null);
+      setUser(newUser || null);
+    });
+  }, []);
 
   const value = { token, user, loading, connect, logout, refreshUser, setSession };
 

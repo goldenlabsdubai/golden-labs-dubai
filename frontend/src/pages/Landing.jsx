@@ -211,7 +211,8 @@ export default function Landing() {
     setLoading(true);
     try {
       const redirect = await connect();
-      navigate(`/${redirect || "profile"}`);
+      const seg = redirect && String(redirect).trim() ? String(redirect).replace(/^\/+/, "") : "profile";
+      navigate(`/${seg}`, { replace: true });
     } catch (e) {
       setError(getTransactionErrorMessage(e, "Connection failed"));
     } finally {
@@ -224,8 +225,14 @@ export default function Landing() {
     setPopupContinueClicked(true);
     try {
       const data = await signIn();
-      if (data?.token && data?.user) setSession(data.token, data.user);
-      navigate(`/${data?.redirect || "profile"}`);
+      if (!data?.token || !data?.user) {
+        setPopupContinueClicked(false);
+        setError("Sign in incomplete. Please try again.");
+        return;
+      }
+      setSession(data.token, data.user);
+      const seg = data.redirect && String(data.redirect).trim() ? String(data.redirect).replace(/^\/+/, "") : "profile";
+      navigate(`/${seg}`, { replace: true });
     } catch (e) {
       setError(getTransactionErrorMessage(e, "Sign in failed"));
       setPopupContinueClicked(false);
