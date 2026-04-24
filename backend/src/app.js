@@ -1,7 +1,9 @@
 /**
  * Express app – shared by local server (index.js) and Vercel serverless (api/[[...path]].js)
  */
-import "dotenv/config";
+import dotenv from "dotenv";
+// EC2/PM2 often exports stale contract addresses; `.env` in app cwd must win.
+dotenv.config({ override: true });
 import path from "path";
 import express from "express";
 import cors from "cors";
