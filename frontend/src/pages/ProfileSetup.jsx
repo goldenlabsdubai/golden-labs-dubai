@@ -5,7 +5,8 @@
 import { useState, useEffect } from "react";
 import { createPortal } from "react-dom";
 import { Link, useNavigate } from "react-router-dom";
-import { useAccount, useSignMessage } from "wagmi";
+import { useAccount, useSignMessage, useWriteContract, usePublicClient } from "wagmi";
+import { getAddress, zeroAddress } from "viem";
 import { SiweMessage } from "siwe";
 import { useAuth } from "../hooks/useAuth";
 import { useWalletConnect } from "../hooks/useWalletConnect";
@@ -15,12 +16,20 @@ import { getTransactionErrorMessage } from "../utils/transactionError";
 const TOKEN_KEY = "gl_token";
 const USER_KEY = "gl_user";
 
+const REFERRAL_ABI = [
+  { name: "setMyReferrer", type: "function", stateMutability: "nonpayable", inputs: [{ name: "referrer", type: "address" }], outputs: [] },
+];
+
 export default function ProfileSetup() {
   const navigate = useNavigate();
   const { token, setSession } = useAuth();
   const { openModal, isConnected, address } = useWalletConnect();
   const { chainId } = useAccount();
   const { signMessageAsync } = useSignMessage();
+  const publicClient = usePublicClient();
+  const { writeContractAsync } = useWriteContract();
+  const referralAddress = (import.meta.env.VITE_REFERRAL_CONTRACT || "").trim();
+  const referralAddressNormalized = referralAddress?.startsWith("0x") ? referralAddress : referralAddress ? `0x${referralAddress}` : "";
 
   const [username, setUsername] = useState("");
   const [bio, setBio] = useState("");
@@ -34,6 +43,15 @@ export default function ProfileSetup() {
   const [pendingAvatarFile, setPendingAvatarFile] = useState(null);
   const [avatarPreviewUrl, setAvatarPreviewUrl] = useState("");
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
+  /** After setMyReferrer succeeds for the current referral code; reset when referral field changes. */
+  const [referrerChainStepDone, setReferrerChainStepDone] = useState(false);
+
+  const glRefStored =
+    typeof sessionStorage !== "undefined" ? (sessionStorage.getItem("gl_ref") || "").trim() : "";
+  const referrerRawEffective = (referralCode.trim() || glRefStored).trim();
+  const needsReferrerConfirm = Boolean(
+    referrerRawEffective && referralAddressNormalized && writeContractAsync && publicClient
+  );
 
   useEffect(() => {
     if (typeof sessionStorage !== "undefined") {
@@ -41,6 +59,10 @@ export default function ProfileSetup() {
       if (ref && ref.trim()) setReferralCode(ref.trim());
     }
   }, []);
+
+  useEffect(() => {
+    setReferrerChainStepDone(false);
+  }, [referralCode]);
 
   // Already signed in → use main profile page
   useEffect(() => {
@@ -96,6 +118,39 @@ export default function ProfileSetup() {
     setError("");
     setUploadError("");
     try {
+      // One on-chain tx first (setMyReferrer); DB row is created only after SIWE + /verify, which checks referrerOf(wallet) matches the code.
+      const referrerRaw = (
+        referralCode.trim() ||
+        (typeof sessionStorage !== "undefined" ? sessionStorage.getItem("gl_ref") || "" : "")
+      ).trim();
+      const referrer = referrerRaw || undefined;
+
+      if (referrerRaw) {
+        const resolveRes = await fetch(`${API}/auth/referrer-resolve?code=${encodeURIComponent(referrerRaw)}`);
+        const resolveData = await resolveRes.json().catch(() => ({}));
+        if (!resolveRes.ok) throw new Error(resolveData.error || "Could not resolve referral code");
+        let referrerAddr;
+        try {
+          referrerAddr = getAddress(
+            resolveData.wallet.startsWith("0x") ? resolveData.wallet : `0x${resolveData.wallet}`
+          );
+        } catch {
+          throw new Error("Invalid referrer address");
+        }
+        if (referrerAddr === zeroAddress || referrerAddr.toLowerCase() === address.toLowerCase()) {
+          throw new Error("You cannot use your own referral code.");
+        }
+        if (referralAddressNormalized && writeContractAsync && publicClient) {
+          const hash = await writeContractAsync({
+            address: referralAddressNormalized,
+            abi: REFERRAL_ABI,
+            functionName: "setMyReferrer",
+            args: [referrerAddr],
+          });
+          if (hash) await publicClient.waitForTransactionReceipt({ hash });
+        }
+      }
+
       const nonceRes = await fetch(`${API}/auth/nonce/${address}`);
       const nonceData = await nonceRes.json().catch(() => ({}));
       const nonce = nonceData.nonce;
@@ -111,11 +166,8 @@ export default function ProfileSetup() {
         nonce,
       });
       const message = siweMsg.prepareMessage();
-      // Explicit account avoids wrong signer when multiple extensions fight over window.ethereum
       const signature = await signMessageAsync({ message, account: address });
 
-      const referrerRaw = referralCode.trim() || (typeof sessionStorage !== "undefined" ? sessionStorage.getItem("gl_ref") || "" : "");
-      const referrer = referrerRaw.trim() || undefined;
       const profile = {
         username: usernameVal,
         name: null,
@@ -208,7 +260,10 @@ export default function ProfileSetup() {
           <li>Choose a unique username (min 3 characters)</li>
           <li>Add your optional bio</li>
           <li>Add your X (Twitter) and Telegram links</li>
-          <li>Click &quot;Save &amp; continue&quot; — you&apos;ll sign with your wallet once to save</li>
+          <li>
+            With a referral code: tap &quot;Confirm referrer&quot; (one transaction), then &quot;Save &amp; continue&quot;
+            (sign a message). Without a code: save signs once.
+          </li>
         </ul>
       </div>
     </div>
@@ -261,7 +316,11 @@ export default function ProfileSetup() {
         <div className="profile-modern__glass">
           <span className="profile-modern__step">Step 1 · Profile</span>
           <h1 className="profile-modern__headline">Complete your profile</h1>
-          <p className="profile-modern__subline">Set a username and optional details. You&apos;ll sign with your wallet once to save.</p>
+          <p className="profile-modern__subline">
+            {needsReferrerConfirm && !referrerChainStepDone
+              ? "If you have a referral code, confirm it on-chain first, then save — you’ll sign a message to create your account."
+              : "Set a username and optional details. Save will ask you to sign a message with your wallet."}
+          </p>
 
           <div className="profile-modern__avatar-wrap">
             <label className="profile-modern__avatar-label">
@@ -329,6 +388,9 @@ export default function ProfileSetup() {
                   onChange={(e) => setReferralCode(e.target.value)}
                   className="profile-modern__field-input"
                 />
+                {needsReferrerConfirm && referrerChainStepDone && (
+                  <span className="profile-modern__field-hint">Referrer confirmed on-chain — you can save your profile.</span>
+                )}
               </label>
             </div>
             <div className="profile-modern__block">
@@ -366,9 +428,20 @@ export default function ProfileSetup() {
               </div>
             )}
             <div className="profile-modern__form-actions">
-              <button type="submit" className="profile-modern__submit" disabled={loading}>
-                {uploadingAvatar ? "Uploading…" : loading ? "Signing & saving…" : "Save & continue"}
-              </button>
+              {needsReferrerConfirm && !referrerChainStepDone ? (
+                <button
+                  type="button"
+                  className="profile-modern__submit"
+                  disabled={loading}
+                  onClick={handleConfirmReferrerOnChain}
+                >
+                  {loading ? "Confirm in wallet…" : "Confirm referrer"}
+                </button>
+              ) : (
+                <button type="submit" className="profile-modern__submit" disabled={loading}>
+                  {uploadingAvatar ? "Uploading…" : loading ? "Signing & saving…" : "Save & continue"}
+                </button>
+              )}
             </div>
           </form>
         </div>

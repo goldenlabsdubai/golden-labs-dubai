@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { Link, useNavigate } from "react-router-dom";
 import { useAccount, useBalance, useDisconnect, useReadContract, useWriteContract, usePublicClient } from "wagmi";
-import { formatEther, formatUnits, getAddress } from "viem";
+import { formatEther, formatUnits, getAddress, zeroAddress } from "viem";
 import { useAuth } from "../hooks/useAuth";
 import { useWalletConnect } from "../hooks/useWalletConnect";
 import { API, getAvatarUrl, ASSET_IMAGE } from "../config";
@@ -172,12 +172,51 @@ export default function Profile() {
           setUploadingAvatar(false);
         }
       }
+
+      const signedInWallet = (user?.wallet || "").trim().toLowerCase();
+      const referralTrim = referralCode.trim();
+      if (!user?.referrer && referralTrim && referralAddressNormalized && writeContractAsync && publicClient) {
+        if (!address) {
+          setError("Connect your wallet to confirm your referrer on-chain, then save again.");
+          setLoading(false);
+          return;
+        }
+        if (address.toLowerCase() !== signedInWallet) {
+          setError("Connect with the same wallet you signed in with to confirm your referrer.");
+          setLoading(false);
+          return;
+        }
+        const resolveRes = await fetch(`${API}/auth/referrer-resolve?code=${encodeURIComponent(referralTrim)}`);
+        const resolveData = await resolveRes.json().catch(() => ({}));
+        if (!resolveRes.ok) throw new Error(resolveData.error || "Could not resolve referral code");
+        let referrerAddr;
+        try {
+          referrerAddr = getAddress(
+            resolveData.wallet.startsWith("0x") ? resolveData.wallet : `0x${resolveData.wallet}`
+          );
+        } catch {
+          throw new Error("Invalid referrer address");
+        }
+        if (referrerAddr === zeroAddress || referrerAddr.toLowerCase() === signedInWallet) {
+          throw new Error("Invalid referral code");
+        }
+        const hash = await writeContractAsync({
+          address: referralAddressNormalized,
+          abi: REFERRAL_ABI,
+          functionName: "setMyReferrer",
+          args: [referrerAddr],
+        });
+        if (hash) await publicClient.waitForTransactionReceipt({ hash });
+      }
+
+      const profileHeaders = {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      };
+      if (address) profileHeaders["X-Connected-Wallet"] = address;
       const res = await fetch(`${API}/user/profile`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
+        headers: profileHeaders,
         body: JSON.stringify({
           name: name.trim() || null,
           username: username.trim(),
@@ -193,36 +232,6 @@ export default function Profile() {
       if (!res.ok) throw new Error(data.error || "Save failed");
       setSession(token, data.user);
       await refreshUser();
-      // On-chain tree for marketplace payReferral: must match backend referrer wallet (L1–L10 walk via referrerOf).
-      if (data.user?.referrer && referralAddressNormalized && writeContractAsync && address) {
-        try {
-          const raw = String(data.user.referrer).trim();
-          const with0x = raw.startsWith("0x") ? raw : `0x${raw}`;
-          let referrerAddr;
-          try {
-            referrerAddr = getAddress(with0x);
-          } catch {
-            referrerAddr = null;
-          }
-          if (referrerAddr) {
-            const hash = await writeContractAsync({
-              address: referralAddressNormalized,
-              abi: REFERRAL_ABI,
-              functionName: "setMyReferrer",
-              args: [referrerAddr],
-            });
-            if (publicClient && hash) await publicClient.waitForTransactionReceipt({ hash });
-          }
-        } catch (e) {
-          applyWalletTxError(e, {
-            setInsufficientBalanceType,
-            setError,
-            refetchUsdt: refetchUsdtBalance,
-            fallbackMessage: "Couldn’t confirm referrer on-chain. Your profile was saved; you can try again later.",
-          });
-        }
-      }
-      // First-time profile completion: always follow server redirect (avoid stale closure on user.username after DB wipe / localStorage).
       const hadUsernameBeforeSave = Boolean(user?.username?.trim());
       if (hadUsernameBeforeSave) {
         setIsEditing(false);
@@ -231,7 +240,12 @@ export default function Profile() {
         navigate(target, { replace: true });
       }
     } catch (e) {
-      setError(getTransactionErrorMessage(e, "Save failed"));
+      applyWalletTxError(e, {
+        setInsufficientBalanceType,
+        setError,
+        refetchUsdt: refetchUsdtBalance,
+        fallbackMessage: getTransactionErrorMessage(e, "Save failed"),
+      });
     } finally {
       setLoading(false);
     }

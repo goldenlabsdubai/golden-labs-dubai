@@ -1,12 +1,13 @@
 import { Router } from "express";
 import jwt from "jsonwebtoken";
+import { ethers } from "ethers";
 import { SiweMessage } from "siwe";
 import * as AdminPg from "../services/adminPostgres.js";
 import * as User from "../services/user.js";
-import { syncReferrerToChain } from "../services/referralContractSync.js";
 import { isAdminWallet, isConfiguredBotWallet } from "../services/botService.js";
 import { notifyActivity } from "../services/telegramNotify.js";
 import { getPool } from "../config/postgres.js";
+import { readReferrerOfOnChain } from "../services/referralContractRead.js";
 
 const router = Router();
 const JWT_SECRET = process.env.JWT_SECRET || "dev-secret-change-in-production";
@@ -89,6 +90,29 @@ router.get("/admin-nonce/:wallet", async (req, res) => {
   }
 });
 
+/** Public: resolve referral username or 0x address to wallet (profile setup → setMyReferrer). */
+router.get("/referrer-resolve", async (req, res) => {
+  try {
+    const ref = String(req.query.code || "").trim();
+    if (!ref) return res.status(400).json({ error: "code query parameter required" });
+    let referrerWallet = null;
+    if (ref.startsWith("0x") && ref.length >= 42) {
+      try {
+        referrerWallet = ethers.getAddress(ref).toLowerCase();
+      } catch {
+        return res.status(400).json({ error: "Invalid referrer address" });
+      }
+    } else {
+      const referrerUser = await User.findUserByUsername(ref);
+      if (!referrerUser?.wallet) return res.status(404).json({ error: "Referrer not found" });
+      referrerWallet = referrerUser.wallet.toLowerCase();
+    }
+    res.json({ wallet: referrerWallet });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Verify SIWE and issue JWT. New users must send profile (username etc.).
 router.post("/verify", async (req, res) => {
   const { message, signature, referrer: referrerRaw, profile: profileRaw } = req.body;
@@ -111,7 +135,11 @@ router.post("/verify", async (req, res) => {
     if (referrerRaw && typeof referrerRaw === "string" && referrerRaw.trim()) {
       const ref = referrerRaw.trim();
       if (ref.startsWith("0x") && ref.length >= 42) {
-        referrerWallet = ref.toLowerCase();
+        try {
+          referrerWallet = ethers.getAddress(ref).toLowerCase();
+        } catch {
+          return res.status(400).json({ error: "Invalid referrer address" });
+        }
       } else {
         const referrerUser = await User.findUserByUsername(ref);
         if (referrerUser && referrerUser.wallet) referrerWallet = referrerUser.wallet.toLowerCase();
@@ -134,6 +162,21 @@ router.post("/verify", async (req, res) => {
       if (existing) {
         return res.status(400).json({ error: "This username is already taken. Please choose another." });
       }
+      if (referrerRaw && String(referrerRaw).trim()) {
+        if (!referrerWallet) {
+          return res.status(400).json({ error: "Invalid referral code or address." });
+        }
+        const onChainReferrer = await readReferrerOfOnChain(wallet);
+        if (!onChainReferrer) {
+          return res.status(400).json({
+            error:
+              "Confirm your referrer in your wallet first (one transaction), then tap Save again.",
+          });
+        }
+        if (onChainReferrer !== referrerWallet) {
+          return res.status(400).json({ error: "On-chain referrer does not match the code you entered." });
+        }
+      }
       await User.createUser({
         wallet,
         state: isConfiguredBotWallet(wallet) ? "ACTIVE_TRADER" : "PROFILE_SET",
@@ -152,7 +195,6 @@ router.post("/verify", async (req, res) => {
       user = await User.getUserByWallet(wallet);
       if (referrerWallet) {
         await User.incrementReferralChain(referrerWallet);
-        syncReferrerToChain(wallet, referrerWallet).catch(() => {});
       }
     } else {
       const updates = { lastActivity: new Date() };
@@ -160,16 +202,19 @@ router.post("/verify", async (req, res) => {
         updates.state = "ACTIVE_TRADER";
       }
       if (referrerWallet && !user.referrer) {
+        const onChainReferrer = await readReferrerOfOnChain(wallet);
+        if (!onChainReferrer || onChainReferrer !== referrerWallet) {
+          return res.status(400).json({
+            error: "Confirm your referrer in your wallet first, then sign in again.",
+          });
+        }
         updates.referrer = referrerWallet;
         await User.updateUser(user.id, updates);
         await User.incrementReferralChain(referrerWallet);
-        syncReferrerToChain(wallet, referrerWallet).catch(() => {});
       } else {
         await User.updateUser(user.id, updates);
       }
       user = await User.getUserByWallet(wallet);
-      // Sync existing referrer to chain if not yet set (e.g. B so A can get L2 when C buys)
-      if (user.referrer) syncReferrerToChain(wallet, user.referrer).catch(() => {});
     }
 
     const token = jwt.sign({ wallet }, JWT_SECRET, { expiresIn: "7d" });

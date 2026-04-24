@@ -3,17 +3,26 @@
  * Uses useSignMessage from wagmi to sign the SIWE message, then POSTs to backend.
  */
 import { useState, useEffect } from "react";
-import { useAccount, useSignMessage } from "wagmi";
+import { useAccount, useSignMessage, useWriteContract, usePublicClient } from "wagmi";
+import { getAddress, zeroAddress } from "viem";
 import { SiweMessage } from "siwe";
 import { API } from "../config";
 
 const TOKEN_KEY = "gl_token";
 const USER_KEY = "gl_user";
 
+const REFERRAL_ABI = [
+  { name: "setMyReferrer", type: "function", stateMutability: "nonpayable", inputs: [{ name: "referrer", type: "address" }], outputs: [] },
+];
+
 export function useSignInWithWallet() {
   const { address, chainId } = useAccount();
   const { signMessageAsync } = useSignMessage();
+  const publicClient = usePublicClient();
+  const { writeContractAsync } = useWriteContract();
   const [loading, setLoading] = useState(false);
+  const referralAddress = (import.meta.env.VITE_REFERRAL_CONTRACT || "").trim();
+  const referralAddressNormalized = referralAddress?.startsWith("0x") ? referralAddress : referralAddress ? `0x${referralAddress}` : "";
 
   // Reset loading when wallet disconnects so "Continue" is clickable again after reconnect
   useEffect(() => {
@@ -32,6 +41,42 @@ export function useSignInWithWallet() {
       }
       setLoading(true);
       try {
+        const referrerRaw =
+          typeof sessionStorage !== "undefined" ? (sessionStorage.getItem("gl_ref") || "").trim() : "";
+        if (referrerRaw && referralAddressNormalized && writeContractAsync && publicClient) {
+          const checkRes = await fetch(`${API}/auth/check/${address}`);
+          const checkData = await checkRes.json().catch(() => ({}));
+          if (checkData.exists === true) {
+            const resolveRes = await fetch(
+              `${API}/auth/referrer-resolve?code=${encodeURIComponent(referrerRaw)}`
+            );
+            const resolveData = await resolveRes.json().catch(() => ({}));
+            if (!resolveRes.ok) throw new Error(resolveData.error || "Could not resolve referral code");
+            let referrerAddr;
+            try {
+              referrerAddr = getAddress(
+                resolveData.wallet.startsWith("0x") ? resolveData.wallet : `0x${resolveData.wallet}`
+              );
+            } catch {
+              throw new Error("Invalid referrer address");
+            }
+            if (referrerAddr !== zeroAddress && referrerAddr.toLowerCase() !== address.toLowerCase()) {
+              try {
+                const hash = await writeContractAsync({
+                  address: referralAddressNormalized,
+                  abi: REFERRAL_ABI,
+                  functionName: "setMyReferrer",
+                  args: [referrerAddr],
+                });
+                if (hash) await publicClient.waitForTransactionReceipt({ hash });
+              } catch (e) {
+                const msg = `${e?.message || e?.shortMessage || e || ""}`.toLowerCase();
+                if (!msg.includes("referrer already set")) throw e;
+              }
+            }
+          }
+        }
+
         let nonceRes;
         try {
           nonceRes = await fetch(`${API}/auth/nonce/${address}`);
@@ -55,13 +100,12 @@ export function useSignInWithWallet() {
         const message = siweMsg.prepareMessage();
         const signature = await signMessageAsync({ message, account: address });
 
-        const referrer = typeof sessionStorage !== "undefined" ? sessionStorage.getItem("gl_ref") : null;
         let verifyRes;
         try {
           verifyRes = await fetch(`${API}/auth/verify`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ message, signature, referrer: referrer || undefined }),
+            body: JSON.stringify({ message, signature, referrer: referrerRaw || undefined }),
           });
         } catch (e) {
           if (isNetworkError(e)) throw new Error("Cannot reach server. Make sure the backend is running (e.g. npm run dev in the backend folder).");
@@ -70,7 +114,7 @@ export function useSignInWithWallet() {
         const data = await verifyRes.json().catch(() => ({}));
         if (!verifyRes.ok) throw new Error(data.error || "Auth failed");
 
-        if (referrer && typeof sessionStorage !== "undefined") sessionStorage.removeItem("gl_ref");
+        if (referrerRaw && typeof sessionStorage !== "undefined") sessionStorage.removeItem("gl_ref");
         localStorage.setItem(TOKEN_KEY, data.token);
         localStorage.setItem(USER_KEY, JSON.stringify(data.user));
         return { token: data.token, user: data.user, redirect: data.redirect };

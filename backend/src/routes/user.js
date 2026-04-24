@@ -4,8 +4,8 @@ import fs from "fs";
 import multer from "multer";
 import * as User from "../services/user.js";
 import { getOnChainUserStatus } from "../services/onChainUser.js";
-import { syncReferrerToChain } from "../services/referralContractSync.js";
 import { isAdminWallet, isConfiguredBotWallet } from "../services/botService.js";
+import { readReferrerOfOnChain } from "../services/referralContractRead.js";
 
 const router = Router();
 
@@ -296,6 +296,13 @@ router.post("/profile", async (req, res) => {
         if (referrerUser?.wallet) referrerWallet = referrerUser.wallet.toLowerCase();
       }
       if (referrerWallet && referrerWallet !== current.wallet?.toLowerCase()) {
+        const onChainReferrer = await readReferrerOfOnChain(current.wallet);
+        if (!onChainReferrer || onChainReferrer !== referrerWallet) {
+          return res.status(400).json({
+            error:
+              "Confirm your referrer in your wallet first (one transaction), then save again.",
+          });
+        }
         updates.referrer = referrerWallet;
       }
     }
@@ -303,7 +310,6 @@ router.post("/profile", async (req, res) => {
     await User.updateUser(current.id, updates);
     if (updates.referrer) {
       await User.incrementReferralChain(updates.referrer);
-      syncReferrerToChain(current.wallet, updates.referrer).catch(() => {});
     }
 
     const user = await User.getUser(req);
