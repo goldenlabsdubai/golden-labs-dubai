@@ -97,6 +97,59 @@ export default function ProfileSetup() {
     e.target.value = "";
   };
 
+  const handleConfirmReferrerOnChain = async () => {
+    if (!address || !chainId) {
+      setError("Wallet not connected");
+      return;
+    }
+    const BSC_TESTNET_CHAIN_ID = 97;
+    if (Number(chainId) !== BSC_TESTNET_CHAIN_ID) {
+      setError("Switch your wallet to BSC Testnet (Chain ID 97), then try again.");
+      return;
+    }
+    if (!referrerRawEffective) {
+      setError("Enter a referral code or open your invite link first.");
+      return;
+    }
+    if (!referralAddressNormalized || !writeContractAsync || !publicClient) {
+      setError("Referral contract is not configured. Contact support.");
+      return;
+    }
+    setLoading(true);
+    setError("");
+    setUploadError("");
+    try {
+      const resolveRes = await fetch(
+        `${API}/auth/referrer-resolve?code=${encodeURIComponent(referrerRawEffective)}`
+      );
+      const resolveData = await resolveRes.json().catch(() => ({}));
+      if (!resolveRes.ok) throw new Error(resolveData.error || "Could not resolve referral code");
+      let referrerAddr;
+      try {
+        referrerAddr = getAddress(
+          resolveData.wallet.startsWith("0x") ? resolveData.wallet : `0x${resolveData.wallet}`
+        );
+      } catch {
+        throw new Error("Invalid referrer address");
+      }
+      if (referrerAddr === zeroAddress || referrerAddr.toLowerCase() === address.toLowerCase()) {
+        throw new Error("You cannot use your own referral code.");
+      }
+      const hash = await writeContractAsync({
+        address: referralAddressNormalized,
+        abi: REFERRAL_ABI,
+        functionName: "setMyReferrer",
+        args: [referrerAddr],
+      });
+      if (hash) await publicClient.waitForTransactionReceipt({ hash });
+      setReferrerChainStepDone(true);
+    } catch (e) {
+      setError(getTransactionErrorMessage(e, "Could not confirm referrer"));
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!address || !chainId || !signMessageAsync) {
@@ -114,43 +167,18 @@ export default function ProfileSetup() {
       setError("Username must be at least 3 characters");
       return;
     }
+    const referrerRaw = referrerRawEffective;
+    const referrer = referrerRaw || undefined;
+
+    if (needsReferrerConfirm && !referrerChainStepDone) {
+      setError('Tap "Confirm referrer" first to complete the on-chain step, then save your profile.');
+      return;
+    }
+
     setLoading(true);
     setError("");
     setUploadError("");
     try {
-      // One on-chain tx first (setMyReferrer); DB row is created only after SIWE + /verify, which checks referrerOf(wallet) matches the code.
-      const referrerRaw = (
-        referralCode.trim() ||
-        (typeof sessionStorage !== "undefined" ? sessionStorage.getItem("gl_ref") || "" : "")
-      ).trim();
-      const referrer = referrerRaw || undefined;
-
-      if (referrerRaw) {
-        const resolveRes = await fetch(`${API}/auth/referrer-resolve?code=${encodeURIComponent(referrerRaw)}`);
-        const resolveData = await resolveRes.json().catch(() => ({}));
-        if (!resolveRes.ok) throw new Error(resolveData.error || "Could not resolve referral code");
-        let referrerAddr;
-        try {
-          referrerAddr = getAddress(
-            resolveData.wallet.startsWith("0x") ? resolveData.wallet : `0x${resolveData.wallet}`
-          );
-        } catch {
-          throw new Error("Invalid referrer address");
-        }
-        if (referrerAddr === zeroAddress || referrerAddr.toLowerCase() === address.toLowerCase()) {
-          throw new Error("You cannot use your own referral code.");
-        }
-        if (referralAddressNormalized && writeContractAsync && publicClient) {
-          const hash = await writeContractAsync({
-            address: referralAddressNormalized,
-            abi: REFERRAL_ABI,
-            functionName: "setMyReferrer",
-            args: [referrerAddr],
-          });
-          if (hash) await publicClient.waitForTransactionReceipt({ hash });
-        }
-      }
-
       const nonceRes = await fetch(`${API}/auth/nonce/${address}`);
       const nonceData = await nonceRes.json().catch(() => ({}));
       const nonce = nonceData.nonce;
