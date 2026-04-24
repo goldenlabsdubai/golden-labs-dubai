@@ -183,6 +183,10 @@ router.get("/me", async (req, res) => {
           }
         }
       }
+      // Subscription read failed (Chainstack/RPC): still realign mint — never keep MINTED if current NFT says no mint.
+      if (!walletIsBot && !subscriptionKnown && mintKnown && !hasMinted && user.state === "MINTED") {
+        updates.state = user.username ? "PROFILE_SET" : "REGISTERED";
+      }
       if (walletIsBot && user.username) {
         updates.state = "ACTIVE_TRADER";
       }
