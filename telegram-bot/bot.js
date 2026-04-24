@@ -174,6 +174,7 @@ const server = http.createServer(async (req, res) => {
     const json = raw ? JSON.parse(raw) : {};
 
     let msg = "";
+    let parseMode;
     if (typeof json.message === "string" && json.message) {
       msg = json.message;
     } else if (typeof json.text === "string" && json.text) {
@@ -181,6 +182,7 @@ const server = http.createServer(async (req, res) => {
     } else if (typeof json.kind === "string" && json.kind) {
       const { kind, ...fields } = json;
       msg = formatActivityMessage(kind, fields);
+      parseMode = "HTML";
     }
 
     if (!msg) {
