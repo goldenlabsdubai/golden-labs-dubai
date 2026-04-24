@@ -2,8 +2,6 @@ import { Router } from "express";
 import { ethers } from "ethers";
 import * as User from "../services/user.js";
 import { getOnChainUserStatus } from "../services/onChainUser.js";
-import { isConfiguredBotWallet } from "../services/botService.js";
-import { notifyActivity } from "../services/telegramNotify.js";
 
 const router = Router();
 
@@ -83,13 +81,6 @@ router.post("/confirm", async (req, res) => {
       } catch (_) {}
     }
     await User.logActivity(wallet, "mint", { tokenId: tokenId != null ? String(tokenId) : null, price: mintPriceWei, ...(txHash ? { txHash } : {}) });
-    if (!isConfiguredBotWallet(wallet)) {
-      notifyActivity("mint", {
-        address: wallet,
-        ...(tokenId != null && tokenId !== "" ? { tokenId: String(tokenId) } : {}),
-        ...(txHash ? { txHash } : {}),
-      }).catch(() => {});
-    }
     await User.updateUser(user.id, { state: "MINTED", lastActivity: new Date() });
     const updated = await User.getUser(req);
     res.json({

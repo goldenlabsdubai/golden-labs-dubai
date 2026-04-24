@@ -3,8 +3,6 @@ import { getPool } from "../config/postgres.js";
 import { getMarketplaceAndReservePoolAddress } from "../config/contractsEnv.js";
 import * as User from "./user.js";
 import * as MetaPg from "./metaPostgres.js";
-import { isConfiguredBotWallet } from "./botService.js";
-import { notifyActivity } from "./telegramNotify.js";
 
 const ABI = [
   "event Sold(uint256 indexed tokenId, address seller, address buyer, uint256 price)",
@@ -215,17 +213,6 @@ async function runMarketplaceActivityIndexerPoll(provider, contract) {
         blockNumber: Number(evt.blockNumber ?? 0),
       });
       await markProcessed(id, payload);
-      const buyerBot = isConfiguredBotWallet(buyer);
-      const sellerBot = Boolean(seller) && isConfiguredBotWallet(seller);
-      if (!(buyerBot && sellerBot)) {
-        notifyActivity("bought", {
-          buyer,
-          seller: seller || "",
-          tokenId: String(tokenId),
-          priceWei: String(evt.args?.price ?? 0n),
-          ...(txHash ? { txHash } : {}),
-        }).catch(() => {});
-      }
     }
     if (listedEvents.length > 0) {
       const uniqueBlocks = [...new Set(listedEvents.map((e) => e.blockNumber))];
@@ -259,7 +246,6 @@ async function runMarketplaceActivityIndexerPoll(provider, contract) {
           price: priceWei,
           blockNumber,
         });
-        notifyActivity("listed", { seller, tokenId, priceWei }).catch(() => {});
       }
     }
     processedUpTo = chunkTo;

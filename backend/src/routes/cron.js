@@ -5,6 +5,7 @@
 import { Router } from "express";
 import { runReferralIndexerOnce } from "../services/referralIndexer.js";
 import { runMarketplaceActivityIndexerOnce } from "../services/marketplaceActivityIndexer.js";
+import { runTelegramActivityFromDbNotifierOnce } from "../services/telegramActivityDbNotifier.js";
 
 const router = Router();
 
@@ -41,6 +42,20 @@ router.all("/marketplace-indexer", async (req, res) => {
   } catch (e) {
     console.error("Cron marketplace-indexer error:", e?.message || e);
     res.status(500).json({ error: e?.message || "Indexer failed" });
+  }
+});
+
+/** Poll DB and forward new rows to the Telegram bridge (for serverless / Vercel). */
+router.all("/telegram-db-notifier", async (req, res) => {
+  if (!isCronAuthorized(req)) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  try {
+    await runTelegramActivityFromDbNotifierOnce();
+    res.json({ ok: true, message: "Telegram DB notifier tick completed" });
+  } catch (e) {
+    console.error("Cron telegram-db-notifier error:", e?.message || e);
+    res.status(500).json({ error: e?.message || "Notifier failed" });
   }
 });
 

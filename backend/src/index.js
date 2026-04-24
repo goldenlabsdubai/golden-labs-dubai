@@ -1,6 +1,7 @@
 import app from "./app.js";
 import { startReferralIndexer } from "./services/referralIndexer.js";
 import { startMarketplaceActivityIndexer } from "./services/marketplaceActivityIndexer.js";
+import { startTelegramActivityFromDbNotifier } from "./services/telegramActivityDbNotifier.js";
 import { logTelegramAlertsStatus } from "./services/telegramNotify.js";
 import { logDeployedContractsCluster } from "./config/contractsEnv.js";
 
@@ -18,4 +19,5 @@ if (!process.env.VERCEL) {
 
   startReferralIndexer();
   startMarketplaceActivityIndexer();
+  startTelegramActivityFromDbNotifier();
 }

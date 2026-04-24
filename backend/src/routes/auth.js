@@ -5,7 +5,6 @@ import { SiweMessage } from "siwe";
 import * as AdminPg from "../services/adminPostgres.js";
 import * as User from "../services/user.js";
 import { isAdminWallet, isConfiguredBotWallet } from "../services/botService.js";
-import { notifyActivity } from "../services/telegramNotify.js";
 import { getPool } from "../config/postgres.js";
 import { readReferrerOfOnChain } from "../services/referralContractRead.js";
 
@@ -188,9 +187,6 @@ router.post("/verify", async (req, res) => {
         xUrl: profile?.xUrl != null ? String(profile.xUrl).trim() || null : null,
         telegramUrl: profile?.telegramUrl != null ? String(profile.telegramUrl).trim() || null : null,
       });
-      if (!isConfiguredBotWallet(wallet)) {
-        notifyActivity("user_joined", { address: wallet }).catch(() => {});
-      }
       user = await User.getUserByWallet(wallet);
       if (referrerWallet) {
         await User.incrementReferralChain(referrerWallet);
