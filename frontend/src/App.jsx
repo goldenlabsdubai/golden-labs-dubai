@@ -40,6 +40,20 @@ import Dashboard from "./pages/Dashboard";
 import Leaderboard from "./pages/Leaderboard";
 import UserProfile from "./pages/UserProfile";
 
+/**
+ * Onboarding funnel (matches SubscriptionContract + NFT gates):
+ * 1) Wallet connect → profile (username + SIWE) → state PROFILE_SET
+ * 2) Subscription page until chain reports active subscription (isSubscribed on contract)
+ * 3) Mint page until minted (or holding NFT) → state MINTED → dashboard / marketplace / leaderboard
+ *
+ * Suspended (on-chain): inactivity past `inactivityDays` (e.g. 5) OR cumulative marketplace
+ * trading-income profit ≥ `profitThreshold` (e.g. $50 USDT) → must re-subscribe.
+ * DB state SUSPENDED: only /subscription is allowed; everything else redirects there.
+ *
+ * Desktop and mobile use the same rules; `canAccessTradingNav` controls marketplace nav links.
+ * Listing/buy DB sync (`/marketplace/record-purchase`, `/marketplace/my-listings`) re-checks
+ * active subscription + mint on the server’s configured contracts (env addresses + RPC).
+ */
 function ProtectedRoute({ children, require }) {
   const { token, user, loading } = useAuth();
   const location = useLocation();
@@ -55,16 +69,16 @@ function ProtectedRoute({ children, require }) {
     return <Navigate to="/subscription" replace state={{ from: location.pathname }} />;
   }
 
-  // Not subscribed (and not suspended): must do profile then subscription; no mint/marketplace
+  // Not subscribed (and not suspended): profile then subscription; block mint + marketplace
   if (!active) {
     if (!user?.username && location.pathname !== "/profile") return <Navigate to="/profile" replace />;
     if (require === "profile") return children;
     if (require === "subscription") return children;
-    // Trying to visit mint or marketplace without being subscribed → subscription
+    // Trying to visit mint or marketplace without active subscription → subscription
     return <Navigate to="/subscription" replace state={{ from: location.pathname }} />;
   }
 
-  // Subscribed but not minted: no marketplace/dashboard/leaderboard
+  // Subscribed but not minted: block marketplace / dashboard / leaderboard → mint first
   if (user?.state === "SUBSCRIBED" && require === "marketplace") {
     return <Navigate to="/mint" replace state={{ from: location.pathname }} />;
   }

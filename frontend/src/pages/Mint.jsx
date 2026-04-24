@@ -8,6 +8,7 @@ import { useWalletConnect } from "../hooks/useWalletConnect";
 import { API, ASSET_IMAGE, EXPLORER_BY_CHAIN } from "../config";
 import { applyWalletTxError } from "../utils/transactionError";
 import InsufficientBalanceModal from "../components/InsufficientBalanceModal";
+import { canAccessTradingNav } from "../utils/tradingAccess";
 
 const USDT_ABI = [
   { name: "balanceOf", type: "function", stateMutability: "view", inputs: [{ name: "account", type: "address" }], outputs: [{ type: "uint256" }] },
@@ -89,7 +90,7 @@ export default function Mint() {
 
   // Already minted → go to dashboard (don't stay on mint page)
   useEffect(() => {
-    if (user?.state === "MINTED" || user?.state === "ACTIVE_TRADER") {
+    if (canAccessTradingNav(user)) {
       navigate("/dashboard", { replace: true });
     }
   }, [user?.state, navigate]);

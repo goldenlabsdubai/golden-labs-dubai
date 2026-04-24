@@ -1,4 +1,6 @@
 import { NavLink, useLocation } from "react-router-dom";
+import { useAuth } from "../hooks/useAuth";
+import { canAccessTradingNav } from "../utils/tradingAccess";
 
 function IconHome() {
   return (
@@ -50,18 +52,38 @@ function IconLeaderboard() {
   );
 }
 
-const tabs = [
-  { to: "/", end: true, label: "Home", Icon: IconHome },
+const tradingTabs = [
   { to: "/marketplace", label: "Marketplace", Icon: IconMarketplace },
   { to: "/dashboard", label: "Dashboard", Icon: IconDashboard },
   { to: "/leaderboard", label: "Leaderboard", Icon: IconLeaderboard },
 ];
 
+function IconContinue() {
+  return (
+    <svg className="app-mobile-nav__icon" width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M5 12h14M13 6l6 6-6 6" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
 /** Bottom tab bar for small screens — gold theme. Hidden on profile setup & public user pages. */
 export default function MobileBottomNav() {
   const { pathname } = useLocation();
+  const { token, user } = useAuth();
   if (/^\/profile\/setup/.test(pathname)) return null;
   if (/^\/user\//.test(pathname)) return null;
+
+  const tradingUnlocked = canAccessTradingNav(user);
+  const onboard =
+    token && user && !tradingUnlocked
+      ? user.state === "SUBSCRIBED"
+        ? { to: "/mint", label: "Mint", Icon: IconContinue }
+        : { to: "/subscription", label: "Subscribe", Icon: IconContinue }
+      : null;
+
+  const tabs = [{ to: "/", end: true, label: "Home", Icon: IconHome }];
+  if (onboard) tabs.push(onboard);
+  if (tradingUnlocked) tabs.push(...tradingTabs);
 
   return (
     <nav className="app-mobile-nav" aria-label="Main navigation">
@@ -69,7 +91,7 @@ export default function MobileBottomNav() {
         <NavLink
           key={to + (end ? "-root" : "")}
           to={to}
-          end={end}
+          end={Boolean(end)}
           className={({ isActive }) => `app-mobile-nav__link${isActive ? " app-mobile-nav__link--active" : ""}`}
         >
           <Icon />

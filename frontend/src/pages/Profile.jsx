@@ -7,6 +7,7 @@ import { useAuth } from "../hooks/useAuth";
 import { useWalletConnect } from "../hooks/useWalletConnect";
 import { API, getAvatarUrl, ASSET_IMAGE } from "../config";
 import { applyWalletTxError, getTransactionErrorMessage } from "../utils/transactionError";
+import { canAccessTradingNav } from "../utils/tradingAccess";
 import InsufficientBalanceModal from "../components/InsufficientBalanceModal";
 
 const USDT_ABI = [
@@ -275,7 +276,7 @@ export default function Profile() {
         <Link to="/" className="landing-v2__logo">
           Golden Labs
         </Link>
-        {hasProfile && (user?.state === "MINTED" || user?.state === "ACTIVE_TRADER") && (
+        {hasProfile && canAccessTradingNav(user) && (
           <nav className="marketplace-page__links" aria-label="Main">
             <Link to="/marketplace">Marketplace</Link>
             <Link to="/leaderboard">Leaderboard</Link>
@@ -374,7 +375,7 @@ export default function Profile() {
                   ) : null}
                 </dl>
               </div>
-              {(user?.state !== "MINTED" && user?.state !== "ACTIVE_TRADER") && (
+              {!canAccessTradingNav(user) && (
                 <div className="profile-modern__view-actions">
                   {user?.state === "SUBSCRIBED" ? (
                     <button type="button" className="landing-v2__btn landing-v2__btn--primary profile-modern__submit" onClick={() => navigate("/mint")}>

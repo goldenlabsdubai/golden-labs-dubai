@@ -3,6 +3,7 @@ import { ethers } from "ethers";
 import * as User from "../services/user.js";
 import { getListingBlocksMap } from "../services/marketplaceActivityIndexer.js";
 import { getMarketplaceAndReservePoolAddress } from "../config/contractsEnv.js";
+import { assertCanTradeOnConfiguredContracts } from "../services/marketplaceTradeEligibility.js";
 
 const router = Router();
 let listingsCache = [];
@@ -309,6 +310,11 @@ router.get("/my-listings", async (req, res) => {
   try {
     const wallet = await getWalletForRequest(req);
     if (!wallet || !wallet.startsWith("0x")) return res.json({ listings: [] });
+
+    const trade = await assertCanTradeOnConfiguredContracts(wallet);
+    if (!trade.ok) {
+      return res.status(trade.status).json({ error: trade.error, listings: [] });
+    }
 
     const marketAddr = (getMarketplaceAndReservePoolAddress() || "").trim();
     const nftAddr = (process.env.NFT_CONTRACT_ADDRESS || "").trim();
@@ -669,9 +675,11 @@ router.get("/config", (_, res) => {
   const base = multi.length > 0 ? multi[0] : (process.env.NFT_METADATA_BASE_URI || "").trim().replace(/^ipfs:\/\//, "");
   const mp4Cid = (process.env.NFT_MP4_CID || "").trim();
   const localAnim = (process.env.NFT_LOCAL_ANIMATION_URL || "").trim();
+  const sub = (process.env.SUBSCRIPTION_CONTRACT_ADDRESS || "").trim();
   res.json({
     marketplaceAddress: getMarketplaceAndReservePoolAddress() || "",
     nftAddress: process.env.NFT_CONTRACT_ADDRESS || "",
+    subscriptionContractAddress: sub,
     metadataBasePath: base || undefined,
     nftMp4Cid: mp4Cid || undefined,
     nftLocalAnimationUrl: localAnim || undefined,

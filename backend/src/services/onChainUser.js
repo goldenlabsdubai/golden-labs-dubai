@@ -41,7 +41,8 @@ function getMarketplaceAddress() {
 
 /**
  * Returns { hasSubscribed, isSuspended, hasMinted, buyCount, subscriptionKnown, mintKnown } for a wallet.
- * hasSubscribed = ever subscribed; isSuspended = inactivity or profit >= threshold (default $50) → must resubscribe.
+ * hasSubscribed = active subscription (same as contract isSubscribed(): not suspended, or bot trader on-chain).
+ * isSuspended = inactivity or profit >= threshold (default $50) → must resubscribe.
  * buyCount = number of Sold events where buyer === wallet (on-chain trade count).
  * If a contract is missing or RPC fails, that field is false/0 and we don't throw.
  */
@@ -79,11 +80,11 @@ export async function getOnChainUserStatus(wallet) {
     if (subAddr) {
       const sub = new ethers.Contract(subAddr, SUBSCRIPTION_ABI, provider);
       try {
-        const [subbed, suspended] = await Promise.all([
-          sub.hasSubscribed(w).then((b) => !!b),
+        const [activeSub, suspended] = await Promise.all([
+          sub.isSubscribed(w).then((b) => !!b),
           sub.isSuspended(w).then((b) => !!b),
         ]);
-        hasSubscribed = subbed;
+        hasSubscribed = activeSub;
         isSuspended = suspended;
         subscriptionKnown = true;
       } catch (_) {

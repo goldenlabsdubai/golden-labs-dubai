@@ -211,7 +211,7 @@ export default function Landing() {
     setLoading(true);
     try {
       const redirect = await connect();
-      navigate(redirect ? `/${redirect}` : "/marketplace");
+      navigate(`/${redirect || "profile"}`);
     } catch (e) {
       setError(getTransactionErrorMessage(e, "Connection failed"));
     } finally {
@@ -225,7 +225,7 @@ export default function Landing() {
     try {
       const data = await signIn();
       if (data?.token && data?.user) setSession(data.token, data.user);
-      navigate(data?.redirect ? `/${data.redirect}` : "/marketplace");
+      navigate(`/${data?.redirect || "profile"}`);
     } catch (e) {
       setError(getTransactionErrorMessage(e, "Sign in failed"));
       setPopupContinueClicked(false);

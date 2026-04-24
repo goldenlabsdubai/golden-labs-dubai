@@ -9,6 +9,7 @@ import { API, getAvatarUrl, MARKETPLACE_AND_RESERVE_POOL_ADDRESS } from "../conf
 import { fetchMyAssetsWithRetry } from "../utils/fetchMyAssets";
 import { applyWalletTxError } from "../utils/transactionError";
 import { resolveSellerReferrerRoot } from "../utils/marketplaceReferrer";
+import { canAccessTradingNav } from "../utils/tradingAccess";
 import {
   safeGasLimit,
   DEFAULT_APPROVE_GAS,
@@ -422,7 +423,7 @@ export default function Marketplace() {
         <div className="marketplace-page__nav-left">
           <Link to="/" className="marketplace-page__logo">Golden Labs</Link>
         </div>
-        {(user?.state === "MINTED" || user?.state === "ACTIVE_TRADER") && (
+        {canAccessTradingNav(user) && (
           <nav className="marketplace-page__links">
             <Link to="/marketplace">Marketplace</Link>
             <Link to="/leaderboard">Leaderboard</Link>

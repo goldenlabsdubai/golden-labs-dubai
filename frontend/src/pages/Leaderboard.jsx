@@ -5,6 +5,7 @@ import { useDisconnect } from "wagmi";
 import { useAuth } from "../hooks/useAuth";
 import { useWalletConnect } from "../hooks/useWalletConnect";
 import { API, getAvatarUrl } from "../config";
+import { canAccessTradingNav } from "../utils/tradingAccess";
 
 const TOP_SELLERS_LIMIT = 10;
 
@@ -76,7 +77,7 @@ export default function Leaderboard() {
         <div className="marketplace-page__nav-left">
           <Link to="/" className="marketplace-page__logo">Golden Labs</Link>
         </div>
-        {(user?.state === "MINTED" || user?.state === "ACTIVE_TRADER") && (
+        {canAccessTradingNav(user) && (
           <nav className="marketplace-page__links">
             <Link to="/marketplace">Marketplace</Link>
             <Link to="/leaderboard">Leaderboard</Link>

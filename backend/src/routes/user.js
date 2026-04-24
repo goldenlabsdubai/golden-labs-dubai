@@ -163,13 +163,14 @@ router.get("/me", async (req, res) => {
       const later = ["SUBSCRIBED", "MINTED", "ACTIVE_TRADER", "SUSPENDED"];
       // Avoid false route/state flicker when RPC is temporarily unavailable.
       if (!walletIsBot && subscriptionKnown) {
-        if (!hasSubscribed) {
-          // On-chain: not subscribed → downgrade so UI shows correct step (profile then subscription)
-          if (later.includes(user.state)) updates.state = user.username ? "PROFILE_SET" : "REGISTERED";
-        } else if (isSuspended) {
+        // Suspended first: ever-subscribed but inactive must not be treated as "active subscriber" for mint sync.
+        if (isSuspended) {
           updates.state = "SUSPENDED";
+        } else if (!hasSubscribed) {
+          // On-chain: no active subscription → downgrade so UI shows correct step (profile then subscription)
+          if (later.includes(user.state)) updates.state = user.username ? "PROFILE_SET" : "REGISTERED";
         } else {
-          // Subscribed + not suspended: align mint step with chain (new NFT deployment clears on-chain mint)
+          // Active subscription (matches SubscriptionContract.isSubscribed / NFT gate)
           if (mintKnown && !hasMinted && user.state === "MINTED") {
             updates.state = "SUBSCRIBED";
           }

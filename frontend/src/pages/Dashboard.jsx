@@ -9,6 +9,7 @@ import { API, BNB_LOGO_PUBLIC, EXPLORER_BY_CHAIN, getAvatarUrl, MARKETPLACE_AND_
 import { fetchMyAssetsWithRetry } from "../utils/fetchMyAssets";
 import { applyWalletTxError } from "../utils/transactionError";
 import { resolveSellerReferrerRoot } from "../utils/marketplaceReferrer";
+import { canAccessTradingNav } from "../utils/tradingAccess";
 import {
   safeGasLimit,
   DEFAULT_APPROVE_GAS,
@@ -534,7 +535,7 @@ export default function Dashboard() {
         <div className="marketplace-page__nav-left">
           <Link to="/" className="marketplace-page__logo">Golden Labs</Link>
         </div>
-        {(user?.state === "MINTED" || user?.state === "ACTIVE_TRADER") && (
+        {canAccessTradingNav(user) && (
           <nav className="marketplace-page__links">
             <Link to="/marketplace">Marketplace</Link>
             <Link to="/leaderboard">Leaderboard</Link>
