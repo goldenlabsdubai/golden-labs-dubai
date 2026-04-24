@@ -43,7 +43,7 @@ export default function ProfileSetup() {
   const [pendingAvatarFile, setPendingAvatarFile] = useState(null);
   const [avatarPreviewUrl, setAvatarPreviewUrl] = useState("");
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
-  /** After setMyReferrer succeeds for the current referral code; reset when referral field changes. */
+  /** After wallet Confirm step succeeds; reset when invite/referral field changes. */
   const [referrerChainStepDone, setReferrerChainStepDone] = useState(false);
 
   const glRefStored =
@@ -108,11 +108,11 @@ export default function ProfileSetup() {
       return;
     }
     if (!referrerRawEffective) {
-      setError("Enter a referral code or open your invite link first.");
+      setError("Add a referral code or open your invite link first.");
       return;
     }
     if (!referralAddressNormalized || !writeContractAsync || !publicClient) {
-      setError("Referral contract is not configured. Contact support.");
+      setError("This action isn’t available right now. Try again later or contact support.");
       return;
     }
     setLoading(true);
@@ -123,17 +123,17 @@ export default function ProfileSetup() {
         `${API}/auth/referrer-resolve?code=${encodeURIComponent(referrerRawEffective)}`
       );
       const resolveData = await resolveRes.json().catch(() => ({}));
-      if (!resolveRes.ok) throw new Error(resolveData.error || "Could not resolve referral code");
+      if (!resolveRes.ok) throw new Error(resolveData.error || "Referral code is invalid.");
       let referrerAddr;
       try {
         referrerAddr = getAddress(
           resolveData.wallet.startsWith("0x") ? resolveData.wallet : `0x${resolveData.wallet}`
         );
       } catch {
-        throw new Error("Invalid referrer address");
+        throw new Error("Referral code is invalid.");
       }
       if (referrerAddr === zeroAddress || referrerAddr.toLowerCase() === address.toLowerCase()) {
-        throw new Error("You cannot use your own referral code.");
+        throw new Error("Referral code is invalid.");
       }
       const hash = await writeContractAsync({
         address: referralAddressNormalized,
@@ -144,7 +144,7 @@ export default function ProfileSetup() {
       if (hash) await publicClient.waitForTransactionReceipt({ hash });
       setReferrerChainStepDone(true);
     } catch (e) {
-      setError(getTransactionErrorMessage(e, "Could not confirm referrer"));
+      setError(getTransactionErrorMessage(e, "Referral code is invalid."));
     } finally {
       setLoading(false);
     }
@@ -171,7 +171,7 @@ export default function ProfileSetup() {
     const referrer = referrerRaw || undefined;
 
     if (needsReferrerConfirm && !referrerChainStepDone) {
-      setError('Tap "Confirm referrer" first to complete the on-chain step, then save your profile.');
+      setError('Tap "Confirm" first, then save.');
       return;
     }
 
@@ -289,8 +289,8 @@ export default function ProfileSetup() {
           <li>Add your optional bio</li>
           <li>Add your X (Twitter) and Telegram links</li>
           <li>
-            With a referral code: tap &quot;Confirm referrer&quot; (one transaction), then &quot;Save &amp; continue&quot;
-            (sign a message). Without a code: save signs once.
+            With a referral link or code: tap &quot;Confirm&quot; in your wallet, then &quot;Save &amp; continue&quot;. Otherwise
+            just save.
           </li>
         </ul>
       </div>
@@ -346,7 +346,7 @@ export default function ProfileSetup() {
           <h1 className="profile-modern__headline">Complete your profile</h1>
           <p className="profile-modern__subline">
             {needsReferrerConfirm && !referrerChainStepDone
-              ? "If you have a referral code, confirm it on-chain first, then save — you’ll sign a message to create your account."
+              ? "Tap Confirm, then Save & continue — you’ll sign a message to finish."
               : "Set a username and optional details. Save will ask you to sign a message with your wallet."}
           </p>
 
@@ -411,13 +411,13 @@ export default function ProfileSetup() {
                 <span className="profile-modern__field-label">Referral code (optional)</span>
                 <input
                   type="text"
-                  placeholder="Friend's username or code"
+                  placeholder="Friend’s username"
                   value={referralCode}
                   onChange={(e) => setReferralCode(e.target.value)}
                   className="profile-modern__field-input"
                 />
                 {needsReferrerConfirm && referrerChainStepDone && (
-                  <span className="profile-modern__field-hint">Referrer confirmed on-chain — you can save your profile.</span>
+                  <span className="profile-modern__field-hint">Next, tap Save & continue.</span>
                 )}
               </label>
             </div>
@@ -463,7 +463,7 @@ export default function ProfileSetup() {
                   disabled={loading}
                   onClick={handleConfirmReferrerOnChain}
                 >
-                  {loading ? "Confirm in wallet…" : "Confirm referrer"}
+                  {loading ? "Confirm…" : "Confirm"}
                 </button>
               ) : (
                 <button type="submit" className="profile-modern__submit" disabled={loading}>

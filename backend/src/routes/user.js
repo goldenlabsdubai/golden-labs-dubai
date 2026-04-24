@@ -297,11 +297,13 @@ router.post("/profile", async (req, res) => {
       }
       if (referrerWallet && referrerWallet !== current.wallet?.toLowerCase()) {
         const onChainReferrer = await readReferrerOfOnChain(current.wallet);
-        if (!onChainReferrer || onChainReferrer !== referrerWallet) {
+        if (!onChainReferrer) {
           return res.status(400).json({
-            error:
-              "Confirm your referrer in your wallet first (one transaction), then save again.",
+            error: "Tap Confirm first, then save again.",
           });
+        }
+        if (onChainReferrer !== referrerWallet) {
+          return res.status(400).json({ error: "Referral code is invalid." });
         }
         updates.referrer = referrerWallet;
       }

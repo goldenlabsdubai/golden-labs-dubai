@@ -90,21 +90,21 @@ router.get("/admin-nonce/:wallet", async (req, res) => {
   }
 });
 
-/** Public: resolve referral username or 0x address to wallet (profile setup → setMyReferrer). */
+/** Public: resolve invite username or 0x address to wallet (profile setup). */
 router.get("/referrer-resolve", async (req, res) => {
   try {
     const ref = String(req.query.code || "").trim();
-    if (!ref) return res.status(400).json({ error: "code query parameter required" });
+    if (!ref) return res.status(400).json({ error: "Referral code is invalid." });
     let referrerWallet = null;
     if (ref.startsWith("0x") && ref.length >= 42) {
       try {
         referrerWallet = ethers.getAddress(ref).toLowerCase();
       } catch {
-        return res.status(400).json({ error: "Invalid referrer address" });
+        return res.status(400).json({ error: "Referral code is invalid." });
       }
     } else {
       const referrerUser = await User.findUserByUsername(ref);
-      if (!referrerUser?.wallet) return res.status(404).json({ error: "Referrer not found" });
+      if (!referrerUser?.wallet) return res.status(404).json({ error: "Referral code is invalid." });
       referrerWallet = referrerUser.wallet.toLowerCase();
     }
     res.json({ wallet: referrerWallet });
@@ -138,7 +138,7 @@ router.post("/verify", async (req, res) => {
         try {
           referrerWallet = ethers.getAddress(ref).toLowerCase();
         } catch {
-          return res.status(400).json({ error: "Invalid referrer address" });
+          return res.status(400).json({ error: "Referral code is invalid." });
         }
       } else {
         const referrerUser = await User.findUserByUsername(ref);
@@ -164,17 +164,16 @@ router.post("/verify", async (req, res) => {
       }
       if (referrerRaw && String(referrerRaw).trim()) {
         if (!referrerWallet) {
-          return res.status(400).json({ error: "Invalid referral code or address." });
+          return res.status(400).json({ error: "Referral code is invalid." });
         }
         const onChainReferrer = await readReferrerOfOnChain(wallet);
         if (!onChainReferrer) {
           return res.status(400).json({
-            error:
-              "Confirm your referrer in your wallet first (one transaction), then tap Save again.",
+            error: "Tap Confirm first, then save again.",
           });
         }
         if (onChainReferrer !== referrerWallet) {
-          return res.status(400).json({ error: "On-chain referrer does not match the code you entered." });
+          return res.status(400).json({ error: "Referral code is invalid." });
         }
       }
       await User.createUser({
@@ -203,10 +202,13 @@ router.post("/verify", async (req, res) => {
       }
       if (referrerWallet && !user.referrer) {
         const onChainReferrer = await readReferrerOfOnChain(wallet);
-        if (!onChainReferrer || onChainReferrer !== referrerWallet) {
+        if (!onChainReferrer) {
           return res.status(400).json({
-            error: "Confirm your referrer in your wallet first, then sign in again.",
+            error: "Tap Confirm first, then sign in again.",
           });
+        }
+        if (onChainReferrer !== referrerWallet) {
+          return res.status(400).json({ error: "Referral code is invalid." });
         }
         updates.referrer = referrerWallet;
         await User.updateUser(user.id, updates);

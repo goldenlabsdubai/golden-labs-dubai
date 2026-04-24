@@ -51,14 +51,14 @@ export function useSignInWithWallet() {
               `${API}/auth/referrer-resolve?code=${encodeURIComponent(referrerRaw)}`
             );
             const resolveData = await resolveRes.json().catch(() => ({}));
-            if (!resolveRes.ok) throw new Error(resolveData.error || "Could not resolve referral code");
+            if (!resolveRes.ok) throw new Error(resolveData.error || "Referral code is invalid.");
             let referrerAddr;
             try {
               referrerAddr = getAddress(
                 resolveData.wallet.startsWith("0x") ? resolveData.wallet : `0x${resolveData.wallet}`
               );
             } catch {
-              throw new Error("Invalid referrer address");
+              throw new Error("Referral code is invalid.");
             }
             if (referrerAddr !== zeroAddress && referrerAddr.toLowerCase() !== address.toLowerCase()) {
               try {

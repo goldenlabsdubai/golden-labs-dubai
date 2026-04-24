@@ -177,28 +177,28 @@ export default function Profile() {
       const referralTrim = referralCode.trim();
       if (!user?.referrer && referralTrim && referralAddressNormalized && writeContractAsync && publicClient) {
         if (!address) {
-          setError("Connect your wallet to confirm your referrer on-chain, then save again.");
+          setError("Connect your wallet, then save again.");
           setLoading(false);
           return;
         }
         if (address.toLowerCase() !== signedInWallet) {
-          setError("Connect with the same wallet you signed in with to confirm your referrer.");
+          setError("Connect with the same wallet you signed in with, then save.");
           setLoading(false);
           return;
         }
         const resolveRes = await fetch(`${API}/auth/referrer-resolve?code=${encodeURIComponent(referralTrim)}`);
         const resolveData = await resolveRes.json().catch(() => ({}));
-        if (!resolveRes.ok) throw new Error(resolveData.error || "Could not resolve referral code");
+        if (!resolveRes.ok) throw new Error(resolveData.error || "Referral code is invalid.");
         let referrerAddr;
         try {
           referrerAddr = getAddress(
             resolveData.wallet.startsWith("0x") ? resolveData.wallet : `0x${resolveData.wallet}`
           );
         } catch {
-          throw new Error("Invalid referrer address");
+          throw new Error("Referral code is invalid.");
         }
         if (referrerAddr === zeroAddress || referrerAddr.toLowerCase() === signedInWallet) {
-          throw new Error("Invalid referral code");
+          throw new Error("Referral code is invalid.");
         }
         const hash = await writeContractAsync({
           address: referralAddressNormalized,
@@ -473,7 +473,7 @@ export default function Profile() {
                     onChange={(e) => setReferralCode(e.target.value)}
                     className="profile-modern__field-input"
                   />
-                  <span className="profile-modern__field-hint">Enter a friend's referral code or username if someone invited you</span>
+                  <span className="profile-modern__field-hint">If someone invited you, enter their username</span>
                 </label>
               </div>
             )}
