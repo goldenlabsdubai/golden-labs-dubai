@@ -69,6 +69,7 @@ import botControlRoutes from "./routes/botControl.js";
 import cronRoutes from "./routes/cron.js";
 import { authMiddleware, optionalAuthMiddleware } from "./middleware/auth.js";
 import { getPool, requirePostgres } from "./config/postgres.js";
+import { getDeployedContractsSnapshot } from "./config/contractsEnv.js";
 
 try {
   requirePostgres();
@@ -87,6 +88,8 @@ setImmediate(() => {
 });
 
 app.get("/api/health", (_, res) => res.json({ ok: true }));
+/** Public: which contract addresses this API uses (compare to Vercel VITE_* so wallet only hits one deployment). */
+app.get("/api/health/contracts", (_, res) => res.json(getDeployedContractsSnapshot()));
 // Root (and /api for Vercel rewrite of "/" -> "/api") – so visiting base URL returns something
 app.get("/", (_, res) => res.json({ api: "goldenlabs", health: "/api/health" }));
 app.get("/api", (_, res) => res.json({ api: "goldenlabs", health: "/api/health" }));
