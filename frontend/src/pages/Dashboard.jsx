@@ -532,7 +532,19 @@ export default function Dashboard() {
   };
 
   const ownedFiltered = filterItems(myAssets, true);
-  const gridItems = activeTab === "Owned" ? ownedFiltered : [];
+  /** Unlisted first (e.g. "List for $X"), then listed — matches user expectation on Dashboard Owned. */
+  const gridItems =
+    activeTab === "Owned"
+      ? [...ownedFiltered].sort((a, b) => {
+          const ra = a.isListed ? 1 : 0;
+          const rb = b.isListed ? 1 : 0;
+          if (ra !== rb) return ra - rb;
+          const na = Number(a.tokenId);
+          const nb = Number(b.tokenId);
+          if (Number.isFinite(na) && Number.isFinite(nb) && na !== nb) return na - nb;
+          return String(a.tokenId ?? "").localeCompare(String(b.tokenId ?? ""));
+        })
+      : [];
   const isEmpty = gridItems.length === 0;
   const showOwnedGrid = activeTab === "Owned" && !isEmpty;
   const showReferralEarnings = activeTab === "Referral earnings";
