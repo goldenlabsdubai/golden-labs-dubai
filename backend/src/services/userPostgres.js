@@ -186,26 +186,50 @@ export function getDocId(req) {
 }
 
 /**
- * Leaderboard: rank by lifetime earnings = seller trade income (sell count × on-chain tradingIncome wei) + referral_earnings_total.
- * Sell count uses distinct (wallet, tx_hash, token_id) on sell rows (matches dashboard trade income model without per-tx receipt batch).
+ * Leaderboard: rank by lifetime earnings = trade income from activity (same dedupe + receipt rules as dashboard /me) + referral_earnings_total.
  */
 export async function getTopSellers(limit = 10) {
   const safeLimit = Math.max(1, Math.min(Number(limit) || 10, 100));
-  const incomePerSellWei = BigInt(await resolveTradingIncomePerSellWeiFromChain());
+  const incomePerSellWei = await resolveTradingIncomePerSellWeiFromChain();
+  const maxRowsPerWallet = 10000;
 
-  const { rows: sellRows } = await query(`
-    SELECT wlt, COUNT(*)::text AS sell_n
-    FROM (
-      SELECT LOWER(TRIM(wallet)) AS wlt, tx_hash, COALESCE(token_id::text, '') AS tid
-      FROM user_activities
-      WHERE type = 'sell' AND tx_hash IS NOT NULL AND BTRIM(tx_hash) <> ''
-      GROUP BY LOWER(TRIM(wallet)), tx_hash, COALESCE(token_id::text, '')
-    ) deduped
-    GROUP BY wlt
+  const { rows: activityRows } = await query(`
+    SELECT LOWER(TRIM(a.wallet)) AS wlt, a.type, a.tx_hash, a.token_id
+    FROM user_activities a
+    INNER JOIN users u ON LOWER(TRIM(a.wallet)) = LOWER(TRIM(u.wallet))
+    WHERE a.type IN ('buy', 'sell')
+      AND u.wallet IS NOT NULL AND BTRIM(u.wallet) <> ''
+    ORDER BY LOWER(TRIM(a.wallet)), a.created_at DESC
+    LIMIT 500000
   `);
-  const sellMap = new Map();
-  for (const row of sellRows) {
-    if (row.wlt) sellMap.set(String(row.wlt).toLowerCase(), BigInt(row.sell_n || "0"));
+
+  const byWallet = new Map();
+  for (const row of activityRows) {
+    const w = String(row.wlt || "").toLowerCase();
+    if (!w.startsWith("0x")) continue;
+    if (!byWallet.has(w)) byWallet.set(w, []);
+    const arr = byWallet.get(w);
+    if (arr.length < maxRowsPerWallet) arr.push(row);
+  }
+
+  const allHashes = new Set();
+  for (const arr of byWallet.values()) {
+    for (const r of dedupeTradeActivityRows(arr)) {
+      const th = String(r.tx_hash || "").trim().toLowerCase();
+      if (th) allHashes.add(th);
+    }
+  }
+  const statusMap = await getTxReceiptStatusMap([...allHashes]);
+
+  const tradeProfitByWallet = new Map();
+  for (const [w, arr] of byWallet) {
+    const deduped = dedupeTradeActivityRows(arr);
+    const { totalProfit } = tradeStatsFromDedupedRows(deduped, statusMap, incomePerSellWei);
+    try {
+      tradeProfitByWallet.set(w, BigInt(String(totalProfit || "0")));
+    } catch {
+      tradeProfitByWallet.set(w, 0n);
+    }
   }
 
   const { rows } = await query("SELECT * FROM users WHERE wallet IS NOT NULL AND BTRIM(wallet) <> ''");
@@ -214,8 +238,7 @@ export async function getTopSellers(limit = 10) {
     const u = rowToUser(r);
     const w = (u.wallet || "").toLowerCase();
     if (!w.startsWith("0x")) continue;
-    const sells = sellMap.get(w) ?? 0n;
-    const tradeWei = sells * incomePerSellWei;
+    const tradeWei = tradeProfitByWallet.get(w) ?? 0n;
     let refWei = 0n;
     try {
       refWei = BigInt(String(u.referralEarningsTotal ?? "0").replace(/\..*$/, "") || "0");
@@ -409,6 +432,34 @@ function dedupeTradeActivityRows(rows) {
   return out;
 }
 
+/** Same trade-income rules as dashboard /me: deduped rows, skip only confirmed failed receipts. */
+function tradeStatsFromDedupedRows(deduped, statusMap, incomePerSellWei) {
+  const wei = typeof incomePerSellWei === "bigint" ? incomePerSellWei : BigInt(String(incomePerSellWei));
+  let buyTrades = 0;
+  let sellTrades = 0;
+  let profitOnly = 0n;
+  for (const r of deduped) {
+    const type = String(r.type || "").toLowerCase();
+    const th = String(r.tx_hash || "").trim().toLowerCase();
+    if (th) {
+      const st = statusMap.get(th);
+      if (st === "failed") continue;
+      // Do not skip "pending": receipt often lags briefly. Only confirmed failures are excluded.
+    }
+    if (type === "buy") buyTrades++;
+    else if (type === "sell") {
+      sellTrades++;
+      profitOnly += wei;
+    }
+  }
+  return {
+    buyTrades,
+    sellTrades,
+    totalTrades: buyTrades + sellTrades,
+    totalProfit: profitOnly > 0n ? profitOnly.toString() : "0",
+  };
+}
+
 export async function getTradeCountFromActivity(wallet) {
   const stats = await getWalletTradeStatsFromActivity(wallet, 5000);
   return stats ? stats.totalTrades : 0;
@@ -427,31 +478,8 @@ export async function getWalletTradeStatsFromActivity(wallet, maxRows = 5000) {
   const statusMap = await getTxReceiptStatusMap(hashes);
   /** Seller USDT wei per successful sale — from chain `tradingIncomeAmount()` with env fallback (not a magic number in stats). */
   const incomePerSellWei = await resolveTradingIncomePerSellWeiFromChain();
-  let buyTrades = 0;
-  let sellTrades = 0;
-  let profitOnly = 0n;
-  for (const r of deduped) {
-    const type = String(r.type || "").toLowerCase();
-    const th = String(r.tx_hash || "").trim().toLowerCase();
-    if (th) {
-      const st = statusMap.get(th);
-      if (st === "failed") continue;
-      // Do not skip "pending": receipt often lags briefly and excluding it made totals flip (e.g. 0.75 vs 1.50). Only confirmed failures are excluded.
-      // success, pending, unknown: count toward trades + trade income (pending/unknown match typical indexer + /me timing).
-    }
-    if (type === "buy") buyTrades++;
-    else if (type === "sell") {
-      sellTrades++;
-      profitOnly += incomePerSellWei;
-    }
-  }
-  return {
-    buyTrades,
-    sellTrades,
-    totalTrades: buyTrades + sellTrades,
-    totalProfit: profitOnly > 0n ? profitOnly.toString() : "0",
-    source: "postgres",
-  };
+  const stats = tradeStatsFromDedupedRows(deduped, statusMap, incomePerSellWei);
+  return { ...stats, source: "postgres" };
 }
 
 export async function getActivities(wallet, limit = 10, offset = 0) {
