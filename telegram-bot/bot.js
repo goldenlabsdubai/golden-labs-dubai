@@ -1,14 +1,14 @@
 /**
  * Golden Labs Telegram — outbound alerts only.
  *
- * - Platform events (subscription, mint, listed, bought, user_joined, …) arrive via POST /alert
- *   from the backend; the bot posts those to registered groups. It does not reply to users,
- *   commands, or DMs — no sendMessage except from sendAlert() (bridge).
+ * - Platform events arrive via POST /alert from the backend.
+ * - Group admins can DM /start to toggle alert types and set media URLs per registered group.
  *
  * - Groups/channels are auto-registered (silent) so alerts have a chat_id; see alert-chats.json.
  *   Optional TELEGRAM_CHAT_ID seeds an extra target.
  *
  * POST /alert: { "kind": "subscription"|"mint"|..., ...fields } or { "message": "..." }
+ * Optional: mediaUrl / imageUrl (HTTPS) or env TELEGRAM_ALERT_MEDIA_<KIND> — see .env.example
  */
 require("dotenv").config();
 const fs = require("fs");
@@ -16,6 +16,8 @@ const path = require("path");
 const http = require("http");
 const TelegramBot = require("node-telegram-bot-api");
 const { formatActivityMessage } = require("./alertFormat");
+const botSettings = require("./botSettings");
+const settingsUi = require("./botSettingsUi");
 
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const OPTIONAL_SEED_CHAT_ID = (process.env.TELEGRAM_CHAT_ID || "").trim();
@@ -74,8 +76,70 @@ if (OPTIONAL_SEED_CHAT_ID) {
 
 const bot = new TelegramBot(TOKEN, { polling: true });
 
-/** @param {string|undefined} parseMode e.g. "HTML" for formatted kind-alerts; omit for plain {message} payloads */
-async function sendAlert(message, parseMode) {
+/** Env: one public HTTPS URL per alert kind (image or video). */
+const KIND_MEDIA_ENV = {
+  user_joined: "TELEGRAM_ALERT_MEDIA_USER_JOINED",
+  subscription: "TELEGRAM_ALERT_MEDIA_SUBSCRIPTION",
+  mint: "TELEGRAM_ALERT_MEDIA_MINT",
+  listed: "TELEGRAM_ALERT_MEDIA_LISTED",
+  bought: "TELEGRAM_ALERT_MEDIA_BOUGHT",
+};
+
+const PHOTO_VIDEO_CAPTION_MAX = 1024;
+
+function resolveAlertMediaUrl(targetChatId, kind, override) {
+  const o = (override || "").trim();
+  if (/^https?:\/\//i.test(o)) return o;
+  if (targetChatId && kind) {
+    const per = botSettings.getMediaUrl(targetChatId, kind);
+    if (per && /^https?:\/\//i.test(per)) return per;
+  }
+  const k = kind ? String(kind).toLowerCase() : "";
+  const envKey = KIND_MEDIA_ENV[k];
+  const fromKind = envKey ? (process.env[envKey] || "").trim() : "";
+  if (fromKind) return fromKind;
+  return (process.env.TELEGRAM_ALERT_MEDIA_DEFAULT || "").trim();
+}
+
+function isProbablyVideoUrl(url) {
+  return /\.(mp4|webm|mov)(\?|#|$)/i.test(url);
+}
+
+/**
+ * Send image/video with caption when URL works; long captions split into media + text message.
+ * @returns {Promise<boolean>} true if media was sent (with or without follow-up message)
+ */
+async function sendMediaAlert(chatId, mediaUrl, caption, parseMode) {
+  const msgOpts = { disable_web_page_preview: true };
+  if (parseMode) msgOpts.parse_mode = parseMode;
+  const capOpts = parseMode ? { parse_mode: parseMode } : {};
+  try {
+    if (caption.length > PHOTO_VIDEO_CAPTION_MAX) {
+      if (isProbablyVideoUrl(mediaUrl)) {
+        await bot.sendVideo(chatId, mediaUrl, {});
+      } else {
+        await bot.sendPhoto(chatId, mediaUrl, {});
+      }
+      await bot.sendMessage(chatId, caption, msgOpts);
+    } else {
+      if (isProbablyVideoUrl(mediaUrl)) {
+        await bot.sendVideo(chatId, mediaUrl, { caption, ...capOpts });
+      } else {
+        await bot.sendPhoto(chatId, mediaUrl, { caption, ...capOpts });
+      }
+    }
+    return true;
+  } catch (e) {
+    console.warn(`[telegram] media send failed, falling back to text:`, e?.message || e);
+    return false;
+  }
+}
+
+/**
+ * @param {string|undefined} parseMode
+ * @param {{ kind?: string, mediaUrl?: string }} [extra] kind selects env TELEGRAM_ALERT_MEDIA_<KIND>; mediaUrl overrides
+ */
+async function sendAlert(message, parseMode, extra = {}) {
   const unique = [...new Set([...alertChatIds].map(String))];
   if (unique.length === 0) {
     throw new Error(
@@ -87,6 +151,18 @@ async function sendAlert(message, parseMode) {
   const errors = [];
   for (const id of unique) {
     try {
+      if (extra.kind && !botSettings.isAlertEnabled(id, extra.kind)) {
+        continue;
+      }
+      const mediaUrl = resolveAlertMediaUrl(id, extra.kind, extra.mediaUrl);
+      const useMedia = Boolean(mediaUrl && /^https?:\/\//i.test(mediaUrl));
+      if (useMedia) {
+        const ok = await sendMediaAlert(id, mediaUrl, message, parseMode);
+        if (ok) {
+          console.log(`[telegram] Alert (+media) sent to chat ${id}`);
+          continue;
+        }
+      }
       await bot.sendMessage(id, message, opts);
       console.log(`[telegram] Alert sent to chat ${id} (${message.length} chars)`);
     } catch (e) {
@@ -108,9 +184,26 @@ function registerChatFromTelegramMessage(chat) {
   }
 }
 
-// Inbound messages: only discover group/channel id for outbound alerts — never reply.
-bot.on("message", (msg) => {
+function getRegisteredChatIds() {
+  return [...alertChatIds].map(String);
+}
+
+bot.on("message", async (msg) => {
   registerChatFromTelegramMessage(msg.chat);
+
+  const text = (msg.text || "").trim();
+  if (msg.chat.type === "private") {
+    if (text === "/start" || text === "/settings") {
+      await settingsUi.handleSettingsStart(bot, msg, getRegisteredChatIds);
+      return;
+    }
+    const handled = await settingsUi.handlePrivateText(bot, msg);
+    if (handled) return;
+  }
+});
+
+bot.on("callback_query", async (query) => {
+  await settingsUi.handleSettingsCallback(bot, query, getRegisteredChatIds);
 });
 
 bot.on("my_chat_member", (ev) => {
@@ -175,12 +268,18 @@ const server = http.createServer(async (req, res) => {
 
     let msg = "";
     let parseMode;
+    let kindForMedia;
+    let mediaOverride = (json.mediaUrl || json.imageUrl || "").trim();
+
     if (typeof json.message === "string" && json.message) {
       msg = json.message;
     } else if (typeof json.text === "string" && json.text) {
       msg = json.text;
     } else if (typeof json.kind === "string" && json.kind) {
-      const { kind, ...fields } = json;
+      const { kind, mediaUrl, imageUrl, ...fields } = json;
+      kindForMedia = kind;
+      const inlineMedia = (mediaUrl || imageUrl || "").trim();
+      if (inlineMedia) mediaOverride = inlineMedia;
       msg = formatActivityMessage(kind, fields);
       parseMode = "HTML";
     }
@@ -195,7 +294,7 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     console.log("[bridge] /alert → forwarding to Telegram…");
-    await sendAlert(msg, parseMode);
+    await sendAlert(msg, parseMode, { kind: kindForMedia, mediaUrl: mediaOverride || undefined });
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ ok: true }));
   } catch (e) {
@@ -212,7 +311,7 @@ server.listen(BRIDGE_PORT, "127.0.0.1", () => {
       `  registered chats: ${alertChatIds.size}`
   );
   console.log(
-    "[telegram] Alerts-only bot: add to group (Send Messages), one message there registers chat. No replies to users."
+    "[telegram] Group admins: DM /start to configure per-group alert toggles + media. Bridge unchanged."
   );
 });
 

@@ -1,0 +1,289 @@
+/**
+ * DM /start + inline keyboards: per-group alert toggles and media URL prompts.
+ * Only Telegram group/channel admins (creator or administrator) for registered chats.
+ */
+const settings = require("./botSettings");
+
+/** @type {Map<number, { groupChatId: string, kind: string, expires: number }>} */
+const pendingMediaUrl = new Map();
+
+function clearExpiredPending() {
+  const now = Date.now();
+  for (const [uid, p] of pendingMediaUrl) {
+    if (p.expires < now) pendingMediaUrl.delete(uid);
+  }
+}
+
+async function isUserAdminOfChat(bot, groupChatId, userId) {
+  try {
+    const member = await bot.getChatMember(groupChatId, userId);
+    const s = member.status;
+    return s === "creator" || s === "administrator";
+  } catch {
+    return false;
+  }
+}
+
+async function listAdminGroups(bot, userId, registeredIds) {
+  const allowed = [];
+  for (const cid of registeredIds) {
+    if (await isUserAdminOfChat(bot, cid, userId)) {
+      allowed.push(cid);
+    }
+  }
+  return allowed;
+}
+
+async function groupPickerKeyboard(bot, registeredIds, userId) {
+  const allowed = await listAdminGroups(bot, userId, registeredIds);
+  const rows = [];
+  for (const cid of allowed) {
+    let title = String(cid);
+    try {
+      const ch = await bot.getChat(cid);
+      title = ch.title || ch.username || title;
+    } catch (_) {}
+    const label = title.length > 28 ? `${title.slice(0, 25)}…` : title;
+    rows.push([{ text: `📢 ${label}`, callback_data: `g|${cid}` }]);
+  }
+  return { allowed, keyboard: rows.length ? { inline_keyboard: rows } : null };
+}
+
+function groupMainKeyboard(chatId) {
+  const id = String(chatId);
+  const rows = [];
+  for (const kind of settings.KINDS) {
+    const on = settings.isAlertEnabled(id, kind);
+    const label = settings.KIND_LABELS[kind] || kind;
+    rows.push([
+      {
+        text: `${on ? "✅" : "⛔️"} ${label}`,
+        callback_data: `t|${id}|${kind}`,
+      },
+    ]);
+  }
+  rows.push([{ text: "🖼 Set media (by type)…", callback_data: `med|${id}` }]);
+  rows.push([{ text: "« All groups", callback_data: "home" }]);
+  return { inline_keyboard: rows };
+}
+
+function mediaPickKeyboard(chatId) {
+  const id = String(chatId);
+  const rows = [];
+  for (const kind of settings.KINDS) {
+    const has = settings.getMediaUrl(id, kind) ? " ✓" : "";
+    const label = settings.KIND_LABELS[kind] || kind;
+    rows.push([{ text: `📎 ${label}${has}`, callback_data: `u|${id}|${kind}` }]);
+  }
+  rows.push([{ text: "« Back to toggles", callback_data: `g|${id}` }]);
+  return { inline_keyboard: rows };
+}
+
+async function safeEdit(bot, chatId, messageId, text, replyMarkup) {
+  try {
+    await bot.editMessageText(text, {
+      chat_id: chatId,
+      message_id: messageId,
+      reply_markup: replyMarkup,
+    });
+  } catch (e) {
+    if (String(e?.message || "").includes("message is not modified")) return;
+    await bot.sendMessage(chatId, text, { reply_markup: replyMarkup });
+  }
+}
+
+/**
+ * @param {import('node-telegram-bot-api')} bot
+ * @param {() => string[]} getRegisteredChatIds
+ */
+async function handleSettingsStart(bot, msg, getRegisteredChatIds) {
+  if (msg.chat.type !== "private") {
+    await bot.sendMessage(
+      msg.chat.id,
+      "Open a private chat with this bot and send /start to configure alerts (group admins only)."
+    );
+    return true;
+  }
+  const userId = msg.from.id;
+  const registered = getRegisteredChatIds();
+  const { keyboard } = await groupPickerKeyboard(bot, registered, userId);
+  if (!keyboard) {
+    await bot.sendMessage(
+      msg.chat.id,
+      "No registered groups where you are an admin.\n\n" +
+        "1) Add this bot to your group\n" +
+        "2) Promote it to **admin** (needs to post messages)\n" +
+        "3) Send any message in that group so it registers\n" +
+        "4) Send /start here again",
+      { parse_mode: "Markdown" }
+    );
+    return true;
+  }
+  await bot.sendMessage(msg.chat.id, "Select a group to configure:", { reply_markup: keyboard });
+  return true;
+}
+
+/**
+ * @param {import('node-telegram-bot-api')} bot
+ * @param {import('node-telegram-bot-api').CallbackQuery} query
+ * @param {() => string[]} getRegisteredChatIds
+ */
+async function handleSettingsCallback(bot, query, getRegisteredChatIds) {
+  const data = (query.data || "").trim();
+  const msg = query.message;
+  const fromId = query.from?.id;
+  if (!msg || !fromId) {
+    await bot.answerCallbackQuery(query.id);
+    return;
+  }
+  const chatId = msg.chat.id;
+  const parts = data.split("|");
+  const action = parts[0];
+
+  if (action === "home") {
+    const registered = getRegisteredChatIds();
+    const { keyboard } = await groupPickerKeyboard(bot, registered, fromId);
+    if (!keyboard) {
+      await bot.answerCallbackQuery(query.id, { text: "No eligible groups" });
+      return;
+    }
+    await safeEdit(bot, chatId, msg.message_id, "Select a group to configure:", keyboard);
+    await bot.answerCallbackQuery(query.id);
+    return;
+  }
+
+  if (action === "g") {
+    const groupChatId = parts[1];
+    if (!groupChatId || !(await isUserAdminOfChat(bot, groupChatId, fromId))) {
+      await bot.answerCallbackQuery(query.id, { text: "Not allowed", show_alert: true });
+      return;
+    }
+    const title = await (async () => {
+      try {
+        const ch = await bot.getChat(groupChatId);
+        return ch.title || ch.username || groupChatId;
+      } catch {
+        return groupChatId;
+      }
+    })();
+    await safeEdit(
+      bot,
+      chatId,
+      msg.message_id,
+      `Settings for: ${title}\n\nTap to turn alert types ON/OFF. Use “Set media” to attach image/video URLs.`,
+      groupMainKeyboard(groupChatId)
+    );
+    await bot.answerCallbackQuery(query.id);
+    return;
+  }
+
+  if (action === "t") {
+    const groupChatId = parts[1];
+    const kind = parts[2];
+    if (!groupChatId || !kind || !(await isUserAdminOfChat(bot, groupChatId, fromId))) {
+      await bot.answerCallbackQuery(query.id, { text: "Not allowed", show_alert: true });
+      return;
+    }
+    const cur = settings.isAlertEnabled(groupChatId, kind);
+    settings.setAlertEnabled(groupChatId, kind, !cur);
+    const title = await (async () => {
+      try {
+        const ch = await bot.getChat(groupChatId);
+        return ch.title || ch.username || groupChatId;
+      } catch {
+        return groupChatId;
+      }
+    })();
+    await safeEdit(
+      bot,
+      chatId,
+      msg.message_id,
+      `Settings for: ${title}\n\nTap to turn alert types ON/OFF. Use “Set media” to attach image/video URLs.`,
+      groupMainKeyboard(groupChatId)
+    );
+    await bot.answerCallbackQuery(query.id, { text: !cur ? "Enabled" : "Disabled" });
+    return;
+  }
+
+  if (action === "med") {
+    const groupChatId = parts[1];
+    if (!groupChatId || !(await isUserAdminOfChat(bot, groupChatId, fromId))) {
+      await bot.answerCallbackQuery(query.id, { text: "Not allowed", show_alert: true });
+      return;
+    }
+    await safeEdit(
+      bot,
+      chatId,
+      msg.message_id,
+      "Pick an alert type, then send an **HTTPS** image or video URL in this chat.\n\nUse /cancel to abort.",
+      mediaPickKeyboard(groupChatId)
+    );
+    await bot.answerCallbackQuery(query.id);
+    return;
+  }
+
+  if (action === "u") {
+    const groupChatId = parts[1];
+    const kind = parts[2];
+    if (!groupChatId || !kind || !(await isUserAdminOfChat(bot, groupChatId, fromId))) {
+      await bot.answerCallbackQuery(query.id, { text: "Not allowed", show_alert: true });
+      return;
+    }
+    pendingMediaUrl.set(fromId, {
+      groupChatId,
+      kind,
+      expires: Date.now() + 10 * 60 * 1000,
+    });
+    const label = settings.KIND_LABELS[kind] || kind;
+    await bot.sendMessage(
+      chatId,
+      `Send a public **HTTPS** URL for media on **${label}** alerts in that group (image, or .mp4/.webm/.mov).\n\n/cancel to abort.`,
+      { parse_mode: "Markdown" }
+    );
+    await bot.answerCallbackQuery(query.id);
+    return;
+  }
+
+  await bot.answerCallbackQuery(query.id);
+}
+
+/**
+ * @returns {boolean} true if message was handled
+ */
+async function handlePrivateText(bot, msg) {
+  if (msg.chat.type !== "private") return false;
+  const text = (msg.text || "").trim();
+  const userId = msg.from.id;
+
+  if (text === "/cancel") {
+    if (pendingMediaUrl.delete(userId)) {
+      await bot.sendMessage(msg.chat.id, "Cancelled.");
+      return true;
+    }
+  }
+
+  clearExpiredPending();
+  const pend = pendingMediaUrl.get(userId);
+  if (!pend) return false;
+  if (!(await isUserAdminOfChat(bot, pend.groupChatId, userId))) {
+    pendingMediaUrl.delete(userId);
+    return false;
+  }
+
+  if (!/^https:\/\//i.test(text)) {
+    await bot.sendMessage(msg.chat.id, "Send a valid **https://** URL, or /cancel.", { parse_mode: "Markdown" });
+    return true;
+  }
+
+  settings.setMediaUrl(pend.groupChatId, pend.kind, text);
+  pendingMediaUrl.delete(userId);
+  const label = settings.KIND_LABELS[pend.kind] || pend.kind;
+  await bot.sendMessage(msg.chat.id, `Saved media URL for **${label}** in that group.`, { parse_mode: "Markdown" });
+  return true;
+}
+
+module.exports = {
+  handleSettingsStart,
+  handleSettingsCallback,
+  handlePrivateText,
+};
