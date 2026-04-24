@@ -74,17 +74,20 @@ if (OPTIONAL_SEED_CHAT_ID) {
 
 const bot = new TelegramBot(TOKEN, { polling: true });
 
-async function sendAlert(message) {
+/** @param {string|undefined} parseMode e.g. "HTML" for formatted kind-alerts; omit for plain {message} payloads */
+async function sendAlert(message, parseMode) {
   const unique = [...new Set([...alertChatIds].map(String))];
   if (unique.length === 0) {
     throw new Error(
       "No alert chats registered yet. Add the bot to a group with permission to send messages, then send any message in that group (or re-add the bot). Optional: set TELEGRAM_CHAT_ID once to seed."
     );
   }
+  const opts = { disable_web_page_preview: true };
+  if (parseMode) opts.parse_mode = parseMode;
   const errors = [];
   for (const id of unique) {
     try {
-      await bot.sendMessage(id, message, { disable_web_page_preview: true });
+      await bot.sendMessage(id, message, opts);
       console.log(`[telegram] Alert sent to chat ${id} (${message.length} chars)`);
     } catch (e) {
       const body = e?.response?.body;
@@ -190,7 +193,7 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     console.log("[bridge] /alert → forwarding to Telegram…");
-    await sendAlert(msg);
+    await sendAlert(msg, parseMode);
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ ok: true }));
   } catch (e) {

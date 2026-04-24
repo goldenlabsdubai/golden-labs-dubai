@@ -1,12 +1,45 @@
 /**
- * All Golden Labs Telegram alert copy lives here (wallet addresses only).
- * Backend only POSTs { kind, ...fields } to the bridge — no formatting on the server.
+ * Golden Labs Telegram alert copy — HTML for Telegram (links + labels).
+ * Explorer base: TELEGRAM_EXPLORER_BASE (default https://bscscan.com).
  */
+require("dotenv").config();
+
+function explorerBase() {
+  return (process.env.TELEGRAM_EXPLORER_BASE || "https://bscscan.com").trim().replace(/\/$/, "");
+}
+
+function escapeHtml(s) {
+  return String(s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
 
 function addr(a) {
   if (a == null || a === "") return "";
   const s = String(a).trim().toLowerCase();
   return s.startsWith("0x") ? s : s;
+}
+
+function shortAddr(a) {
+  const s = addr(a);
+  if (!s) return "—";
+  if (s.length <= 14) return s;
+  return `${s.slice(0, 6)}…${s.slice(-4)}`;
+}
+
+function linkAddress(a) {
+  const s = addr(a);
+  if (!s || !s.startsWith("0x")) return escapeHtml(shortAddr(a));
+  const url = `${explorerBase()}/address/${s}`;
+  return `<a href="${escapeHtml(url)}">${escapeHtml(shortAddr(s))}</a>`;
+}
+
+function linkTx(hash) {
+  const h = hash ? String(hash).trim().toLowerCase() : "";
+  if (!h.startsWith("0x")) return escapeHtml(h || "—");
+  const url = `${explorerBase()}/tx/${h}`;
+  return `<a href="${escapeHtml(url)}">${escapeHtml(`${h.slice(0, 6)}…${h.slice(-4)}`)}</a>`;
 }
 
 function formatUsdtFromWei6(weiStr) {
@@ -24,44 +57,51 @@ function formatUsdtFromWei6(weiStr) {
 /**
  * @param {"user_joined"|"subscription"|"mint"|"listed"|"bought"} kind
  * @param {Record<string, string|null|undefined>} fields
+ * @returns {string} Telegram HTML
  */
 function formatActivityMessage(kind, fields) {
   const lines = [];
   switch (kind) {
     case "user_joined":
-      lines.push("🔔 New user joined", `Address: ${addr(fields.address)}`);
+      lines.push("🔔 <b>New user joined</b>");
+      lines.push(`👤 <b>Wallet:</b> ${linkAddress(fields.address)}`);
       break;
     case "subscription":
-      lines.push("🔔 Subscription", `Address: ${addr(fields.address)}`);
-      if (fields.txHash) lines.push(`TX: ${fields.txHash}`);
+      lines.push("🔔 <b>Subscription</b>");
+      lines.push(`👤 <b>Wallet:</b> ${linkAddress(fields.address)}`);
+      if (fields.txHash) lines.push(`🔗 <b>TX:</b> ${linkTx(fields.txHash)}`);
       break;
     case "mint":
-      lines.push("🔔 NFT minted", `Address: ${addr(fields.address)}`);
-      if (fields.tokenId != null && fields.tokenId !== "") lines.push(`Token ID: ${fields.tokenId}`);
-      if (fields.txHash) lines.push(`TX: ${fields.txHash}`);
+      lines.push("🔔 <b>NFT minted</b>");
+      lines.push(`👤 <b>Wallet:</b> ${linkAddress(fields.address)}`);
+      if (fields.tokenId != null && fields.tokenId !== "") {
+        lines.push(`🖼 <b>Token ID:</b> ${escapeHtml(String(fields.tokenId))}`);
+      }
+      if (fields.txHash) lines.push(`🔗 <b>TX:</b> ${linkTx(fields.txHash)}`);
       break;
     case "listed":
+      lines.push("🔔 <b>NFT listed</b>");
+      lines.push(`🏪 <b>Seller:</b> ${linkAddress(fields.seller)}`);
+      lines.push(`🖼 <b>Token ID:</b> ${escapeHtml(fields.tokenId != null ? String(fields.tokenId) : "—")}`);
       lines.push(
-        "🔔 NFT listed",
-        `Seller: ${addr(fields.seller)}`,
-        `Token ID: ${fields.tokenId != null ? String(fields.tokenId) : "—"}`,
-        `Price: ${fields.priceWei != null ? formatUsdtFromWei6(String(fields.priceWei)) : "—"}`
+        `💵 <b>Price:</b> ${escapeHtml(fields.priceWei != null ? formatUsdtFromWei6(String(fields.priceWei)) : "—")}`
       );
       break;
     case "bought":
+      lines.push("🔔 <b>NFT bought</b>");
+      lines.push(`🛒 <b>Buyer:</b> ${linkAddress(fields.buyer)}`);
+      lines.push(`🏪 <b>Seller:</b> ${linkAddress(fields.seller)}`);
+      lines.push(`🖼 <b>Token ID:</b> ${escapeHtml(fields.tokenId != null ? String(fields.tokenId) : "—")}`);
       lines.push(
-        "🔔 NFT bought",
-        `Buyer: ${addr(fields.buyer)}`,
-        `Seller: ${addr(fields.seller)}`,
-        `Token ID: ${fields.tokenId != null ? String(fields.tokenId) : "—"}`,
-        `Price: ${fields.priceWei != null ? formatUsdtFromWei6(String(fields.priceWei)) : "—"}`
+        `💵 <b>Price:</b> ${escapeHtml(fields.priceWei != null ? formatUsdtFromWei6(String(fields.priceWei)) : "—")}`
       );
-      if (fields.txHash) lines.push(`TX: ${fields.txHash}`);
+      if (fields.txHash) lines.push(`🔗 <b>TX:</b> ${linkTx(fields.txHash)}`);
       break;
     default:
-      lines.push("🔔 Activity", JSON.stringify(fields));
+      lines.push("🔔 <b>Activity</b>");
+      lines.push(`<pre>${escapeHtml(JSON.stringify(fields))}</pre>`);
   }
   return lines.filter(Boolean).join("\n");
 }
 
-module.exports = { formatActivityMessage, addr, formatUsdtFromWei6 };
+module.exports = { formatActivityMessage, addr, formatUsdtFromWei6, escapeHtml, explorerBase };
