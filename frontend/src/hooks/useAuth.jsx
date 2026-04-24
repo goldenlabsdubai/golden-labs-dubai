@@ -32,8 +32,8 @@ export function AuthProvider({ children }) {
         const u = await r.json();
         setUser(u);
         localStorage.setItem(USER_KEY, JSON.stringify(u));
-      } else if (r.status === 401) {
-        // Stale or invalid token – clear session (no console error)
+      } else if (r.status === 401 || r.status === 404) {
+        // 401: bad token. 404: user row gone (e.g. DB wiped) while JWT still decodes — drop stale gl_user.
         localStorage.removeItem(TOKEN_KEY);
         localStorage.removeItem(USER_KEY);
         setToken(null);

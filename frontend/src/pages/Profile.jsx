@@ -221,7 +221,9 @@ export default function Profile() {
           });
         }
       }
-      if (user?.username?.trim()) {
+      // First-time profile completion: always follow server redirect (avoid stale closure on user.username after DB wipe / localStorage).
+      const hadUsernameBeforeSave = Boolean(user?.username?.trim());
+      if (hadUsernameBeforeSave) {
         setIsEditing(false);
       } else {
         const target = data.redirect ? `/${data.redirect}` : "/subscription";

@@ -169,6 +169,10 @@ router.get("/me", async (req, res) => {
         } else if (isSuspended) {
           updates.state = "SUSPENDED";
         } else {
+          // Subscribed + not suspended: align mint step with chain (new NFT deployment clears on-chain mint)
+          if (mintKnown && !hasMinted && user.state === "MINTED") {
+            updates.state = "SUBSCRIBED";
+          }
           if (early.includes(user.state)) updates.state = "SUBSCRIBED";
           if (
             mintKnown &&
