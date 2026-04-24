@@ -143,6 +143,8 @@ router.get("/me", async (req, res) => {
 
     /** USDT wei (6 decimals): cumulative seller trading income from recorded sales (matches Activity tab). */
     let totalTradeIncomeWei = "0";
+    /** For frontend routing: true/false when NFT read succeeded, null if unknown (avoid wrong /mint redirect). */
+    let meChainHasMinted = null;
 
     // Use connected wallet for on-chain check when frontend sends it and it matches signed-in user
     const userWallet = (user.wallet || req.wallet || "").toLowerCase();
@@ -158,6 +160,7 @@ router.get("/me", async (req, res) => {
       // Status is always read on-chain from Subscription contract using (connected) wallet address
       const { hasSubscribed, isSuspended, hasMinted, buyCount, subscriptionKnown, mintKnown } =
         await getOnChainUserStatus(walletForChain);
+      meChainHasMinted = mintKnown ? !!hasMinted : null;
       const updates = {};
       const early = ["CONNECTED", "REGISTERED", "PROFILE_SET"];
       const later = ["SUBSCRIBED", "MINTED", "ACTIVE_TRADER", "SUSPENDED"];
@@ -250,6 +253,8 @@ router.get("/me", async (req, res) => {
     const response = toMeResponse(userForResponse);
     if (response) {
       response.isAdmin = await isAdminWallet(req.wallet || user.wallet);
+      response.isBot = userWallet ? isConfiguredBotWallet(userWallet) : false;
+      response.hasMinted = meChainHasMinted;
       response.totalTradeIncomeWei = totalTradeIncomeWei;
     }
     res.json(response || {});
@@ -331,7 +336,7 @@ router.post("/profile", async (req, res) => {
     }
     if (userIsBot) redirect = "marketplace";
     res.json({
-      user: toMeResponse(userForResponse),
+      user: { ...toMeResponse(userForResponse), isBot: userIsBot },
       redirect,
     });
   } catch (e) {

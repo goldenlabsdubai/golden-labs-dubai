@@ -37,6 +37,10 @@ const USDT_ABI = [
   { name: "balanceOf", type: "function", stateMutability: "view", inputs: [{ name: "account", type: "address" }], outputs: [{ type: "uint256" }] },
 ];
 
+/** After approve confirms, persist so MetaMask / reload cannot strand the user without re-approving. */
+const LIST_RESUME_KEY = "gl_mp_list_resume";
+const LIST_RESUME_TTL_MS = 45 * 60 * 1000;
+
 export default function Marketplace() {
   const { user, token, refreshUser } = useAuth();
   const navigate = useNavigate();
@@ -61,6 +65,8 @@ export default function Marketplace() {
   const [listLayout, setListLayout] = useState("grid-3");
   const [portalReady, setPortalReady] = useState(false);
   const [insufficientBalanceType, setInsufficientBalanceType] = useState(null);
+  /** { tokenId, listPriceWei } after on-chain approve, if list tx still pending */
+  const [listResume, setListResume] = useState(null);
   const sortDropdownRef = useRef(null);
   const menuRef = useRef(null);
   const cardMenuRef = useRef(null);
@@ -117,6 +123,56 @@ export default function Marketplace() {
     setListingsLoading(true);
     Promise.all([fetchListingsLatest(), fetchMyAssetsLatest()]).finally(() => setListingsLoading(false));
   }, [token, user?.state]);
+
+  useEffect(() => {
+    if (!token) {
+      setListResume(null);
+      return;
+    }
+    try {
+      const raw = sessionStorage.getItem(LIST_RESUME_KEY);
+      if (!raw) {
+        setListResume(null);
+        return;
+      }
+      const p = JSON.parse(raw);
+      if (!p?.tokenId || p?.listPriceWei == null || !p?.at) {
+        sessionStorage.removeItem(LIST_RESUME_KEY);
+        setListResume(null);
+        return;
+      }
+      if (Date.now() - p.at > LIST_RESUME_TTL_MS) {
+        sessionStorage.removeItem(LIST_RESUME_KEY);
+        setListResume(null);
+        return;
+      }
+      setListResume({ tokenId: String(p.tokenId), listPriceWei: String(p.listPriceWei) });
+    } catch {
+      setListResume(null);
+    }
+  }, [token]);
+
+  useEffect(() => {
+    if (!listResume?.tokenId) return;
+    const match = myAssets.find((a) => String(a.tokenId) === String(listResume.tokenId));
+    if (match?.isListed) {
+      try {
+        sessionStorage.removeItem(LIST_RESUME_KEY);
+      } catch (_) {
+        /* ignore */
+      }
+      setListResume(null);
+    }
+  }, [myAssets, listResume?.tokenId]);
+
+  const clearListResume = () => {
+    try {
+      sessionStorage.removeItem(LIST_RESUME_KEY);
+    } catch (_) {
+      /* ignore */
+    }
+    setListResume(null);
+  };
 
   const refetchData = () => {
     fetchListingsLatest();
@@ -303,6 +359,19 @@ export default function Marketplace() {
         ),
       });
       await publicClient.waitForTransactionReceipt({ hash: hashApprove });
+      try {
+        sessionStorage.setItem(
+          LIST_RESUME_KEY,
+          JSON.stringify({
+            tokenId: String(tokenId),
+            listPriceWei: String(listPriceWei),
+            at: Date.now(),
+          })
+        );
+      } catch (_) {
+        /* sessionStorage unavailable */
+      }
+      setListResume({ tokenId: String(tokenId), listPriceWei: String(listPriceWei) });
       setListStep("list");
       const hashList = await writeContractAsync({
         address: marketplaceAddressNormalized,
@@ -322,6 +391,48 @@ export default function Marketplace() {
         ),
       });
       await publicClient.waitForTransactionReceipt({ hash: hashList });
+      clearListResume();
+      refetchData();
+    } catch (e) {
+      applyWalletTxError(e, {
+        setInsufficientBalanceType,
+        setError,
+        refetchUsdt: refetchUsdtBalance,
+        fallbackMessage: "List failed",
+      });
+    } finally {
+      setLoadingList(null);
+      setListStep(null);
+    }
+  };
+
+  const handleResumeListing = async () => {
+    if (!listResume || !marketplaceAddressNormalized || !publicClient || !writeContractAsync || !address) return;
+    const tokenId = listResume.tokenId;
+    const listPriceWei = listResume.listPriceWei;
+    setError("");
+    setLoadingList(tokenId);
+    setListStep("list");
+    try {
+      const hashList = await writeContractAsync({
+        address: marketplaceAddressNormalized,
+        abi: MARKETPLACE_ABI,
+        functionName: "list",
+        args: [BigInt(tokenId), BigInt(listPriceWei)],
+        gas: await safeGasLimit(
+          publicClient,
+          {
+            address: marketplaceAddressNormalized,
+            abi: MARKETPLACE_ABI,
+            functionName: "list",
+            args: [BigInt(tokenId), BigInt(listPriceWei)],
+            account: address,
+          },
+          DEFAULT_MARKETPLACE_LIST_GAS
+        ),
+      });
+      await publicClient.waitForTransactionReceipt({ hash: hashList });
+      clearListResume();
       refetchData();
     } catch (e) {
       applyWalletTxError(e, {
@@ -489,6 +600,26 @@ export default function Marketplace() {
 
         <main className="marketplace-page__main">
           {error && <p className="marketplace-page__error">{error}</p>}
+          {listResume && token && (
+            <div className="marketplace-page__resume-list" role="status">
+              <p>
+                <strong>Listing in progress:</strong> GLFA #{listResume.tokenId} — approve is on-chain. Complete the list step (no second approve needed).
+              </p>
+              <div className="marketplace-page__resume-list-actions">
+                <button
+                  type="button"
+                  className="marketplace-page__connect"
+                  onClick={handleResumeListing}
+                  disabled={Boolean(loadingList) || !address}
+                >
+                  {loadingList === listResume.tokenId && listStep === "list" ? "Confirm in wallet…" : "Complete listing"}
+                </button>
+                <button type="button" className="marketplace-page__wallet" onClick={clearListResume}>
+                  Dismiss
+                </button>
+              </div>
+            </div>
+          )}
           {token && ownedNotListed.length > 0 && (
             <section className="marketplace-page__owned">
               <h2 className="marketplace-page__owned-title">Your Assets</h2>

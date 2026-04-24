@@ -4304,6 +4304,28 @@ div.marketplace-page__nav-profile.marketplace-page__profile-icon-btn {
   text-align: center;
 }
 
+.marketplace-page__resume-list {
+  background: rgba(212, 175, 55, 0.12);
+  border: 1px solid rgba(212, 175, 55, 0.35);
+  border-radius: 10px;
+  padding: 0.85rem 1rem;
+  margin-bottom: 1rem;
+  font-size: 0.9rem;
+  color: var(--text);
+}
+
+.marketplace-page__resume-list p {
+  margin: 0 0 0.65rem 0;
+  line-height: 1.45;
+}
+
+.marketplace-page__resume-list-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+
 .marketplace-page__cta {
   font-size: 0.9rem;
   color: var(--text-muted);

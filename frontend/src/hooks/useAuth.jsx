@@ -1,12 +1,18 @@
-import { createContext, useContext, useState, useEffect, useCallback } from "react";
+import { createContext, useContext, useState, useEffect, useCallback, useRef } from "react";
 import { flushSync } from "react-dom";
 import { useAccount } from "wagmi";
 import { ethers } from "ethers";
 import { SiweMessage } from "siwe";
 import { API } from "../config";
+import { recordTradingGateIfEligible, clearTradingRouteGate } from "../utils/tradingRouteGate";
 
 const TOKEN_KEY = "gl_token";
 const USER_KEY = "gl_user";
+
+function responseLooksLikeApiJson(res) {
+  const ct = res.headers.get("content-type") || "";
+  return ct.includes("application/json");
+}
 /** Bump this string after DB wipes / contract redeploys to force-clear cached auth for all clients on next load. */
 const AUTH_STORAGE_VERSION_KEY = "gl_auth_storage_v";
 const AUTH_STORAGE_VERSION = "2";
@@ -36,35 +42,103 @@ export function AuthProvider({ children }) {
     }
   });
   const [loading, setLoading] = useState(false);
+  /** Bumps on each refresh start so stale / slower responses never clear the session after a newer refresh. */
+  const refreshGenRef = useRef(0);
 
   const refreshUser = useCallback(async () => {
-    const t = localStorage.getItem(TOKEN_KEY);
+    const readToken = () => {
+      try {
+        return localStorage.getItem(TOKEN_KEY);
+      } catch {
+        return null;
+      }
+    };
+
+    const buildHeaders = (t) => {
+      const headers = { Authorization: `Bearer ${t}` };
+      if (connectedWallet) headers["X-Connected-Wallet"] = connectedWallet;
+      return headers;
+    };
+
+    const gen = ++refreshGenRef.current;
+    const t = readToken();
     if (!t) return;
-    const headers = { Authorization: `Bearer ${t}` };
-    if (connectedWallet) headers["X-Connected-Wallet"] = connectedWallet;
+
+    const applyUser = (u) => {
+      setUser(u);
+      localStorage.setItem(USER_KEY, JSON.stringify(u));
+      if (u?.state === "SUSPENDED") clearTradingRouteGate();
+      else recordTradingGateIfEligible(u);
+    };
+
+    const clearSession = () => {
+      clearTradingRouteGate();
+      localStorage.removeItem(TOKEN_KEY);
+      localStorage.removeItem(USER_KEY);
+      flushSync(() => {
+        setToken(null);
+        setUser(null);
+      });
+    };
+
     try {
-      const r = await fetch(`${API}/user/me`, { headers });
+      let r = await fetch(`${API}/user/me`, { headers: buildHeaders(t) });
+      if (gen !== refreshGenRef.current) return;
+
       if (r.ok) {
         const u = await r.json();
-        setUser(u);
-        localStorage.setItem(USER_KEY, JSON.stringify(u));
-      } else if (r.status === 401 || r.status === 404) {
-        // 401: bad token. 404: user row gone (e.g. DB wiped) while JWT still decodes — drop stale gl_user.
-        localStorage.removeItem(TOKEN_KEY);
-        localStorage.removeItem(USER_KEY);
-        flushSync(() => {
-          setToken(null);
-          setUser(null);
-        });
+        if (gen !== refreshGenRef.current) return;
+        applyUser(u);
+        return;
+      }
+
+      if (r.status === 401 || r.status === 404) {
+        // MetaMask / mobile: transient proxy or timing — retry once before dropping session.
+        await new Promise((res) => setTimeout(res, 450));
+        if (gen !== refreshGenRef.current) return;
+        const t2 = readToken();
+        if (!t2 || t2 !== t) return;
+
+        r = await fetch(`${API}/user/me`, { headers: buildHeaders(t2) });
+        if (gen !== refreshGenRef.current) return;
+
+        if (r.ok) {
+          const u = await r.json();
+          if (gen !== refreshGenRef.current) return;
+          applyUser(u);
+          return;
+        }
+
+        // Avoid nuking login on HTML/error pages that return 401 (captive portals, CDN glitches).
+        if ((r.status === 401 || r.status === 404) && responseLooksLikeApiJson(r)) {
+          if (gen !== refreshGenRef.current) return;
+          if (readToken() !== t2) return;
+          clearSession();
+        }
       }
     } catch {
-      // Network error etc – avoid spamming console
+      // Network error — keep session
     }
   }, [connectedWallet]);
 
+  // Debounce: wallet address often flaps undefined→address while MetaMask handles a tx; avoids refresh storms and spurious logouts.
   useEffect(() => {
-    if (token) refreshUser();
+    if (!token) return;
+    const id = setTimeout(() => {
+      refreshUser();
+    }, 320);
+    return () => clearTimeout(id);
   }, [token, refreshUser, connectedWallet]);
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(USER_KEY);
+      if (!raw) return;
+      recordTradingGateIfEligible(JSON.parse(raw));
+    } catch {
+      /* ignore */
+    }
+  }, []);
 
   const connect = async () => {
     try {
@@ -101,6 +175,8 @@ export function AuthProvider({ children }) {
         setToken(data.token);
         setUser(data.user);
       });
+      if (data.user?.state === "SUSPENDED") clearTradingRouteGate();
+      else recordTradingGateIfEligible(data.user);
       return data.redirect;
     } catch (e) {
       console.error(e);
@@ -109,6 +185,7 @@ export function AuthProvider({ children }) {
   };
 
   const logout = useCallback(() => {
+    clearTradingRouteGate();
     localStorage.removeItem(TOKEN_KEY);
     localStorage.removeItem(USER_KEY);
     flushSync(() => {
@@ -124,6 +201,9 @@ export function AuthProvider({ children }) {
       setToken(newToken || null);
       setUser(newUser || null);
     });
+    if (!newToken && !newUser) clearTradingRouteGate();
+    else if (newUser?.state === "SUSPENDED") clearTradingRouteGate();
+    else if (newUser) recordTradingGateIfEligible(newUser);
   }, []);
 
   const value = { token, user, loading, connect, logout, refreshUser, setSession };

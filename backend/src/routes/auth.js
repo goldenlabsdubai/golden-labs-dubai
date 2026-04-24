@@ -222,6 +222,7 @@ router.post("/verify", async (req, res) => {
     const token = jwt.sign({ wallet }, JWT_SECRET, { expiresIn: "7d" });
     const userResponse = { wallet: user.wallet, username: user.username, state: user.state, referrer: user.referrer };
     if (await isAdminWallet(wallet)) userResponse.isAdmin = true;
+    if (isConfiguredBotWallet(wallet)) userResponse.isBot = true;
     res.json({
       token,
       user: userResponse,

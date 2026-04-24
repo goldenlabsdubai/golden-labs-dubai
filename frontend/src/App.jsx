@@ -3,6 +3,7 @@ import { Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { useAccount, useSwitchChain, useReconnect } from "wagmi";
 import "./App.css";
 import { useAuth } from "./hooks/useAuth";
+import { withTradingGateOverlay } from "./utils/tradingRouteGate";
 import ParticleNetwork from "./components/ParticleNetwork";
 import SupportChat from "./components/SupportChat";
 import MobileBottomNav from "./components/MobileBottomNav";
@@ -71,6 +72,9 @@ import UserProfile from "./pages/UserProfile";
  * Desktop and mobile use the same rules; `canAccessTradingNav` controls marketplace nav links.
  * Listing/buy DB sync (`/marketplace/record-purchase`, `/marketplace/my-listings`) re-checks
  * active subscription + mint on the server’s configured contracts (env addresses + RPC).
+ *
+ * Bots (`user.isBot`): skip subscription + mint pages; always use marketplace/trading routes.
+ * Re-subscribed users who already hold an NFT: `hasMinted` from /me is true → not sent back to /mint.
  */
 function ProtectedRoute({ children, require }) {
   const { token, user, loading, setSession } = useAuth();
@@ -104,26 +108,45 @@ function ProtectedRoute({ children, require }) {
   if (loading) return <div className="app-loading">Loading...</div>;
   if (!effectiveToken) return <Navigate to="/" replace />;
 
-  const active =
-    effectiveUser?.state === "SUBSCRIBED" || effectiveUser?.state === "MINTED" || effectiveUser?.state === "ACTIVE_TRADER";
-
-  // Suspended: only /subscription allowed; send to subscription for any other path
+  // Raw suspension always wins — never use optimistic overlay.
   if (effectiveUser?.state === "SUSPENDED") {
     if (require === "subscription") return children;
     return <Navigate to="/subscription" replace state={{ from: location.pathname }} />;
   }
 
+  /** Stabilizes route rules when /user/me briefly downgrades state during wallet/RPC activity. */
+  const gateUser = withTradingGateOverlay(effectiveUser);
+  const isBot = Boolean(gateUser?.isBot);
+
+  if (isBot && require === "subscription") {
+    return <Navigate to="/marketplace" replace />;
+  }
+  if (isBot && require === "mint") {
+    return <Navigate to="/marketplace" replace />;
+  }
+
+  const active =
+    isBot ||
+    gateUser?.state === "SUBSCRIBED" ||
+    gateUser?.state === "MINTED" ||
+    gateUser?.state === "ACTIVE_TRADER";
+
   // Not subscribed (and not suspended): profile then subscription; block mint + marketplace
   if (!active) {
-    if (!effectiveUser?.username && location.pathname !== "/profile") return <Navigate to="/profile" replace />;
+    if (!gateUser?.username && location.pathname !== "/profile") return <Navigate to="/profile" replace />;
     if (require === "profile") return children;
     if (require === "subscription") return children;
     // Trying to visit mint or marketplace without active subscription → subscription
     return <Navigate to="/subscription" replace state={{ from: location.pathname }} />;
   }
 
-  // Subscribed but not minted: block marketplace / dashboard / leaderboard → mint first
-  if (effectiveUser?.state === "SUBSCRIBED" && require === "marketplace") {
+  // First-time subscribe → mint before trading. Re-subscribe + already minted: hasMinted true or state not SUBSCRIBED-only gate.
+  const needsMintForTrading =
+    !isBot &&
+    gateUser?.state === "SUBSCRIBED" &&
+    gateUser?.hasMinted !== true;
+
+  if (needsMintForTrading && require === "marketplace") {
     return <Navigate to="/mint" replace state={{ from: location.pathname }} />;
   }
 
