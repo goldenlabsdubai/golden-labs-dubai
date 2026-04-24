@@ -6,10 +6,25 @@ import { API } from "../config";
 
 const TOKEN_KEY = "gl_token";
 const USER_KEY = "gl_user";
+/** Bump this string after DB wipes / contract redeploys to force-clear cached auth for all clients on next load. */
+const AUTH_STORAGE_VERSION_KEY = "gl_auth_storage_v";
+const AUTH_STORAGE_VERSION = "2";
+
+function applyAuthStorageMigration() {
+  try {
+    if (localStorage.getItem(AUTH_STORAGE_VERSION_KEY) === AUTH_STORAGE_VERSION) return;
+    localStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(USER_KEY);
+    localStorage.setItem(AUTH_STORAGE_VERSION_KEY, AUTH_STORAGE_VERSION);
+  } catch {
+    /* storage disabled */
+  }
+}
 
 const AuthContext = createContext(null);
 
 export function AuthProvider({ children }) {
+  applyAuthStorageMigration();
   const { address: connectedWallet } = useAccount();
   const [token, setToken] = useState(() => localStorage.getItem(TOKEN_KEY));
   const [user, setUser] = useState(() => {
