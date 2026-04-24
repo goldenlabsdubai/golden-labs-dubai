@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
-import { Link, useNavigate } from "react-router-dom";
+import { AppRouteLink } from "../components/AppRouteLink";
+import { assignAppPath } from "../utils/appNavigation";
 import { useAccount, useBalance, useDisconnect, useReadContract, useWriteContract, usePublicClient } from "wagmi";
 import { formatEther, formatUnits, parseUnits } from "viem";
 import { useAuth } from "../hooks/useAuth";
@@ -27,7 +28,6 @@ const SUBSCRIPTION_ABI = [
 export default function Subscription() {
   const { token, refreshUser, user } = useAuth();
   const isResubscribe = user?.state === "SUSPENDED";
-  const navigate = useNavigate();
   const { openModal, isConnected, address } = useWalletConnect();
   const { chainId } = useAccount();
   const { data: balanceData } = useBalance({ address: (address || (token && user?.wallet ? user.wallet : null)) ?? undefined });
@@ -79,7 +79,7 @@ export default function Subscription() {
   const handleDisconnect = () => {
     setAddressMenuOpen(false);
     disconnectWallet();
-    navigate("/", { replace: true });
+    assignAppPath("/");
   };
 
   useEffect(() => {
@@ -173,7 +173,7 @@ export default function Subscription() {
       if (!res.ok) throw new Error(data.error || "Confirm failed");
       await refreshUser();
       refetchUsdtBalance?.();
-      navigate("/mint");
+      assignAppPath("/mint");
     } catch (e) {
       applyWalletTxError(e, {
         setInsufficientBalanceType,
@@ -209,9 +209,9 @@ export default function Subscription() {
       {portalReady && portalContainer && createPortal(subscriptionBg, portalContainer)}
 
       <header className="profile-modern__header landing-v2__header">
-        <Link to="/" className="landing-v2__logo">
+        <AppRouteLink to="/" className="landing-v2__logo">
           Golden Labs
-        </Link>
+        </AppRouteLink>
         <div className="landing-v2__header-right">
           {displayAddress ? (
             <div className="landing-v2__address-wrap" ref={menuRef}>

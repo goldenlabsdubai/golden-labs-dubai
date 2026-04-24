@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
-import { Link, useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
+import { AppRouteLink } from "../components/AppRouteLink";
+import { assignAppPath } from "../utils/appNavigation";
 import { useBalance, useDisconnect, useWriteContract, usePublicClient, useWatchContractEvent, useReadContract } from "wagmi";
 import { formatEther, formatUnits } from "viem";
 import { useAuth } from "../hooks/useAuth";
@@ -43,7 +45,6 @@ const LIST_RESUME_TTL_MS = 45 * 60 * 1000;
 
 export default function Marketplace() {
   const { user, token, refreshUser } = useAuth();
-  const navigate = useNavigate();
   const { openModal, isConnected, address } = useWalletConnect();
   const { data: balanceData } = useBalance({ address: address ?? undefined });
   const { disconnect: disconnectWallet } = useDisconnect();
@@ -202,7 +203,11 @@ export default function Marketplace() {
   });
 
   const handleConnect = () => { if (openModal) openModal(); };
-  const handleDisconnect = () => { setAddressMenuOpen(false); disconnectWallet(); navigate("/", { replace: true }); };
+  const handleDisconnect = () => {
+    setAddressMenuOpen(false);
+    disconnectWallet();
+    assignAppPath("/");
+  };
   useEffect(() => {
     function handleClickOutside(e) {
       if (menuRef.current && !menuRef.current.contains(e.target)) setAddressMenuOpen(false);
@@ -532,19 +537,19 @@ export default function Marketplace() {
 
       <header className="marketplace-page__nav">
         <div className="marketplace-page__nav-left">
-          <Link to="/" className="marketplace-page__logo">Golden Labs</Link>
+          <AppRouteLink to="/" className="marketplace-page__logo">Golden Labs</AppRouteLink>
         </div>
         {canAccessTradingNav(user) && (
           <nav className="marketplace-page__links">
-            <Link to="/marketplace">Marketplace</Link>
-            <Link to="/leaderboard">Leaderboard</Link>
-            <Link to="/dashboard">My Dashboard</Link>
+            <AppRouteLink to="/marketplace">Marketplace</AppRouteLink>
+            <AppRouteLink to="/leaderboard">Leaderboard</AppRouteLink>
+            <AppRouteLink to="/dashboard">My Dashboard</AppRouteLink>
           </nav>
         )}
         <div className="marketplace-page__right" ref={menuRef}>
           {displayAddress ? (
             <>
-              <Link to="/profile" className="marketplace-page__nav-profile marketplace-page__profile-icon-btn" aria-label="Edit profile">
+              <AppRouteLink to="/profile" className="marketplace-page__nav-profile marketplace-page__profile-icon-btn" aria-label="Edit profile">
                 {user?.avatar && !avatarError ? (
                   <img src={getAvatarUrl(user.avatar)} alt="" className="marketplace-page__profile-icon-img" onError={() => setAvatarError(true)} />
                 ) : (
@@ -552,7 +557,7 @@ export default function Marketplace() {
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></svg>
                   </span>
                 )}
-              </Link>
+              </AppRouteLink>
               <button
                 type="button"
                 className="marketplace-page__wallet"
@@ -592,7 +597,7 @@ export default function Marketplace() {
                   <div><dt>Referrals</dt><dd>{user.totalReferrals ?? 0}</dd></div>
                   <div><dt>Earnings</dt><dd>${(Number(user.referralEarningsTotal || "0") / 1e6).toFixed(2)} USDT <img src="/USDT_BEP20.png" alt="" className="usdt-logo-inline" aria-hidden="true" /></dd></div>
                 </dl>
-                <Link to="/dashboard" className="marketplace-page__profile-card-link">My Dashboard</Link>
+                <AppRouteLink to="/dashboard" className="marketplace-page__profile-card-link">My Dashboard</AppRouteLink>
               </div>
             </div>
           )}

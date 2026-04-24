@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
-import { Link, useNavigate } from "react-router-dom";
+import { AppRouteLink } from "../components/AppRouteLink";
+import { assignAppPath } from "../utils/appNavigation";
 import { useAccount, useBalance, useDisconnect, useReadContract, useWriteContract, usePublicClient } from "wagmi";
 import { formatEther, formatUnits, getAddress, zeroAddress } from "viem";
 import { useAuth } from "../hooks/useAuth";
@@ -19,7 +20,6 @@ const REFERRAL_ABI = [
 
 export default function Profile() {
   const { user, token, setSession, refreshUser, connect, logout } = useAuth();
-  const navigate = useNavigate();
   const { openModal, isConnected, address } = useWalletConnect();
   const { chainId } = useAccount();
   const { disconnect: disconnectWallet } = useDisconnect();
@@ -70,7 +70,7 @@ export default function Profile() {
     setAddressMenuOpen(false);
     disconnectWallet();
     logout();
-    navigate("/", { replace: true });
+    assignAppPath("/");
   };
 
   useEffect(() => {
@@ -237,7 +237,7 @@ export default function Profile() {
         setIsEditing(false);
       } else {
         const target = data.redirect ? `/${data.redirect}` : "/subscription";
-        navigate(target, { replace: true });
+        assignAppPath(target);
       }
     } catch (e) {
       applyWalletTxError(e, {
@@ -287,14 +287,14 @@ export default function Profile() {
       {portalReady && portalContainer && createPortal(profileBg, portalContainer)}
 
       <header className="profile-modern__header landing-v2__header">
-        <Link to="/" className="landing-v2__logo">
+        <AppRouteLink to="/" className="landing-v2__logo">
           Golden Labs
-        </Link>
+        </AppRouteLink>
         {hasProfile && canAccessTradingNav(user) && (
           <nav className="marketplace-page__links" aria-label="Main">
-            <Link to="/marketplace">Marketplace</Link>
-            <Link to="/leaderboard">Leaderboard</Link>
-            <Link to="/dashboard">My Dashboard</Link>
+            <AppRouteLink to="/marketplace">Marketplace</AppRouteLink>
+            <AppRouteLink to="/leaderboard">Leaderboard</AppRouteLink>
+            <AppRouteLink to="/dashboard">My Dashboard</AppRouteLink>
           </nav>
         )}
         <div className="landing-v2__header-right">
@@ -392,11 +392,11 @@ export default function Profile() {
               {!canAccessTradingNav(user) && (
                 <div className="profile-modern__view-actions">
                   {user?.state === "SUBSCRIBED" ? (
-                    <button type="button" className="landing-v2__btn landing-v2__btn--primary profile-modern__submit" onClick={() => navigate("/mint")}>
+                    <button type="button" className="landing-v2__btn landing-v2__btn--primary profile-modern__submit" onClick={() => assignAppPath("/mint")}>
                       Continue to Mint
                     </button>
                   ) : (
-                    <button type="button" className="landing-v2__btn landing-v2__btn--primary profile-modern__submit" onClick={() => navigate("/subscription")}>
+                    <button type="button" className="landing-v2__btn landing-v2__btn--primary profile-modern__submit" onClick={() => assignAppPath("/subscription")}>
                       Continue
                     </button>
                   )}

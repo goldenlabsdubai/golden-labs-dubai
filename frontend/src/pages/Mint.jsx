@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
-import { Link, useNavigate } from "react-router-dom";
+import { AppRouteLink } from "../components/AppRouteLink";
+import { assignAppPath } from "../utils/appNavigation";
 import { useAccount, useBalance, useDisconnect, useReadContract, useWriteContract, usePublicClient } from "wagmi";
 import { formatEther, formatUnits, parseUnits } from "viem";
 import { useAuth } from "../hooks/useAuth";
@@ -22,7 +23,6 @@ const NFT_ABI = [
 ];
 export default function Mint() {
   const { token, refreshUser, user } = useAuth();
-  const navigate = useNavigate();
   const { openModal, isConnected, address } = useWalletConnect();
   const { chainId } = useAccount();
   const { data: balanceData } = useBalance({ address: address ?? undefined });
@@ -91,9 +91,9 @@ export default function Mint() {
   // Already minted → go to dashboard (don't stay on mint page)
   useEffect(() => {
     if (canAccessTradingNav(user)) {
-      navigate("/dashboard", { replace: true });
+      assignAppPath("/dashboard");
     }
-  }, [user?.state, navigate]);
+  }, [user?.state]);
 
   const displayAddress = address || (token && user?.wallet ? user.wallet : null) || null;
   const explorerUrl = chainId && EXPLORER_BY_CHAIN[chainId] && displayAddress
@@ -187,7 +187,7 @@ export default function Mint() {
       if (!res.ok) throw new Error(data.error || "Confirm failed");
       await refreshUser();
       refetchUsdtBalance?.();
-      navigate("/dashboard");
+      assignAppPath("/dashboard");
     } catch (e) {
       applyWalletTxError(e, {
         setInsufficientBalanceType,
@@ -230,7 +230,7 @@ export default function Mint() {
       {portalReady && portalContainer && createPortal(mintBg, portalContainer)}
 
       <header className="profile-modern__header landing-v2__header">
-        <Link to="/" className="landing-v2__logo">Golden Labs</Link>
+        <AppRouteLink to="/" className="landing-v2__logo">Golden Labs</AppRouteLink>
         <div className="landing-v2__header-right">
           {displayAddress ? (
             <div className="landing-v2__address-wrap" ref={menuRef}>

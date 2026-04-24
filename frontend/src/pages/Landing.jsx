@@ -1,6 +1,6 @@
 import { useState, useEffect, useLayoutEffect, useRef } from "react";
 import { createPortal } from "react-dom";
-import { useNavigate } from "react-router-dom";
+import { assignAppPath } from "../utils/appNavigation";
 import { useDisconnect } from "wagmi";
 import { useAuth } from "../hooks/useAuth";
 import { useWalletConnect } from "../hooks/useWalletConnect";
@@ -51,7 +51,6 @@ function AboutGoldenLabsSection() {
 }
 
 export default function Landing() {
-  const navigate = useNavigate();
   const { connect, token, user, setSession, refreshUser, logout } = useAuth();
   const { openModal, isConnected, address } = useWalletConnect();
   const { signIn, loading: signInLoading } = useSignInWithWallet();
@@ -94,14 +93,14 @@ export default function Landing() {
       .then((data) => {
         if (cancelled) return;
         const exists = data.exists === true;
-        if (!exists) navigate("/profile/setup", { replace: true });
+        if (!exists) assignAppPath("/profile/setup");
         else setWalletCheckExists(true);
       })
       .catch(() => {
         if (!cancelled) setWalletCheckExists(true);
       });
     return () => { cancelled = true; };
-  }, [isConnected, address, token, navigate]);
+  }, [isConnected, address, token]);
 
   const showContinueDisconnectPopup = Boolean(isConnected && address && !token && walletCheckExists === true);
   useEffect(() => {
@@ -212,7 +211,7 @@ export default function Landing() {
     try {
       const redirect = await connect();
       const seg = redirect && String(redirect).trim() ? String(redirect).replace(/^\/+/, "") : "profile";
-      navigate(`/${seg}`, { replace: true });
+      assignAppPath(`/${seg}`);
     } catch (e) {
       setError(getTransactionErrorMessage(e, "Connection failed"));
     } finally {
@@ -232,7 +231,7 @@ export default function Landing() {
       }
       setSession(data.token, data.user);
       const seg = data.redirect && String(data.redirect).trim() ? String(data.redirect).replace(/^\/+/, "") : "profile";
-      navigate(`/${seg}`, { replace: true });
+      assignAppPath(`/${seg}`);
     } catch (e) {
       setError(getTransactionErrorMessage(e, "Sign in failed"));
       setPopupContinueClicked(false);
@@ -253,23 +252,23 @@ export default function Landing() {
     if (!user.username) {
       ctaLabel = "Complete profile";
       ctaLoading = false;
-      ctaOnClick = () => navigate("/profile");
+      ctaOnClick = () => assignAppPath("/profile");
     } else if (user.state === "SUSPENDED") {
       ctaLabel = "Resubscribe";
       ctaLoading = false;
-      ctaOnClick = () => navigate("/subscription");
+      ctaOnClick = () => assignAppPath("/subscription");
     } else if (!["SUBSCRIBED", "MINTED", "ACTIVE_TRADER"].includes(user.state ?? "")) {
       ctaLabel = "Proceed to subscription";
       ctaLoading = false;
-      ctaOnClick = () => navigate("/subscription");
+      ctaOnClick = () => assignAppPath("/subscription");
     } else if (user.state === "SUBSCRIBED") {
       ctaLabel = "Mint asset";
       ctaLoading = false;
-      ctaOnClick = () => navigate("/mint");
+      ctaOnClick = () => assignAppPath("/mint");
     } else {
       ctaLabel = "Go to Marketplace";
       ctaLoading = false;
-      ctaOnClick = () => navigate("/marketplace");
+      ctaOnClick = () => assignAppPath("/marketplace");
     }
   } else if (isConnected && address && !token) {
     ctaLabel = "Wallet connected";
@@ -412,7 +411,7 @@ export default function Landing() {
                       <div className="landing-v2__nft-card-image" style={{ backgroundImage: 'url("/gldass.png")', backgroundSize: "cover", backgroundPosition: "center" }} />
                       <h3 className="landing-v2__nft-card-title">GLFA #{l.tokenId}</h3>
                       <p className="landing-v2__nft-card-price">{l.priceFormatted || (Number(l.price) / 1e6).toFixed(0) + " USDT"}</p>
-                      <button type="button" className="landing-v2__btn landing-v2__btn--primary landing-v2__btn--sm" onClick={() => navigate("/marketplace")}>Buy Now</button>
+                      <button type="button" className="landing-v2__btn landing-v2__btn--primary landing-v2__btn--sm" onClick={() => assignAppPath("/marketplace")}>Buy Now</button>
                     </div>
                   ));
                 })()}
@@ -529,7 +528,7 @@ export default function Landing() {
                             <div className="landing-v2__nft-card-image" style={{ backgroundImage: 'url("/gldass.png")', backgroundSize: "cover", backgroundPosition: "center" }} />
                             <h3 className="landing-v2__nft-card-title">GLFA #{l.tokenId}</h3>
                             <p className="landing-v2__nft-card-price">{l.priceFormatted || (Number(l.price) / 1e6).toFixed(0) + " USDT"}</p>
-                            <button type="button" className="landing-v2__btn landing-v2__btn--primary landing-v2__btn--sm" onClick={() => navigate("/marketplace")}>Buy Now</button>
+                            <button type="button" className="landing-v2__btn landing-v2__btn--primary landing-v2__btn--sm" onClick={() => assignAppPath("/marketplace")}>Buy Now</button>
                           </div>
                         ));
                       })()}

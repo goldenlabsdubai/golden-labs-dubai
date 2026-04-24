@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
-import { Link, useParams } from "react-router-dom";
+import { useParams } from "react-router-dom";
+import { AppRouteLink } from "../components/AppRouteLink";
 import { API, getAvatarUrl } from "../config";
 
 /** Turn handle or full URL into clickable URL for X or Telegram. */
@@ -55,7 +56,7 @@ export default function UserProfile() {
     return (
       <div className="user-profile user-profile--loading">
         <header className="user-profile__nav">
-          <Link to="/marketplace" className="user-profile__logo">Golden Labs</Link>
+          <AppRouteLink to="/marketplace" className="user-profile__logo">Golden Labs</AppRouteLink>
         </header>
         <div className="user-profile__content">
           <p className="user-profile__loading">Loading profile…</p>
@@ -68,11 +69,11 @@ export default function UserProfile() {
     return (
       <div className="user-profile">
         <header className="user-profile__nav">
-          <Link to="/marketplace" className="user-profile__logo">Golden Labs</Link>
+          <AppRouteLink to="/marketplace" className="user-profile__logo">Golden Labs</AppRouteLink>
         </header>
         <div className="user-profile__content">
           <p className="user-profile__error">{error || "User not found"}</p>
-          <Link to="/marketplace" className="user-profile__back">Back to Marketplace</Link>
+          <AppRouteLink to="/marketplace" className="user-profile__back">Back to Marketplace</AppRouteLink>
         </div>
       </div>
     );
@@ -81,11 +82,11 @@ export default function UserProfile() {
   return (
     <div className="user-profile">
       <header className="user-profile__nav">
-        <Link to="/marketplace" className="user-profile__logo">Golden Labs</Link>
+        <AppRouteLink to="/marketplace" className="user-profile__logo">Golden Labs</AppRouteLink>
         <nav className="user-profile__links">
-          <Link to="/marketplace">Marketplace</Link>
-          <Link to="/leaderboard">Leaderboard</Link>
-          <Link to="/dashboard">My Dashboard</Link>
+          <AppRouteLink to="/marketplace">Marketplace</AppRouteLink>
+          <AppRouteLink to="/leaderboard">Leaderboard</AppRouteLink>
+          <AppRouteLink to="/dashboard">My Dashboard</AppRouteLink>
         </nav>
       </header>
 
@@ -137,7 +138,7 @@ export default function UserProfile() {
             </span>
           )}
         </div>
-        <Link to="/marketplace" className="user-profile__back">View Marketplace</Link>
+        <AppRouteLink to="/marketplace" className="user-profile__back">View Marketplace</AppRouteLink>
       </div>
 
       <footer className="user-profile__footer">

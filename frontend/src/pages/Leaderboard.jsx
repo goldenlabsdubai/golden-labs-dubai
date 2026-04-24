@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
-import { Link } from "react-router-dom";
+import { AppRouteLink } from "../components/AppRouteLink";
 import { useDisconnect } from "wagmi";
 import { useAuth } from "../hooks/useAuth";
 import { useWalletConnect } from "../hooks/useWalletConnect";
@@ -75,19 +75,19 @@ export default function Leaderboard() {
 
       <header className="marketplace-page__nav">
         <div className="marketplace-page__nav-left">
-          <Link to="/" className="marketplace-page__logo">Golden Labs</Link>
+          <AppRouteLink to="/" className="marketplace-page__logo">Golden Labs</AppRouteLink>
         </div>
         {canAccessTradingNav(user) && (
           <nav className="marketplace-page__links">
-            <Link to="/marketplace">Marketplace</Link>
-            <Link to="/leaderboard">Leaderboard</Link>
-            <Link to="/dashboard">My Dashboard</Link>
+            <AppRouteLink to="/marketplace">Marketplace</AppRouteLink>
+            <AppRouteLink to="/leaderboard">Leaderboard</AppRouteLink>
+            <AppRouteLink to="/dashboard">My Dashboard</AppRouteLink>
           </nav>
         )}
         <div className="marketplace-page__right" ref={menuRef}>
           {displayAddress ? (
             <>
-              <Link to="/profile" className="marketplace-page__nav-profile marketplace-page__profile-icon-btn" aria-label="Edit profile">
+              <AppRouteLink to="/profile" className="marketplace-page__nav-profile marketplace-page__profile-icon-btn" aria-label="Edit profile">
                 {user?.avatar && !avatarError ? (
                   <img src={getAvatarUrl(user.avatar)} alt="" className="marketplace-page__profile-icon-img" onError={() => setAvatarError(true)} />
                 ) : (
@@ -95,7 +95,7 @@ export default function Leaderboard() {
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></svg>
                   </span>
                 )}
-              </Link>
+              </AppRouteLink>
               <button
                 type="button"
                 className="marketplace-page__wallet"

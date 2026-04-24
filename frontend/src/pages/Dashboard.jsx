@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
-import { Link, useNavigate } from "react-router-dom";
+import { AppRouteLink } from "../components/AppRouteLink";
+import { assignAppPath } from "../utils/appNavigation";
 import { useAccount, useBalance, useDisconnect, useReadContract, useWriteContract, usePublicClient, useWatchContractEvent } from "wagmi";
 import { formatEther, formatUnits } from "viem";
 import { useAuth } from "../hooks/useAuth";
@@ -46,7 +47,6 @@ const TABS = ["Owned", "Referral earnings", "Activity"];
 
 export default function Dashboard() {
   const { user, token, refreshUser } = useAuth();
-  const navigate = useNavigate();
   const { openModal, isConnected, address } = useWalletConnect();
   const { chainId } = useAccount();
   const { data: balanceData } = useBalance({ address: address ?? undefined });
@@ -281,7 +281,11 @@ export default function Dashboard() {
   });
 
   const handleConnect = () => { if (openModal) openModal(); };
-  const handleDisconnect = () => { setAddressMenuOpen(false); disconnectWallet(); navigate("/", { replace: true }); };
+  const handleDisconnect = () => {
+    setAddressMenuOpen(false);
+    disconnectWallet();
+    assignAppPath("/");
+  };
   useEffect(() => {
     function handleClickOutside(e) {
       if (menuRef.current && !menuRef.current.contains(e.target)) setAddressMenuOpen(false);
@@ -554,13 +558,13 @@ export default function Dashboard() {
 
       <header className="marketplace-page__nav">
         <div className="marketplace-page__nav-left">
-          <Link to="/" className="marketplace-page__logo">Golden Labs</Link>
+          <AppRouteLink to="/" className="marketplace-page__logo">Golden Labs</AppRouteLink>
         </div>
         {canAccessTradingNav(user) && (
           <nav className="marketplace-page__links">
-            <Link to="/marketplace">Marketplace</Link>
-            <Link to="/leaderboard">Leaderboard</Link>
-            <Link to="/dashboard">My Dashboard</Link>
+            <AppRouteLink to="/marketplace">Marketplace</AppRouteLink>
+            <AppRouteLink to="/leaderboard">Leaderboard</AppRouteLink>
+            <AppRouteLink to="/dashboard">My Dashboard</AppRouteLink>
           </nav>
         )}
         <div className="marketplace-page__right" ref={menuRef}>
@@ -620,12 +624,12 @@ export default function Dashboard() {
                   <h1 className="profile-hub__name">
                     {user?.username || user?.name || "Unnamed"}
                   </h1>
-                  <Link to="/profile" className="profile-hub__edit-profile-link" aria-label="Edit profile" title="Edit profile">
+                  <AppRouteLink to="/profile" className="profile-hub__edit-profile-link" aria-label="Edit profile" title="Edit profile">
                     <svg className="profile-hub__edit-profile-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                       <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
                       <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
                     </svg>
-                  </Link>
+                  </AppRouteLink>
                 </div>
                 {(user?.xUrl || user?.telegramUrl) && (
                   <div className="profile-hub__social profile-hub__social--in-card">
@@ -827,7 +831,7 @@ export default function Dashboard() {
             {activeTab === "Owned" && !ownedAssetsLoading && isEmpty && (
               <div className="profile-hub__empty">
                 <p className="profile-hub__empty-title">You own no assets</p>
-                <Link to="/marketplace" className="profile-hub__refresh">Go to Marketplace</Link>
+                <AppRouteLink to="/marketplace" className="profile-hub__refresh">Go to Marketplace</AppRouteLink>
               </div>
             )}
             {showOwnedGrid && (

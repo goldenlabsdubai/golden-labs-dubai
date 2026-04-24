@@ -1,6 +1,7 @@
-import { NavLink, useLocation } from "react-router-dom";
+import { useLocation } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
 import { canAccessTradingNav } from "../utils/tradingAccess";
+import { AppRouteLink } from "./AppRouteLink";
 
 function IconHome() {
   return (
@@ -88,7 +89,7 @@ export default function MobileBottomNav() {
   return (
     <nav className="app-mobile-nav" aria-label="Main navigation">
       {tabs.map(({ to, end, label, Icon }) => (
-        <NavLink
+        <AppRouteLink
           key={to + (end ? "-root" : "")}
           to={to}
           end={Boolean(end)}
@@ -96,7 +97,7 @@ export default function MobileBottomNav() {
         >
           <Icon />
           <span className="app-mobile-nav__label">{label}</span>
-        </NavLink>
+        </AppRouteLink>
       ))}
     </nav>
   );
