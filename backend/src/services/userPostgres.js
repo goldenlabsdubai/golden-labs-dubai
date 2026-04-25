@@ -79,15 +79,16 @@ export async function getUserByWallet(wallet) {
 }
 
 const REF_NETWORK_MAX_L1 = 80;
-const REF_NETWORK_MAX_L2_PER_PARENT = 60;
+/** Max direct children stored per node per level (extra count exposed as moreChildren). */
+const REF_NETWORK_MAX_CHILDREN_PER_NODE = 60;
 
 /**
- * Downline graph for referral tree UI: direct refs (L1) and their invites (L2), keyed by parent wallet.
- * Wallets normalized to lowercase. Respects caps; client can compare to aggregate referralCountL* if needed.
+ * Downline tree for referral UI: L1 array, each node has nested `children` through L10 (by referrer).
+ * Wallets normalized to lowercase. One query per depth wave; caps + optional moreChildren on each node.
  */
 export async function getReferralDownlineGraph(viewerWallet) {
   const root = docIdWallet(viewerWallet);
-  if (!root) return { l1: [], l2ByParent: {} };
+  if (!root) return { l1: [] };
 
   const { rows: l1rows } = await query(
     `SELECT wallet, username, avatar FROM users
@@ -101,38 +102,58 @@ export async function getReferralDownlineGraph(viewerWallet) {
     wallet: (r.wallet || "").toLowerCase(),
     username: r.username ?? null,
     avatar: r.avatar ?? null,
+    children: [],
   }));
 
   if (l1.length === 0) {
-    return { l1: [], l2ByParent: {} };
+    return { l1: [] };
   }
 
-  const parentWallets = l1.map((u) => u.wallet);
-  const { rows: l2rows } = await query(
-    `SELECT wallet, username, avatar, referrer FROM users
-     WHERE referrer IS NOT NULL AND LOWER(TRIM(referrer)) = ANY($1::text[])
-     ORDER BY created_at ASC NULLS LAST`,
-    [parentWallets]
-  );
+  let frontier = l1;
 
-  /** @type {Record<string, Array<{ wallet: string, username: string | null, avatar: string | null }>>} */
-  const l2ByParent = {};
-  for (const w of parentWallets) {
-    l2ByParent[w] = [];
+  for (let nextLevel = 2; nextLevel <= 10; nextLevel++) {
+    const parents = frontier.map((n) => n.wallet);
+    if (parents.length === 0) break;
+
+    const { rows: childRows } = await query(
+      `SELECT wallet, username, avatar, referrer FROM users
+       WHERE referrer IS NOT NULL AND LOWER(TRIM(referrer)) = ANY($1::text[])
+       ORDER BY LOWER(TRIM(referrer)) ASC, created_at ASC NULLS LAST`,
+      [parents]
+    );
+
+    const byParent = Object.create(null);
+    const countByParent = Object.create(null);
+    for (const w of parents) {
+      byParent[w] = [];
+      countByParent[w] = 0;
+    }
+
+    for (const r of childRows) {
+      const p = docIdWallet(r.referrer);
+      if (!p || !byParent[p]) continue;
+      countByParent[p]++;
+      if (byParent[p].length >= REF_NETWORK_MAX_CHILDREN_PER_NODE) continue;
+      byParent[p].push({
+        wallet: (r.wallet || "").toLowerCase(),
+        username: r.username ?? null,
+        avatar: r.avatar ?? null,
+        children: [],
+      });
+    }
+
+    const nextFrontier = [];
+    for (const node of frontier) {
+      const kids = byParent[node.wallet];
+      const total = countByParent[node.wallet] || 0;
+      node.children = kids;
+      if (total > kids.length) node.moreChildren = total - kids.length;
+      nextFrontier.push(...kids);
+    }
+    frontier = nextFrontier;
   }
 
-  for (const r of l2rows) {
-    const p = docIdWallet(r.referrer);
-    if (!p || !l2ByParent[p]) continue;
-    if (l2ByParent[p].length >= REF_NETWORK_MAX_L2_PER_PARENT) continue;
-    l2ByParent[p].push({
-      wallet: (r.wallet || "").toLowerCase(),
-      username: r.username ?? null,
-      avatar: r.avatar ?? null,
-    });
-  }
-
-  return { l1, l2ByParent };
+  return { l1 };
 }
 
 export async function getUserByFirebaseUid(uid) {
