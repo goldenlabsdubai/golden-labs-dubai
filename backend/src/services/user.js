@@ -6,6 +6,9 @@ import * as UserPg from "./userPostgres.js";
 export async function getUserByWallet(wallet) {
   return UserPg.getUserByWallet(wallet);
 }
+export async function getReferralDownlineGraph(wallet) {
+  return UserPg.getReferralDownlineGraph(wallet);
+}
 export async function getUserByFirebaseUid(uid) {
   return UserPg.getUserByFirebaseUid(uid);
 }

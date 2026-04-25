@@ -38,6 +38,18 @@ function upperLevelsZero(refUser) {
   return true;
 }
 
+/** L1 list + L2 children per parent (for dashboard tree). Auth: viewer only sees own downline. */
+router.get("/network", async (req, res) => {
+  try {
+    const user = await User.getUser(req);
+    if (!user?.wallet) return res.status(404).json({ error: "User not found" });
+    const graph = await User.getReferralDownlineGraph(user.wallet);
+    res.json(graph);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 router.get("/info", (_, res) => {
   const withdrawChunkWei = String(REFERRAL_WITHDRAW_CHUNK_WEI || "10000000");
   let withdrawChunkUsdt = 10;

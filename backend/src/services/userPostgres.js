@@ -78,6 +78,63 @@ export async function getUserByWallet(wallet) {
   return rows[0] ? rowToUser(rows[0]) : null;
 }
 
+const REF_NETWORK_MAX_L1 = 80;
+const REF_NETWORK_MAX_L2_PER_PARENT = 60;
+
+/**
+ * Downline graph for referral tree UI: direct refs (L1) and their invites (L2), keyed by parent wallet.
+ * Wallets normalized to lowercase. Respects caps; client can compare to aggregate referralCountL* if needed.
+ */
+export async function getReferralDownlineGraph(viewerWallet) {
+  const root = docIdWallet(viewerWallet);
+  if (!root) return { l1: [], l2ByParent: {} };
+
+  const { rows: l1rows } = await query(
+    `SELECT wallet, username, avatar FROM users
+     WHERE referrer IS NOT NULL AND LOWER(TRIM(referrer)) = $1
+     ORDER BY created_at ASC NULLS LAST
+     LIMIT $2`,
+    [root, REF_NETWORK_MAX_L1]
+  );
+
+  const l1 = l1rows.map((r) => ({
+    wallet: (r.wallet || "").toLowerCase(),
+    username: r.username ?? null,
+    avatar: r.avatar ?? null,
+  }));
+
+  if (l1.length === 0) {
+    return { l1: [], l2ByParent: {} };
+  }
+
+  const parentWallets = l1.map((u) => u.wallet);
+  const { rows: l2rows } = await query(
+    `SELECT wallet, username, avatar, referrer FROM users
+     WHERE referrer IS NOT NULL AND LOWER(TRIM(referrer)) = ANY($1::text[])
+     ORDER BY created_at ASC NULLS LAST`,
+    [parentWallets]
+  );
+
+  /** @type {Record<string, Array<{ wallet: string, username: string | null, avatar: string | null }>>} */
+  const l2ByParent = {};
+  for (const w of parentWallets) {
+    l2ByParent[w] = [];
+  }
+
+  for (const r of l2rows) {
+    const p = docIdWallet(r.referrer);
+    if (!p || !l2ByParent[p]) continue;
+    if (l2ByParent[p].length >= REF_NETWORK_MAX_L2_PER_PARENT) continue;
+    l2ByParent[p].push({
+      wallet: (r.wallet || "").toLowerCase(),
+      username: r.username ?? null,
+      avatar: r.avatar ?? null,
+    });
+  }
+
+  return { l1, l2ByParent };
+}
+
 export async function getUserByFirebaseUid(uid) {
   if (!uid) return null;
   const { rows } = await query("SELECT * FROM users WHERE firebase_uid = $1", [uid]);
