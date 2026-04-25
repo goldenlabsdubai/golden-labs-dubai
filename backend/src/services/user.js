@@ -42,6 +42,9 @@ export async function setReferralEarningsTotalAtLeast(wallet, amount) {
 export async function setReferralEarningsL1AtLeast(wallet, amount) {
   return UserPg.setReferralEarningsL1AtLeast(wallet, amount);
 }
+export async function incrementReferralEarningsLevelOnly(wallet, level, amount) {
+  return UserPg.incrementReferralEarningsLevelOnly(wallet, level, amount);
+}
 export async function logActivity(wallet, type, data) {
   return UserPg.logActivity(wallet, type, data);
 }

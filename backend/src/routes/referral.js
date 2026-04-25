@@ -114,6 +114,22 @@ router.get("/stats", async (req, res) => {
       }
     }
 
+    // Lifetime total can exceed sum(L1..L10) when total was synced from chain but L1 was not
+    // (setReferralEarningsL1AtLeast only runs for onlyL1Referrals — false if any L2+ ref counts exist).
+    const sumLevels = sumEarningsByLevel(refUser);
+    const lifetimeBig = BigInt(refUser.referralEarningsTotal ?? "0");
+    if (wallet && lifetimeBig > sumLevels && upperLevelsZero(refUser)) {
+      const delta = (lifetimeBig - sumLevels).toString();
+      await User.incrementReferralEarningsLevelOnly(wallet, 1, delta);
+      const updated = await User.getUserByWallet(wallet);
+      if (updated) {
+        refUser.referralEarningsTotal = updated.referralEarningsTotal ?? "0";
+        for (let lvl = 1; lvl <= REFERRAL_LEVELS; lvl++) {
+          refUser[`referralEarningsL${lvl}`] = updated[`referralEarningsL${lvl}`] ?? "0";
+        }
+      }
+    }
+
     const earningsOut = {};
     for (let lvl = 1; lvl <= REFERRAL_LEVELS; lvl++) {
       earningsOut[`referralEarningsL${lvl}`] = String(refUser[`referralEarningsL${lvl}`] ?? "0");

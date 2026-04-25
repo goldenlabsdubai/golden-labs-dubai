@@ -377,6 +377,20 @@ export async function setReferralEarningsL1AtLeast(wallet, amount) {
   await query("UPDATE users SET referral_earnings_l1 = $1, last_activity = NOW() WHERE id = $2", [amountStr, id]);
 }
 
+/** Add to referral_earnings_l{level} only (does not change referral_earnings_total). Used to align per-level rows with lifetime total. */
+export async function incrementReferralEarningsLevelOnly(referrerWallet, level, amount) {
+  if (!referrerWallet || level < 1 || level > 10) return;
+  const docId = docIdWallet(referrerWallet);
+  if (!docId) return;
+  const delta = typeof amount === "bigint" ? amount.toString() : String(amount || "0");
+  if (BigInt(delta || "0") <= 0n) return;
+  const col = `referral_earnings_l${level}`;
+  await query(
+    `UPDATE users SET ${col} = (COALESCE(users.${col}, '0')::numeric + $1::numeric)::text, last_activity = NOW() WHERE id = $2`,
+    [delta, docId]
+  );
+}
+
 function normalizeTxHash(v) {
   const s = typeof v === "string" ? v.trim().toLowerCase() : "";
   return s && s.startsWith("0x") ? s : "";
