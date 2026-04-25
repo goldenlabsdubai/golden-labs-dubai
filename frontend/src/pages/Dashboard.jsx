@@ -21,6 +21,7 @@ import {
 } from "../utils/safeContractGas";
 import NFTMedia from "../components/NFTMedia";
 import InsufficientBalanceModal from "../components/InsufficientBalanceModal";
+import ReferralPyramidTree from "../components/ReferralPyramidTree";
 
 const NFT_ABI = [
   { name: "approve", type: "function", stateMutability: "nonpayable", inputs: [{ name: "to", type: "address" }, { name: "tokenId", type: "uint256" }], outputs: [] },
@@ -66,6 +67,7 @@ export default function Dashboard() {
   const [error, setError] = useState("");
   const [addressMenuOpen, setAddressMenuOpen] = useState(false);
   const [referralStats, setReferralStats] = useState(null);
+  const [referralNetwork, setReferralNetwork] = useState(null);
   const [referralLinkCopied, setReferralLinkCopied] = useState(false);
   const [avatarError, setAvatarError] = useState(false);
   const [openMenuTokenId, setOpenMenuTokenId] = useState(null);
@@ -202,6 +204,22 @@ export default function Dashboard() {
       .then((data) => setReferralStats(data))
       .catch(() => setReferralStats(null));
   }, [token]);
+  useEffect(() => {
+    if (!token) {
+      setReferralNetwork(null);
+      return;
+    }
+    fetch(`${API}/referral/network`, { headers: { Authorization: `Bearer ${token}` } })
+      .then((r) => r.json())
+      .then((data) => {
+        if (data && Array.isArray(data.l1)) {
+          setReferralNetwork(data);
+        } else {
+          setReferralNetwork(null);
+        }
+      })
+      .catch(() => setReferralNetwork(null));
+  }, [token, user?.wallet, user?.totalReferrals]);
 
   const ACTIVITY_PAGE_SIZE = 10;
   const fetchActivities = () => {
@@ -906,7 +924,7 @@ export default function Dashboard() {
             )}
             {showReferralEarnings && (
               <div className="profile-hub__referral-inline">
-                <h2 className="profile-hub__referral-title">Referral</h2>
+                <h2 className="profile-hub__referral-title profile-hub__heading-accent">Referral</h2>
                 {user?.username ? (
                   <>
                     <div className="profile-hub__referral-link-block">
@@ -938,25 +956,18 @@ export default function Dashboard() {
                       </div>
                     </div>
                     <div className="profile-hub__referral-levels">
-                      <span className="profile-hub__referral-label">Referrals by level</span>
-                      <div className="profile-hub__referral-levels-table">
-                        <div className="profile-hub__referral-levels-head">
-                          <span className="profile-hub__referral-levels-cell profile-hub__referral-levels-cell--level">Level</span>
-                          <span className="profile-hub__referral-levels-cell profile-hub__referral-levels-cell--count">Referrals</span>
-                          <span className="profile-hub__referral-levels-cell profile-hub__referral-levels-cell--earnings">Earnings</span>
-                        </div>
-                        {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((lvl) => {
-                          const count = referralStats != null ? (referralStats[`referralCountL${lvl}`] ?? 0) : (user?.[`referralCountL${lvl}`] ?? 0);
-                          const earnings = referralStats != null ? formatUsdt(referralStats[`referralEarningsL${lvl}`] || "0") : formatUsdt(user?.[`referralEarningsL${lvl}`] || "0");
-                          return (
-                            <div key={lvl} className="profile-hub__referral-levels-row">
-                              <span className="profile-hub__referral-levels-cell profile-hub__referral-levels-cell--level">L{lvl}</span>
-                              <span className="profile-hub__referral-levels-cell profile-hub__referral-levels-cell--count">{count}</span>
-                              <span className="profile-hub__referral-levels-cell profile-hub__referral-levels-cell--earnings">{earnings} USDT <img src="/USDT_BEP20.png" alt="" className="usdt-logo-inline" aria-hidden="true" /></span>
-                            </div>
-                          );
-                        })}
+                      <div className="profile-hub__referral-levels-intro">
+                        <span className="profile-hub__referral-label profile-hub__referral-label--levels profile-hub__heading-accent profile-hub__heading-accent--sub">
+                          Level Income Network
+                        </span>
                       </div>
+                      <ReferralPyramidTree
+                        referralStats={referralStats}
+                        user={user}
+                        referralNetwork={referralNetwork}
+                        formatUsdt={formatUsdt}
+                        rootLabel={user?.username || "You"}
+                      />
                     </div>
                     <div className="profile-hub__referral-withdraw-wrap">
                       <button
