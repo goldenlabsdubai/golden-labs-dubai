@@ -1,22 +1,35 @@
 /**
  * Level Income Network: one horizontal tier per level (L1…L10), orthogonal SVG links.
  * Data: GET /referral/network — nested `children` on each node.
+ * Tier rates: L1 = full `levelAmounts[0]`; L2+ = on-chain gross ÷ `minDirectReferralsRequired` (per seated direct when qualified), read from ReferralContract when possible.
  */
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { usePublicClient } from "wagmi";
+import { formatUnits } from "viem";
 import { getAvatarUrl } from "../config";
 
-const TIER_USD = {
-  1: "0.50",
-  2: "0.25",
-  3: "0.25",
-  4: "0.25",
-  5: "0.15",
-  6: "0.15",
-  7: "0.15",
-  8: "0.10",
-  9: "0.10",
-  10: "0.10",
-};
+const REF_TIER_READ_ABI = [
+  { name: "levelAmounts", type: "function", stateMutability: "view", inputs: [{ type: "uint256" }], outputs: [{ type: "uint256" }] },
+  { name: "minDirectReferralsRequired", type: "function", stateMutability: "view", inputs: [{ type: "uint256" }], outputs: [{ type: "uint256" }] },
+];
+
+/** Fallback if RPC/ABI read fails — matches default ReferralContract constructor. */
+function defaultTierPerTradeUsd() {
+  const grossWei = [500000n, 250000n, 250000n, 250000n, 150000n, 150000n, 150000n, 100000n, 100000n, 100000n];
+  const div = [1n, 2n, 3n, 4n, 5n, 6n, 6n, 6n, 6n, 6n];
+  const o = {};
+  for (let i = 0; i < 10; i++) {
+    const per = grossWei[i] / div[i];
+    o[i + 1] = formatUnits(per, 6).replace(/\.?0+$/, "") || "0";
+  }
+  return o;
+}
+
+function fmtRateFromChain(grossWei, divWei) {
+  const d = divWei > 0n ? divWei : 1n;
+  const per = grossWei / d;
+  return formatUnits(per, 6).replace(/\.?0+$/, "") || "0";
+}
 
 const MAX_L1_COLS = 48;
 const ROOT_ID = "__root__";
@@ -285,6 +298,50 @@ function l1RowHasL2Visual(l1) {
 }
 
 export default function ReferralPyramidTree({ referralStats, user, referralNetwork, formatUsdt, rootLabel = "You" }) {
+  const publicClient = usePublicClient();
+  const [tierUsd, setTierUsd] = useState(() => defaultTierPerTradeUsd());
+
+  useEffect(() => {
+    let cancelled = false;
+    const raw = (import.meta.env.VITE_REFERRAL_CONTRACT || "").trim();
+    const addr = raw.startsWith("0x") ? raw : raw ? `0x${raw}` : "";
+    if (!publicClient || !addr) return undefined;
+
+    (async () => {
+      try {
+        const reads = [];
+        for (let i = 0; i < 10; i++) {
+          reads.push(
+            publicClient.readContract({ address: addr, abi: REF_TIER_READ_ABI, functionName: "levelAmounts", args: [BigInt(i)] })
+          );
+          reads.push(
+            publicClient.readContract({
+              address: addr,
+              abi: REF_TIER_READ_ABI,
+              functionName: "minDirectReferralsRequired",
+              args: [BigInt(i)],
+            })
+          );
+        }
+        const all = await Promise.all(reads);
+        const next = {};
+        for (let level = 1; level <= 10; level++) {
+          const idx = level - 1;
+          const gross = all[idx * 2];
+          const div = all[idx * 2 + 1];
+          next[level] = level === 1 ? fmtRateFromChain(gross, 1n) : fmtRateFromChain(gross, div);
+        }
+        if (!cancelled) setTierUsd(next);
+      } catch {
+        if (!cancelled) setTierUsd(defaultTierPerTradeUsd());
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [publicClient]);
+
   const getCount = (lvl) => (referralStats != null ? referralStats[`referralCountL${lvl}`] ?? 0 : user?.[`referralCountL${lvl}`] ?? 0);
   const getEarningsWei = (lvl) =>
     referralStats != null ? referralStats[`referralEarningsL${lvl}`] || "0" : user?.[`referralEarningsL${lvl}`] || "0";
@@ -447,7 +504,7 @@ export default function ReferralPyramidTree({ referralStats, user, referralNetwo
                       </p>
                     )}
                   </div>
-                  <LevelTag n={1} rate={TIER_USD[1]} />
+                  <LevelTag n={1} rate={tierUsd[1]} />
                 </section>
 
                 {/* Levels 2..N: only tiers that exist in the downline tree (rows from API) */}
@@ -473,7 +530,15 @@ export default function ReferralPyramidTree({ referralStats, user, referralNetwo
                             <img src="/USDT_BEP20.png" alt="" className="ref-tree__usdt-ico" aria-hidden="true" />
                           </p>
                         </div>
-                        <LevelTag n={depth} rate={TIER_USD[depth]} />
+                        <LevelTag
+                          n={depth}
+                          rate={tierUsd[depth]}
+                          perSeatHint={
+                            depth >= 2
+                              ? "USDT per qualifying sale from a seated direct in that tier (on-chain seat rules)."
+                              : undefined
+                          }
+                        />
                       </section>
                     );
                   })}

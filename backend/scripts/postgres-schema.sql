@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS users (
   referral_count_l9 INTEGER NOT NULL DEFAULT 0,
   referral_count_l10 INTEGER NOT NULL DEFAULT 0,
   total_referrals INTEGER NOT NULL DEFAULT 0,
+  -- referral_earnings_l1..l10: sums of on-chain ReferralPaid amounts (actual wei paid per event; L2+ reflects seat-split payouts). No extra migration when ReferralContract payout rules change.
   referral_earnings_l1 TEXT NOT NULL DEFAULT '0',
   referral_earnings_l2 TEXT NOT NULL DEFAULT '0',
   referral_earnings_l3 TEXT NOT NULL DEFAULT '0',

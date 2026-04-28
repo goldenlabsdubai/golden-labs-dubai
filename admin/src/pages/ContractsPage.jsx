@@ -38,9 +38,17 @@ const REFERRAL_ABI = [
   { type: "function", name: "referralTotalAmount", stateMutability: "view", inputs: [], outputs: [{ type: "uint256" }] },
   { type: "function", name: "referralWithdrawChunk", stateMutability: "view", inputs: [], outputs: [{ type: "uint256" }] },
   { type: "function", name: "levelAmounts", stateMutability: "view", inputs: [{ type: "uint256" }], outputs: [{ type: "uint256" }] },
+  { type: "function", name: "minDirectReferralsRequired", stateMutability: "view", inputs: [{ type: "uint256" }], outputs: [{ type: "uint256" }] },
   { type: "function", name: "setReferralTotalAmount", stateMutability: "nonpayable", inputs: [{ type: "uint256" }], outputs: [] },
   { type: "function", name: "setReferralWithdrawChunk", stateMutability: "nonpayable", inputs: [{ type: "uint256" }], outputs: [] },
   { type: "function", name: "setAllLevelAmounts", stateMutability: "nonpayable", inputs: [{ type: "uint256[10]" }], outputs: [] },
+  {
+    type: "function",
+    name: "setAllMinDirectReferralRequirements",
+    stateMutability: "nonpayable",
+    inputs: [{ type: "uint256[10]" }],
+    outputs: [],
+  },
 ];
 
 const MARKETPLACE_ABI = [
@@ -101,6 +109,7 @@ export default function ContractsPage({ connectedWallet }) {
     referralTotalAmountOnChain: "",
     referralWithdrawChunkOnChain: "",
     levelAmounts: ["", "", "", "", "", "", "", "", "", ""],
+    minDirectReferralsOnChain: ["", "", "", "", "", "", "", "", "", ""],
     creatorWallet: "",
     botAWallet: "",
     botBWallet: "",
@@ -130,6 +139,7 @@ export default function ContractsPage({ connectedWallet }) {
     referralTotalAmountOnChain: "",
     referralWithdrawChunk: "",
     levelAmounts: ["", "", "", "", "", "", "", "", "", ""],
+    minDirectReferrals: ["", "", "", "", "", "", "", "", "", ""],
     creatorWallet: "",
     botAWallet: "",
     botBWallet: "",
@@ -183,10 +193,21 @@ export default function ContractsPage({ connectedWallet }) {
           publicClient.readContract({ address: CONTRACTS.referral, abi: REFERRAL_ABI, functionName: "levelAmounts", args: [BigInt(i)] })
         );
       }
+      for (let i = 0; i < 10; i++) {
+        referralReads.push(
+          publicClient.readContract({
+            address: CONTRACTS.referral,
+            abi: REFERRAL_ABI,
+            functionName: "minDirectReferralsRequired",
+            args: [BigInt(i)],
+          })
+        );
+      }
       const referralResults = await Promise.all(referralReads);
       const referralTotalAmountOnChain = referralResults[0];
       const referralWithdrawChunkOnChainRaw = referralResults[1];
-      const levelAmountNums = referralResults.slice(2);
+      const levelAmountNums = referralResults.slice(2, 12);
+      const minDirectNums = referralResults.slice(12, 22);
 
       const [creatorWallet, botAWallet, botBWallet, listPrice, tradingIncomeAmount, referralTotalAmount, creatorAmount, botAAmount, botBAmount, reserveBalance, dynamicMintEnabled, dynamicMintStartThreshold, dynamicMintStopThreshold, mintPrice, maxWalletHoldings, dynamicMintBatchSize] = await Promise.all([
         publicClient.readContract({ address: CONTRACTS.marketplace, abi: MARKETPLACE_ABI, functionName: "creatorWallet" }),
@@ -218,6 +239,7 @@ export default function ContractsPage({ connectedWallet }) {
         referralTotalAmountOnChain: formatUnits(referralTotalAmountOnChain, 6),
         referralWithdrawChunkOnChain: formatUnits(referralWithdrawChunkOnChainRaw, 6),
         levelAmounts: levelAmountNums.map((x) => formatUnits(x, 6)),
+        minDirectReferralsOnChain: minDirectNums.map((x) => String(x)),
         creatorWallet,
         botAWallet,
         botBWallet,
@@ -247,6 +269,7 @@ export default function ContractsPage({ connectedWallet }) {
         referralTotalAmountOnChain: nextState.referralTotalAmountOnChain,
         referralWithdrawChunk: nextState.referralWithdrawChunkOnChain,
         levelAmounts: [...nextState.levelAmounts],
+        minDirectReferrals: [...nextState.minDirectReferralsOnChain],
         creatorWallet: nextState.creatorWallet,
         botAWallet: nextState.botAWallet,
         botBWallet: nextState.botBWallet,
@@ -577,6 +600,55 @@ export default function ContractsPage({ connectedWallet }) {
             }
           >
             Set L1-L10 Amounts
+          </button>
+
+          <p className="section__empty" style={{ marginTop: "1rem" }}>
+            Min direct referrals (on <code>minDirectPass</code> per level — L1 uses P0; L2+ uses the hop below payee): current{" "}
+            {state.minDirectReferralsOnChain.join(", ") || "—"}
+          </p>
+          {form.minDirectReferrals.map((value, idx) => (
+            <label key={`minref-${String(idx)}`} className="form-field">
+              <span>L{idx + 1} min directs required</span>
+              <input
+                type="text"
+                inputMode="numeric"
+                value={value}
+                onChange={(e) =>
+                  setForm((prev) => {
+                    const next = [...prev.minDirectReferrals];
+                    next[idx] = e.target.value;
+                    return { ...prev, minDirectReferrals: next };
+                  })
+                }
+              />
+            </label>
+          ))}
+          <button
+            type="button"
+            className="btn btn--success"
+            disabled={txPending}
+            onClick={() => {
+              try {
+                const args = form.minDirectReferrals.map((v, idx) => {
+                  const n = parseInt(String(v).trim(), 10);
+                  if (!Number.isFinite(n) || n < 1 || n > 16) {
+                    throw new Error(`L${idx + 1}: enter a whole number from 1 to 16 (on-chain seat band)`);
+                  }
+                  return BigInt(n);
+                });
+                return runTx({
+                  address: CONTRACTS.referral,
+                  abi: REFERRAL_ABI,
+                  functionName: "setAllMinDirectReferralRequirements",
+                  args: [args],
+                  message: "Referral min direct requirements (L1–L10) updated on-chain.",
+                }).catch((e) => setError(e?.shortMessage || e?.message || "Transaction failed"));
+              } catch (e) {
+                setError(e?.message || "Invalid min directs");
+              }
+            }}
+          >
+            Set L1–L10 min direct requirements
           </button>
         </div>
 
