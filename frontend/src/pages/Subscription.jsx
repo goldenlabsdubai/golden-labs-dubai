@@ -38,7 +38,12 @@ export default function Subscription() {
   const [insufficientBalanceType, setInsufficientBalanceType] = useState(null);
   const subContractAddress = (import.meta.env.VITE_SUBSCRIPTION_CONTRACT || "").trim();
   const subContractAddressNormalized = subContractAddress && subContractAddress.startsWith("0x") ? subContractAddress : subContractAddress ? `0x${subContractAddress}` : "";
-  const [config, setConfig] = useState({ priceFormatted: "10 USDT", contractAddress: subContractAddressNormalized || import.meta.env.VITE_SUBSCRIPTION_CONTRACT || "" });
+  const [config, setConfig] = useState({
+    price: "",
+    priceFormatted: "",
+    priceWei: "",
+    contractAddress: subContractAddressNormalized || import.meta.env.VITE_SUBSCRIPTION_CONTRACT || "",
+  });
   const [addressMenuOpen, setAddressMenuOpen] = useState(false);
   const publicClient = usePublicClient();
   const { writeContractAsync } = useWriteContract();
@@ -48,7 +53,8 @@ export default function Subscription() {
     abi: SUBSCRIPTION_ABI,
     functionName: "subscriptionPrice",
   });
-  const subscriptionPriceFormatted = subscriptionPriceWei != null ? `${Number(formatUnits(subscriptionPriceWei, 6))} USDT` : "10 USDT";
+  const subscriptionPriceFormatted =
+    subscriptionPriceWei != null ? `${Number(formatUnits(subscriptionPriceWei, 6))} USDT` : null;
   const [portalReady, setPortalReady] = useState(false);
   const menuRef = useRef(null);
 
@@ -97,7 +103,13 @@ export default function Subscription() {
       const r = await fetch(`${API}/subscription/config`, { headers: { Authorization: `Bearer ${token}` } });
       const c = await r.json().catch(() => ({}));
       const addr = c.contractAddress || subContractAddressNormalized || import.meta.env.VITE_SUBSCRIPTION_CONTRACT || "";
-      setConfig((prev) => ({ ...prev, ...c, contractAddress: addr }));
+      setConfig((prev) => ({
+        ...prev,
+        ...c,
+        contractAddress: addr,
+        price: c.price != null ? String(c.price) : prev.price,
+        priceWei: c.priceWei != null ? String(c.priceWei) : prev.priceWei,
+      }));
     };
     loadConfig();
   }, [token, subContractAddressNormalized]);
@@ -123,7 +135,15 @@ export default function Subscription() {
     setPayStep("approve");
     setError("");
     try {
-      const amount = subscriptionPriceWei ?? parseUnits("10", 6);
+      const amount =
+        subscriptionPriceWei ??
+        (config.priceWei !== undefined && config.priceWei !== "" ? BigInt(String(config.priceWei)) : undefined);
+      if (amount == null) {
+        setError("Subscription price could not be loaded. Refresh the page or check your network.");
+        setLoading(false);
+        setPayStep(null);
+        return;
+      }
       // 1) Approve USDT – wallet will ask to approve spending
       const gasApprove = await safeGasLimit(
         publicClient,
@@ -187,7 +207,13 @@ export default function Subscription() {
     }
   };
 
-  const displayPrice = (subscriptionPriceFormatted || config.priceFormatted || "10 USDT").replace(/^\$+\s*/, "").trim() || "10 USDT";
+  const displayPrice =
+    subscriptionPriceFormatted ||
+    (config.price ? `${config.price} USDT` : (config.priceFormatted || "").replace(/^\$\s*/, "").trim()) ||
+    "…";
+  const approveAmountReady =
+    subscriptionPriceWei != null ||
+    (config.priceWei !== undefined && String(config.priceWei).length > 0);
 
   const subscriptionBg = (
     <div className="profile-modern__bg" aria-hidden="true">
@@ -283,13 +309,15 @@ export default function Subscription() {
             type="button"
             className="profile-modern__submit subscription-modern__submit"
             onClick={handlePay}
-            disabled={loading || !address}
+            disabled={loading || !address || !approveAmountReady}
           >
             {loading
               ? (payStep === "approve" ? "1/2 Approving USDT…" : "2/2 Subscribing…")
               : !address
                 ? "Preparing wallet…"
-                : isResubscribe ? `Re-subscribe ${displayPrice}` : `Pay ${displayPrice}`}
+                : !approveAmountReady
+                  ? "Loading price…"
+                  : isResubscribe ? `Re-subscribe ${displayPrice}` : `Pay ${displayPrice}`}
           </button>
         </div>
       </main>
