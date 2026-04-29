@@ -1,15 +1,30 @@
 import { Router } from "express";
 import * as User from "../services/user.js";
-import { getOnChainUserStatus } from "../services/onChainUser.js";
+import { getOnChainUserStatus, getSubscriptionPriceFromChain } from "../services/onChainUser.js";
 
 const router = Router();
 
-router.get("/config", (_, res) => {
-  res.json({
-    price: "10",
-    priceFormatted: "$10 USDT",
-    contractAddress: process.env.SUBSCRIPTION_CONTRACT_ADDRESS || "",
-  });
+router.get("/config", async (_, res) => {
+  try {
+    const contractAddress = (process.env.SUBSCRIPTION_CONTRACT_ADDRESS || "").trim();
+    const fromChain = await getSubscriptionPriceFromChain();
+    res.json({
+      price: fromChain.price || "",
+      priceFormatted: fromChain.priceFormatted || "",
+      priceWei: fromChain.priceWei || "",
+      contractAddress,
+      subscriptionKnown: fromChain.subscriptionKnown,
+    });
+  } catch (e) {
+    res.json({
+      price: "",
+      priceFormatted: "",
+      priceWei: "",
+      contractAddress: (process.env.SUBSCRIPTION_CONTRACT_ADDRESS || "").trim(),
+      subscriptionKnown: false,
+      error: e.message,
+    });
+  }
 });
 
 router.post("/confirm", async (req, res) => {
@@ -31,7 +46,9 @@ router.post("/confirm", async (req, res) => {
     }
     await User.updateUser(user.id, { state: "SUBSCRIBED", lastActivity: new Date() });
     const txHash = (req.body && req.body.txHash) ? String(req.body.txHash).trim() : null;
-    await User.logActivity(wallet, "subscription", { price: "10000000", ...(txHash ? { txHash } : {}) });
+    const subPrice = await getSubscriptionPriceFromChain();
+    const priceWeiLog = subPrice.priceWei || "0";
+    await User.logActivity(wallet, "subscription", { price: priceWeiLog, ...(txHash ? { txHash } : {}) });
     const updated = await User.getUser(req);
     res.json({
       user: { wallet: updated.wallet, state: updated.state },
