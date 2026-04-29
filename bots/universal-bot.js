@@ -10,7 +10,9 @@
  *   MARKETPLACE_AND_RESERVE_POOL_CONTRACT_ADDRESS (legacy: MARKETPLACE_CONTRACT_ADDRESS)
  *   NFT_CONTRACT_ADDRESS
  *   USDT_ADDRESS
- *   BOT1_PRIVATE_KEY ... BOT5_PRIVATE_KEY
+ *   BOT1_PRIVATE_KEY … BOT5_PRIVATE_KEY
+ *   BOT_USER_BUYBACK_SAFETY_SWEEP_MS — re-sync if Listed events missed (default 300000)
+ *   BOT_USER_BUYBACK_WAIT_CHUNK_MS — max ms between light RPC checks while waiting buyback delay (default 60000)
  */
 import "dotenv/config";
 import { ethers } from "ethers";
@@ -33,7 +35,10 @@ const BOT_RECORD_PURCHASE_URL =
   process.env.BOT_RECORD_PURCHASE_URL || "http://127.0.0.1:3001/api/marketplace/record-purchase";
 const USER_LISTINGS_CACHE_MS = Number(process.env.BOT_USER_LISTINGS_CACHE_MS || 10000);
 const ACTIVE_SCAN_BATCH_SIZE = Number(process.env.BOT_ACTIVE_SCAN_BATCH_SIZE || 40);
-const ACTIVE_LISTINGS_SWEEP_MS = Number(process.env.BOT_ACTIVE_LISTINGS_SWEEP_MS || 12000);
+/** Fallback full sweep interval (safety net if events missed). Default 5 min — primary timing uses oldest-list + internal wait. */
+const USER_BUYBACK_SAFETY_SWEEP_MS = Number(process.env.BOT_USER_BUYBACK_SAFETY_SWEEP_MS || 300000);
+/** During buyback wait, re-check target listing + admin settings at most this often (ms). */
+const USER_BUYBACK_WAIT_CHUNK_MS = Number(process.env.BOT_USER_BUYBACK_WAIT_CHUNK_MS || 60000);
 const RELIST_CHECK_MS = Number(process.env.BOT_RELIST_CHECK_MS || 30000);
 const RELIST_SCAN_BATCH_SIZE = Number(process.env.BOT_RELIST_SCAN_BATCH_SIZE || 40);
 const RELIST_MAX_PER_RUN = Number(process.env.BOT_RELIST_MAX_PER_RUN || 3);
@@ -186,8 +191,9 @@ async function main() {
   const interBotCooldowns = readInterBotCooldowns();
   let listingTimestamps = readListingTimestamps();
   let dynamicUserListingMinAgeMs = Math.max(60_000, USER_LISTING_MIN_AGE_MS);
+  /** Bump to cancel in-flight buyback wait; new Listed events reschedule oldest-list logic. */
+  let userBuybackGeneration = 0;
 
-  /** Preferred: marketplace stores list time on-chain (seconds → ms). No log scan. */
   async function getListingListedAtMs(tokenId) {
     try {
       const sec = await marketplace.listingListedAt(tokenId);
@@ -315,13 +321,17 @@ function writeListingTimestamps(data) {
 }
 
 function isRateLimitError(e) {
-  const msg = String(e?.message || e?.shortMessage || "").toLowerCase();
+  const msg = String(e?.message || e?.shortMessage || JSON.stringify(e?.info || e?.value || "")).toLowerCase();
   return (
     msg.includes("429") ||
     msg.includes("rate limit") ||
+    msg.includes("-32005") ||
+    msg.includes("exceeded the rps") ||
     msg.includes("compute units per second") ||
     Number(e?.code) === 429 ||
-    Number(e?.error?.code) === 429
+    Number(e?.code) === -32005 ||
+    Number(e?.error?.code) === 429 ||
+    Number(e?.error?.code) === -32005
   );
 }
 
@@ -412,6 +422,149 @@ function txOverrides(kind = "default") {
       // Fail-safe: if uncertain, keep previous state to avoid aggressive bot-vs-bot buying.
       return cachedHasUserListings;
     }
+  }
+
+  /** Active member listings (non-bot, non-marketplace contract seller) at list price — for oldest-first buyback. */
+  async function collectUserListingRows() {
+    const totalMinted = await getTotalMintedSafe();
+    if (!Number.isFinite(totalMinted) || totalMinted <= 0) return [];
+    const batchSize = Math.max(1, Math.min(ACTIVE_SCAN_BATCH_SIZE, 200));
+    const out = [];
+    for (let start = 1; start <= totalMinted; start += batchSize) {
+      const end = Math.min(totalMinted, start + batchSize - 1);
+      const tokenIds = Array.from({ length: end - start + 1 }, (_, idx) => start + idx);
+      const rows = await Promise.all(
+        tokenIds.map(async (tokenId) => {
+          try {
+            const l = await marketplace.listings(tokenId);
+            const active = Boolean(l?.active ?? l?.[3]);
+            if (!active) return null;
+            const seller = (l?.seller || l?.[0] || "").toString().toLowerCase();
+            if (!seller || seller === self) return null;
+            if (marketLc && seller === marketLc) return null;
+            if (knownBotWallets.has(seller)) return null;
+            const price = l?.price ?? l?.[2] ?? 0n;
+            if (BigInt(price.toString()) !== LIST_PRICE_WEI) return null;
+            let listedAtMs = null;
+            try {
+              const sec = await marketplace.listingListedAt(tokenId);
+              const n = sec != null ? Number(sec) : 0;
+              if (Number.isFinite(n) && n > 0) listedAtMs = n * 1000;
+            } catch (_) {
+              listedAtMs = null;
+            }
+            return {
+              tokenId: BigInt(tokenId),
+              seller: l?.seller || l?.[0],
+              price,
+              listedAtMs,
+            };
+          } catch {
+            return null;
+          }
+        })
+      );
+      for (const row of rows) {
+        if (!row) continue;
+        const tid = row.tokenId.toString();
+        let listedAtMs = row.listedAtMs;
+        if (listedAtMs == null) {
+          if (listingTimestamps[tid] !== undefined) listedAtMs = listingTimestamps[tid];
+          else {
+            await ensureUserListingTimestampFromChain(tid, row.tokenId);
+            listedAtMs = listingTimestamps[tid];
+          }
+        }
+        if (listedAtMs == null || !Number.isFinite(Number(listedAtMs))) listedAtMs = Date.now();
+        out.push({ tokenId: row.tokenId, seller: row.seller, price: row.price, listedAtMs: Number(listedAtMs) });
+      }
+    }
+    return out;
+  }
+
+  async function runUserBuybackWorkerImpl() {
+    const myGen = userBuybackGeneration;
+    let idleNoListings = false;
+    try {
+      const enabled = await isBotEnabled(true);
+      if (!enabled) return;
+      if (myGen !== userBuybackGeneration) return;
+
+      const rows = await collectUserListingRows();
+      if (!rows.length) {
+        idleNoListings = true;
+        return;
+      }
+      rows.sort((a, b) => {
+        const d = a.listedAtMs - b.listedAtMs;
+        if (d !== 0) return d;
+        if (a.tokenId < b.tokenId) return -1;
+        if (a.tokenId > b.tokenId) return 1;
+        return 0;
+      });
+      const oldest = rows[0];
+      const sellerNorm = (oldest.seller || "").toString().toLowerCase();
+
+      await isBotEnabled(true);
+      let until = oldest.listedAtMs + dynamicUserListingMinAgeMs;
+      let lastLoggedMins = null;
+      while (Date.now() < until) {
+        if (myGen !== userBuybackGeneration) return;
+        await isBotEnabled(true);
+        until = oldest.listedAtMs + dynamicUserListingMinAgeMs;
+        const now = Date.now();
+        if (now >= until) break;
+        const minsLeft = Math.ceil((until - now) / 60000);
+        if (minsLeft !== lastLoggedMins) {
+          lastLoggedMins = minsLeft;
+          console.log(`Bot ${botId}: user buyback ~${minsLeft}m remaining (oldest token ${oldest.tokenId})`);
+        }
+        try {
+          const l = await marketplace.listings(oldest.tokenId);
+          const active = Boolean(l?.active ?? l?.[3]);
+          const curSeller = (l?.seller || l?.[0] || "").toString().toLowerCase();
+          if (!active || curSeller !== sellerNorm) {
+            console.log(`Bot ${botId}: buyback target token ${oldest.tokenId} changed — re-scan`);
+            return;
+          }
+        } catch (_) {}
+        const slice = Math.min(USER_BUYBACK_WAIT_CHUNK_MS, Math.max(1500, until - Date.now()));
+        await delayMs(slice);
+      }
+
+      if (myGen !== userBuybackGeneration) return;
+      await isBotEnabled(true);
+      const rows2 = await collectUserListingRows();
+      if (!rows2.length) return;
+      rows2.sort((a, b) => {
+        const d = a.listedAtMs - b.listedAtMs;
+        if (d !== 0) return d;
+        if (a.tokenId < b.tokenId) return -1;
+        if (a.tokenId > b.tokenId) return 1;
+        return 0;
+      });
+      const target = rows2[0];
+      if (Date.now() < target.listedAtMs + dynamicUserListingMinAgeMs) return;
+      await tryBuyAndRelist(target.tokenId, target.seller, target.price, "buyback-oldest");
+    } catch (e) {
+      console.warn(`Bot ${botId}: user buyback worker`, e?.message || e);
+    } finally {
+      void (async () => {
+        if (myGen !== userBuybackGeneration) return;
+        const on = await isBotEnabled().catch(() => false);
+        if (!on) {
+          setTimeout(() => enqueue(runUserBuybackWorkerImpl), Math.max(5000, CONTROL_REFRESH_MS));
+          return;
+        }
+        const backoff = idleNoListings ? Math.max(30000, USER_LISTINGS_CACHE_MS * 4) : 2500;
+        setTimeout(() => enqueue(runUserBuybackWorkerImpl), backoff);
+      })();
+    }
+  }
+
+  function kickUserBuybackRescan() {
+    userBuybackGeneration++;
+    enqueue(runUserBuybackWorkerImpl);
   }
 
   async function tryBuyAndRelist(tokenId, seller, price, source) {
@@ -576,91 +729,6 @@ function txOverrides(kind = "default") {
       console.error(`Bot ${botId} trade error (${source}) token ${tokenIdStr}:`, e?.message || e);
     } finally {
       await releaseTokenLock(lock);
-    }
-  }
-
-  async function processActiveListingsOnce(source) {
-    try {
-      const totalMinted = await getTotalMintedSafe();
-      if (!Number.isFinite(totalMinted) || totalMinted <= 0) return;
-
-      const batchSize = Math.max(1, Math.min(ACTIVE_SCAN_BATCH_SIZE, 200));
-      const allRows = [];
-      for (let start = 1; start <= totalMinted; start += batchSize) {
-        const end = Math.min(totalMinted, start + batchSize - 1);
-        const tokenIds = Array.from({ length: end - start + 1 }, (_, idx) => start + idx);
-        const rows = await Promise.all(
-          tokenIds.map(async (tokenId) => {
-            try {
-              const l = await marketplace.listings(tokenId);
-              const active = Boolean(l?.active ?? l?.[3]);
-              if (!active) return null;
-              let listedAtMs = null;
-              try {
-                const sec = await marketplace.listingListedAt(tokenId);
-                const n = sec != null ? Number(sec) : 0;
-                if (Number.isFinite(n) && n > 0) listedAtMs = n * 1000;
-              } catch (_) {
-                listedAtMs = null;
-              }
-              return {
-                tokenId: BigInt(tokenId),
-                seller: (l?.seller || l?.[0] || "").toString(),
-                price: l?.price ?? l?.[2] ?? 0n,
-                active: true,
-                listedAtMs,
-              };
-            } catch {
-              return null;
-            }
-          })
-        );
-        for (const row of rows) {
-          if (!row?.active) continue;
-          const sellerAddr = (row.seller || "").toString().toLowerCase();
-          const isUserListing =
-            sellerAddr && (!marketLc || sellerAddr !== marketLc) && !knownBotWallets.has(sellerAddr);
-          if (isUserListing) {
-            const tid = row.tokenId.toString();
-            if (listingTimestamps[tid] === undefined) {
-              await ensureUserListingTimestampFromChain(tid, row.tokenId);
-            }
-          }
-          allRows.push(row);
-        }
-      }
-      // Sweep order matches UI priority: dynamic (system) → bot → member; within tier by list time then tokenId.
-      function listingTierRankSeller(sellerRaw) {
-        const s = (sellerRaw || "").toString().toLowerCase();
-        if (marketLc && s === marketLc) return 0;
-        if (knownBotWallets.has(s)) return 1;
-        return 2;
-      }
-      allRows.sort((a, b) => {
-        const ra = listingTierRankSeller(a.seller);
-        const rb = listingTierRankSeller(b.seller);
-        if (ra !== rb) return ra - rb;
-        const aRaw = a.listedAtMs ?? listingTimestamps[a.tokenId.toString()];
-        const bRaw = b.listedAtMs ?? listingTimestamps[b.tokenId.toString()];
-        const aTs = Number.isFinite(aRaw) ? aRaw : null;
-        const bTs = Number.isFinite(bRaw) ? bRaw : null;
-        if (aTs == null && bTs == null) {
-          const sa = (a.seller || "").toString().toLowerCase();
-          const sb = (b.seller || "").toString().toLowerCase();
-          return sa < sb ? -1 : sa > sb ? 1 : 0;
-        }
-        if (aTs == null) return 1;
-        if (bTs == null) return -1;
-        if (aTs !== bTs) return aTs - bTs;
-        const sa = (a.seller || "").toString().toLowerCase();
-        const sb = (b.seller || "").toString().toLowerCase();
-        return sa < sb ? -1 : sa > sb ? 1 : 0;
-      });
-      for (const row of allRows) {
-        await tryBuyAndRelist(row.tokenId, row.seller, row.price, source);
-      }
-    } catch (e) {
-      console.warn(`Bot ${botId}: active-listings sweep failed`, e?.message || e);
     }
   }
 
@@ -854,11 +922,10 @@ function txOverrides(kind = "default") {
   wasEnabled = Boolean(initialEnabled);
   if (!wasEnabled) console.log(`Bot ${botId} paused by admin state (running=false). Listening only.`);
 
-  console.log(`Bot ${botId} running. Listening Marketplace Listed events only.`);
+  console.log(`Bot ${botId} running. User buyback: oldest listing after buyback delay (admin buybackDelayMs); token locks + no bot-to-bot.`);
 
-  // On startup, prioritize existing active listings first (old-first by tokenId order).
   if (wasEnabled) {
-    enqueue(() => processActiveListingsOnce("startup-sweep"));
+    enqueue(runUserBuybackWorkerImpl);
   }
 
   marketplace.on("Listed", (tokenId, seller, price, eventPayload) => {
@@ -866,31 +933,30 @@ function txOverrides(kind = "default") {
       const enabled = await isBotEnabled();
       if (!enabled) return;
       const sellerAddr = (seller || "").toString().toLowerCase();
-      if (sellerAddr && sellerAddr !== marketLc && !knownBotWallets.has(sellerAddr)) {
-        const tid = tokenId.toString();
-        let tsMs = Date.now();
-        try {
-          const bn = eventPayload?.log?.blockNumber;
-          if (bn != null) {
-            const blk = await provider.getBlock(bn);
-            if (blk?.timestamp != null) tsMs = Number(blk.timestamp) * 1000;
-          }
-        } catch (_) {}
-        listingTimestamps[tid] = tsMs;
-        writeListingTimestamps(listingTimestamps);
-      }
-      await tryBuyAndRelist(tokenId, seller, price, "event-listed");
+      const isUserListing = sellerAddr && sellerAddr !== marketLc && !knownBotWallets.has(sellerAddr);
+      if (!isUserListing) return;
+      const tid = tokenId.toString();
+      let tsMs = Date.now();
+      try {
+        const bn = eventPayload?.log?.blockNumber;
+        if (bn != null) {
+          const blk = await provider.getBlock(bn);
+          if (blk?.timestamp != null) tsMs = Number(blk.timestamp) * 1000;
+        }
+      } catch (_) {}
+      listingTimestamps[tid] = tsMs;
+      writeListingTimestamps(listingTimestamps);
+      kickUserBuybackRescan();
     });
   });
 
-  // Continuous active-listings sweep from marketplace state (not event history).
   setInterval(() => {
     enqueue(async () => {
       const enabled = await isBotEnabled();
       if (!enabled) return;
-      await processActiveListingsOnce("active-sweep");
+      kickUserBuybackRescan();
     });
-  }, Math.max(5000, ACTIVE_LISTINGS_SWEEP_MS));
+  }, Math.max(60_000, USER_BUYBACK_SAFETY_SWEEP_MS));
 
   // Lightweight admin-state watcher (no chain scans).
   setInterval(async () => {
@@ -900,7 +966,7 @@ function txOverrides(kind = "default") {
         wasEnabled = enabled;
         console.log(`Bot ${botId}: ${enabled ? "resumed" : "paused"} by admin state`);
         if (enabled) {
-          enqueue(() => processActiveListingsOnce("resume-sweep"));
+          kickUserBuybackRescan();
         }
       }
     } catch (e) {

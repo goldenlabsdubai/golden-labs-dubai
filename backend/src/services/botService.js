@@ -9,7 +9,7 @@ import { getTradingIncomePerSellWeiFromEnv } from "../utils/tradingIncomeWei.js"
 import { getMarketplaceAndReservePoolAddress } from "../config/contractsEnv.js";
 
 const BOT_SETTINGS_DOC = "bot_rules";
-const BOT_STATS_CACHE_TTL_MS = Number(process.env.BOT_STATS_CACHE_TTL_MS || 20000);
+const BOT_STATS_CACHE_TTL_MS = Number(process.env.BOT_STATS_CACHE_TTL_MS || 30000);
 const BOT_BALANCE_READ_TIMEOUT_MS = Number(process.env.BOT_BALANCE_READ_TIMEOUT_MS || 12000);
 /** USDT/BNB reads: default 25s (public RPCs often slow when competing with heavy work). */
 const BOT_BALANCE_FETCH_MS = Math.max(25000, BOT_BALANCE_READ_TIMEOUT_MS);
@@ -283,15 +283,19 @@ async function getNftHoldings(provider, marketplaceAddress, nftAddress, account)
     } catch (_) {}
     maxTokenId = Math.max(1, Math.min(maxTokenId, 10000));
     const batch = BOT_NFT_LISTING_SCAN_BATCH;
+    const listingStaggerMs = Math.max(0, Number(process.env.BOT_NFT_LISTING_RPC_STAGGER_MS || 35));
     for (let start = 1; start <= maxTokenId; start += batch) {
       const end = Math.min(start + batch - 1, maxTokenId);
-      const rows = await Promise.all(
-        Array.from({ length: end - start + 1 }, (_, i) => start + i).map((tokenId) =>
-          withRpcRetry(() => marketplace.listings(tokenId))
-            .then((l) => ({ active: !!l?.[3], seller: String(l?.[0] ?? "").toLowerCase() }))
-            .catch(() => ({ active: false, seller: "" }))
-        )
-      );
+      const rows = [];
+      for (let tokenId = start; tokenId <= end; tokenId++) {
+        try {
+          const l = await withRpcRetry(() => marketplace.listings(tokenId));
+          rows.push({ active: !!l?.[3], seller: String(l?.[0] ?? "").toLowerCase() });
+        } catch {
+          rows.push({ active: false, seller: "" });
+        }
+        if (listingStaggerMs > 0 && tokenId < end) await delay(listingStaggerMs);
+      }
       for (const r of rows) {
         if (r.active && r.seller === target) listed++;
       }
@@ -403,13 +407,33 @@ function sleep(ms) {
 }
 
 function isRateLimitedError(error) {
+  if (!error) return false;
+  if (error.name === "AggregateError" && Array.isArray(error.errors)) {
+    return error.errors.some((e) => isRateLimitedError(e));
+  }
   const msg = String(error?.message || error?.shortMessage || "").toLowerCase();
-  return (
+  const blob = (() => {
+    try {
+      return JSON.stringify(error?.info ?? error?.value ?? error?.error ?? "").toLowerCase();
+    } catch {
+      return "";
+    }
+  })();
+  const code = Number(error?.code);
+  if (code === 429 || code === -32005) return true;
+  if (
     msg.includes("429") ||
     msg.includes("rate limit") ||
     msg.includes("compute units per second") ||
-    Number(error?.code) === 429
-  );
+    msg.includes("exceeded the rps") ||
+    msg.includes("rps limit") ||
+    msg.includes("try_again_in") ||
+    blob.includes("-32005") ||
+    blob.includes("rate limit")
+  ) {
+    return true;
+  }
+  return false;
 }
 
 async function withRpcRetry(fn, retries = 2, baseDelayMs = 400) {

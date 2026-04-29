@@ -12,10 +12,14 @@ const queryClient = new QueryClient();
 const projectId =
   import.meta.env.VITE_PROJECT_ID || "b56e18d47c72ab683b10814fe9495694";
 
+/** In dev, always use current tab origin so WalletConnect metadata matches localhost (not VITE_ADMIN_URL). */
 const metadata = {
   name: "Golden Labs Admin",
   description: "Admin panel for Golden Labs.",
-  url: import.meta.env.VITE_ADMIN_URL || (typeof window !== "undefined" ? window.location.origin : ""),
+  url:
+    typeof window !== "undefined" && import.meta.env.DEV
+      ? window.location.origin
+      : import.meta.env.VITE_ADMIN_URL || (typeof window !== "undefined" ? window.location.origin : ""),
   icons: ["https://avatars.githubusercontent.com/u/179229932"],
 };
 

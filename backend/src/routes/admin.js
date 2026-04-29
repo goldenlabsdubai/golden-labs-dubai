@@ -76,11 +76,20 @@ router.get("/bots", async (req, res) => {
     const config = BotService.getBotConfig();
     const runningState = await BotService.getBotRunningState();
     const settings = await BotService.getBotSettings();
-    const settled = await Promise.allSettled(
-      config.map((bot) =>
-        BotService.getBotStats(bot.address, { tradesFromChainOnly: false })
-      )
-    );
+    /** Chainstack / free RPC: avoid parallel getBotStats (doubles RPS); small gap between bots. */
+    const staggerMs = Math.max(0, Number(process.env.ADMIN_BOT_STATS_STAGGER_MS || 250));
+    const settled = [];
+    for (let i = 0; i < config.length; i++) {
+      try {
+        const stats = await BotService.getBotStats(config[i].address, { tradesFromChainOnly: false });
+        settled.push({ status: "fulfilled", value: stats });
+      } catch (reason) {
+        settled.push({ status: "rejected", reason });
+      }
+      if (i < config.length - 1 && staggerMs > 0) {
+        await new Promise((r) => setTimeout(r, staggerMs));
+      }
+    }
     const bots = config.map((bot, index) => {
       const runningFlag = Boolean(runningState[bot.id]);
       const resolved = settled[index];

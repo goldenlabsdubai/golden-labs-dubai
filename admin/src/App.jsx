@@ -20,6 +20,13 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = BOTS_REQUEST_TIME
   }
 }
 
+function isLikelyAbortedError(e) {
+  const name = e?.name;
+  if (name === "AbortError" || name === "TimeoutError") return true;
+  const msg = String(e?.message || "").toLowerCase();
+  return msg.includes("abort") || msg.includes("aborted");
+}
+
 export default function App() {
   const { open } = useAppKit();
   const { address, isConnected, chainId } = useAccount();
@@ -87,6 +94,14 @@ export default function App() {
         { headers: { Authorization: `Bearer ${token}` } },
         BOTS_REQUEST_TIMEOUT_MS
       );
+      if (r.status === 401) {
+        localStorage.removeItem(TOKEN_KEY);
+        setToken(null);
+        setWallet(null);
+        setBots([]);
+        setError("Session expired or invalid token — disconnect and sign in again with your admin wallet.");
+        return;
+      }
       if (r.status === 403) throw new Error("Not an admin wallet");
       if (!r.ok) {
         let message = "Failed to load bots";
@@ -118,7 +133,7 @@ export default function App() {
       setLastUpdatedAt(d.serverTime || Date.now());
       setError("");
     } catch (e) {
-      const reason = e?.name === "AbortError" ? "Bots request timeout" : (e?.message || "Failed to load bots");
+      const reason = isLikelyAbortedError(e) ? "Bots request timed out — backend or RPC may be slow. Try again or increase VITE_BOTS_REQUEST_TIMEOUT_MS." : (e?.message || "Failed to load bots");
       setError(reason);
       throw e;
     } finally {
@@ -138,7 +153,10 @@ export default function App() {
       try {
         await loadBots();
       } catch (e) {
-        setError(e.message || "Failed to load admin data");
+        // loadBots() already set error; avoid overwriting with raw DOMException text (e.g. "signal is aborted without reason")
+        if (!isLikelyAbortedError(e)) {
+          setError(e?.message || "Failed to load admin data");
+        }
         setBotsLoading(false);
       }
     })();
