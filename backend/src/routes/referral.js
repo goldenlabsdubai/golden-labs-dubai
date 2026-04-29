@@ -16,28 +16,6 @@ function sumEarningsByLevel(refUser) {
   return s;
 }
 
-function allLevelsZero(refUser) {
-  for (let lvl = 1; lvl <= REFERRAL_LEVELS; lvl++) {
-    if (BigInt(refUser[`referralEarningsL${lvl}`] ?? "0") !== 0n) return false;
-  }
-  return true;
-}
-
-function onlyL1Referrals(refUser) {
-  if ((refUser.referralCountL1 ?? 0) <= 0) return false;
-  for (let lvl = 2; lvl <= REFERRAL_LEVELS; lvl++) {
-    if ((refUser[`referralCountL${lvl}`] ?? 0) !== 0) return false;
-  }
-  return true;
-}
-
-function upperLevelsZero(refUser) {
-  for (let lvl = 2; lvl <= REFERRAL_LEVELS; lvl++) {
-    if (BigInt(refUser[`referralEarningsL${lvl}`] ?? "0") !== 0n) return false;
-  }
-  return true;
-}
-
 /** L1 list + L2 children per parent (for dashboard tree). Auth: viewer only sees own downline. */
 router.get("/network", async (req, res) => {
   try {
@@ -88,59 +66,10 @@ router.get("/stats", async (req, res) => {
       } catch (_) {}
     }
 
-    const totalFromDb = refUser.referralEarningsTotal ?? "0";
-    const claimableNum = BigInt(claimable);
-    const totalNum = BigInt(totalFromDb);
-    const hasL1 = (refUser.referralCountL1 ?? 0) >= 1;
-    const allLevelsZeroFlag = allLevelsZero(refUser);
-    const attributeClaimableToL1 = claimableNum > 0n && totalNum === 0n && hasL1 && allLevelsZeroFlag;
-
-    if (wallet && claimableNum > totalNum) {
-      await User.setReferralEarningsTotalAtLeast(wallet, claimable);
-      const updated = await User.getUserByWallet(wallet);
-      if (updated) refUser.referralEarningsTotal = updated.referralEarningsTotal ?? "0";
-    }
-    if (attributeClaimableToL1 && wallet) {
-      await User.setReferralEarningsL1AtLeast(wallet, claimable);
-      const updated = await User.getUserByWallet(wallet);
-      if (updated) {
-        refUser.referralEarningsTotal = updated.referralEarningsTotal ?? "0";
-        for (let lvl = 1; lvl <= REFERRAL_LEVELS; lvl++) {
-          refUser[`referralEarningsL${lvl}`] = updated[`referralEarningsL${lvl}`] ?? "0";
-        }
-      }
-    }
-
-    const totalFromDbAfterPersist = refUser.referralEarningsTotal ?? "0";
-    const lifetimeTotal = totalFromDbAfterPersist;
-
-    const l1Big = BigInt(refUser.referralEarningsL1 ?? "0");
-
-    if (wallet && onlyL1Referrals(refUser) && upperLevelsZero(refUser) && claimableNum > l1Big) {
-      await User.setReferralEarningsL1AtLeast(wallet, claimable);
-      const updated = await User.getUserByWallet(wallet);
-      if (updated) {
-        for (let lvl = 1; lvl <= REFERRAL_LEVELS; lvl++) {
-          refUser[`referralEarningsL${lvl}`] = updated[`referralEarningsL${lvl}`] ?? "0";
-        }
-      }
-    }
-
-    // Lifetime total can exceed sum(L1..L10) when total was synced from chain but L1 was not
-    // (setReferralEarningsL1AtLeast only runs for onlyL1Referrals — false if any L2+ ref counts exist).
-    const sumLevels = sumEarningsByLevel(refUser);
-    const lifetimeBig = BigInt(refUser.referralEarningsTotal ?? "0");
-    if (wallet && lifetimeBig > sumLevels && upperLevelsZero(refUser)) {
-      const delta = (lifetimeBig - sumLevels).toString();
-      await User.incrementReferralEarningsLevelOnly(wallet, 1, delta);
-      const updated = await User.getUserByWallet(wallet);
-      if (updated) {
-        refUser.referralEarningsTotal = updated.referralEarningsTotal ?? "0";
-        for (let lvl = 1; lvl <= REFERRAL_LEVELS; lvl++) {
-          refUser[`referralEarningsL${lvl}`] = updated[`referralEarningsL${lvl}`] ?? "0";
-        }
-      }
-    }
+    // Per-level and lifetime earnings for the dashboard come only from PostgreSQL (referral indexer
+    // ingests ReferralPaid(referrer, level, amount) into referral_earnings_l1..l10).
+    // Do not fold on-chain claimable into L1 — claimable is one balance for all levels and would
+    // duplicate L2+ amounts already indexed under referral_earnings_l2...
 
     const earningsOut = {};
     for (let lvl = 1; lvl <= REFERRAL_LEVELS; lvl++) {
@@ -153,7 +82,6 @@ router.get("/stats", async (req, res) => {
     }
 
     const sumL = sumEarningsByLevel(refUser);
-    const lifetimeCard = sumL > BigInt(lifetimeTotal) ? sumL.toString() : lifetimeTotal;
 
     res.json({
       referrer: refUser.referrer ?? user.referrer ?? null,
@@ -161,7 +89,7 @@ router.get("/stats", async (req, res) => {
       ...countsOut,
       totalReferrals: refUser.totalReferrals ?? 0,
       ...earningsOut,
-      referralEarningsTotal: String(lifetimeCard),
+      referralEarningsTotal: sumL.toString(),
       claimableOnChain: claimable,
       referralWithdrawChunkWei: REFERRAL_WITHDRAW_CHUNK_WEI,
     });
