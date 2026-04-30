@@ -3,5 +3,9 @@ node_modules
 dist
 coverage
 .env
+.bot-pending-user-listings.json
+.bot-listener-cursor.json
+.bot-listing-timestamps.json
+.locks/
 *.log
 *.map

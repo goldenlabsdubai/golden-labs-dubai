@@ -16,8 +16,7 @@ const USDT_LOGO =
   import.meta.env.VITE_USDT_LOGO_URL ||
   "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='30' fill='%2326a17b'/%3E%3Ccircle cx='32' cy='32' r='29' fill='none' stroke='%23d6d6d6' stroke-width='2'/%3E%3Crect x='16' y='17' width='32' height='8' rx='1' fill='%23fff'/%3E%3Crect x='28' y='17' width='8' height='30' fill='%23fff'/%3E%3Cellipse cx='32' cy='33' rx='18' ry='4.7' fill='none' stroke='%23fff' stroke-width='3'/%3E%3C/svg%3E";
 const BNB_LOGO =
-  import.meta.env.VITE_BNB_LOGO_URL ||
-  "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='30' fill='%23111118'/%3E%3Cg fill='%23f3ba2f'%3E%3Cpath d='M32 10 40 18 32 26 24 18z'/%3E%3Cpath d='M20 22 26 28 20 34 14 28z'/%3E%3Cpath d='M44 22 50 28 44 34 38 28z'/%3E%3Cpath d='M32 26 38 32 32 38 26 32z'/%3E%3Cpath d='M32 38 44 50 32 62 20 50z'/%3E%3C/g%3E%3C/svg%3E";
+  import.meta.env.VITE_BNB_LOGO_URL || `${import.meta.env.BASE_URL}bnb_logo.png`;
 
 export default function BotsPage({
   bots,
@@ -69,121 +68,139 @@ export default function BotsPage({
         <div className="section__actions">
           <span className="section__empty">
             Last update: {lastUpdatedAt ? new Date(lastUpdatedAt).toLocaleTimeString() : "--"}
+            {botsLoading && !refreshing ? " · loading bot data…" : ""}
           </span>
-          <button type="button" className="btn btn--ghost" onClick={onRefresh} disabled={refreshing || botsLoading}>
+          <button type="button" className="btn btn--ghost" onClick={onRefresh} disabled={refreshing}>
             {refreshing ? "Refreshing..." : "Refresh now"}
           </button>
         </div>
       </div>
       {error && <p className="section__error">{error}</p>}
+
+      <article className="bot-card" style={{ marginBottom: "1rem" }}>
+        <div className="bot-card__header">
+          <strong>Auto Buyback Rules</strong>
+        </div>
+        <p className="section__empty">Bot-to-bot buying is disabled (Bot A/B never buy from each other).</p>
+        <label className="form-field">
+          <span>Buyback timeframe after user listing (minutes)</span>
+          <input
+            type="number"
+            min="1"
+            value={buybackDelayMinutes}
+            onChange={(e) => setBuybackDelayMinutes(e.target.value)}
+          />
+        </label>
+        <button
+          type="button"
+          className="btn btn--success"
+          disabled={savingBotSettings}
+          onClick={() => onSaveSettings?.({ buybackDelayMinutes })}
+        >
+          {savingBotSettings ? "Saving..." : "Save Buyback Timeframe"}
+        </button>
+      </article>
+      <p className="section__empty">
+        Configure bot addresses in backend `.env` using `BOT_1_ADDRESS` and `BOT_2_ADDRESS`.
+      </p>
+
       {botsLoading ? (
-        <p className="section__empty">Loading bots...</p>
-      ) : (
-        <>
-          <article className="bot-card" style={{ marginBottom: "1rem" }}>
-            <div className="bot-card__header">
-              <strong>Auto Buyback Rules</strong>
-            </div>
-            <p className="section__empty">Bot-to-bot buying is disabled (Bot A/B never buy from each other).</p>
-            <label className="form-field">
-              <span>Buyback timeframe after user listing (minutes)</span>
-              <input
-                type="number"
-                min="1"
-                value={buybackDelayMinutes}
-                onChange={(e) => setBuybackDelayMinutes(e.target.value)}
-              />
-            </label>
-            <button
-              type="button"
-              className="btn btn--success"
-              disabled={savingBotSettings}
-              onClick={() => onSaveSettings?.({ buybackDelayMinutes })}
-            >
-              {savingBotSettings ? "Saving..." : "Save Buyback Timeframe"}
-            </button>
-          </article>
-          <p className="section__empty">
-            Configure bot addresses in backend `.env` using `BOT_1_ADDRESS` and `BOT_2_ADDRESS`.
-          </p>
-          <div className="bots-grid">
-            {rows.map((bot) => {
-              const configured = Boolean(bot.address);
-              return (
-                <article key={`bot-${bot.id}`} className="bot-card">
-                  <div className="bot-card__header">
-                    <strong>Bot {bot.id}</strong>
-                    <span className={`status status--${configured && bot.running ? "running" : "stopped"}`}>
-                      {configured ? (bot.running ? "Running" : "Stopped") : "Not configured"}
-                    </span>
-                  </div>
+        <p className="section__empty" style={{ marginTop: "0.5rem" }}>
+          Fetching balances and stats from the API (may take a few seconds if RPC is slow).
+        </p>
+      ) : null}
 
-                  <p className="bot-card__address" title={bot.address || "Not configured"}>
-                    {configured ? bot.address : "Not configured"}
-                  </p>
-                  {bot.statsError ? <p className="section__error bot-card__error">{bot.statsError}</p> : null}
+      <div className="bots-grid">
+        {rows.map((bot) => {
+          const configured = Boolean(bot.address) && !botsLoading;
+          const statusClass = botsLoading
+            ? "loading"
+            : configured && bot.running
+              ? "running"
+              : "stopped";
+          const statusLabel = botsLoading ? "Loading…" : configured ? (bot.running ? "Running" : "Stopped") : "Not configured";
 
-                  <div className="bot-card__grid">
-                    <div>
-                      <span>Buys</span>
-                      <strong>{bot.buyTrades ?? 0}</strong>
-                    </div>
-                    <div>
-                      <span>Sells</span>
-                      <strong>{bot.sellTrades ?? 0}</strong>
-                    </div>
-                    <div>
-                      <span>Total trades</span>
-                      <strong>{bot.totalTrades ?? 0}</strong>
-                    </div>
-                    <div>
-                      <span>NFT holdings</span>
-                      <strong>{bot.nftHoldings ?? 0}</strong>
-                    </div>
-                  </div>
+          return (
+            <article key={`bot-${bot.id}`} className={`bot-card${botsLoading ? " bot-card--loading" : ""}`}>
+              <div className="bot-card__header">
+                <strong>Bot {bot.id}</strong>
+                <span className={`status status--${statusClass}`}>{statusLabel}</span>
+              </div>
 
-                  <div className="bot-card__balances">
-                    <span className="token-balance">
-                      <span>USDT Balance: {formatUsdt(bot.usdtBalance)} USDT</span>
-                      <img src={USDT_LOGO} alt="USDT" className="token-balance__icon" />
-                    </span>
-                    <span className="token-balance">
-                      <span>BNB Balance: {formatBnb(bot.bnbBalance)} BNB</span>
-                      <img src={BNB_LOGO} alt="BNB" className="token-balance__icon" />
-                    </span>
-                    <div className="bot-card__profit-box" style={{ textAlign: "center", alignSelf: "center" }}>
-                      <span className="bot-card__profit bot-card__profit-item">
-                        Profit: {formatUsdt(bot.totalProfit)} USDT{" "}
-                        <img src={USDT_LOGO} alt="USDT" className="token-balance__icon" />
-                      </span>
-                    </div>
-                  </div>
+              <p className="bot-card__address" title={botsLoading ? "" : configured ? bot.address : "Not configured"}>
+                {botsLoading ? "—" : configured ? bot.address : "Not configured"}
+              </p>
+              {!botsLoading && bot.statsError ? (
+                <p className="section__error bot-card__error">{bot.statsError}</p>
+              ) : null}
 
-                  {bot.running ? (
-                    <button
-                      type="button"
-                      className="btn btn--danger"
-                      onClick={() => onStop(bot.id)}
-                      disabled={togglingId != null || !configured}
-                    >
-                      {togglingId === bot.id ? "..." : "Stop"}
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      className="btn btn--success"
-                      onClick={() => onStart(bot.id)}
-                      disabled={togglingId != null || !configured}
-                    >
-                      {togglingId === bot.id ? "..." : "Start"}
-                    </button>
-                  )}
-                </article>
-              );
-            })}
-          </div>
-        </>
-      )}
+              <div className="bot-card__grid">
+                <div>
+                  <span>Buys</span>
+                  <strong>{botsLoading ? "—" : bot.buyTrades ?? 0}</strong>
+                </div>
+                <div>
+                  <span>Sells</span>
+                  <strong>{botsLoading ? "—" : bot.sellTrades ?? 0}</strong>
+                </div>
+                <div>
+                  <span>Total trades</span>
+                  <strong>{botsLoading ? "—" : bot.totalTrades ?? 0}</strong>
+                </div>
+                <div>
+                  <span>NFT holdings</span>
+                  <strong>{botsLoading ? "—" : bot.nftHoldings ?? 0}</strong>
+                </div>
+              </div>
+
+              <div className="bot-card__balances">
+                <span className="token-balance">
+                  <span>
+                    USDT Balance: {botsLoading ? "—" : `${formatUsdt(bot.usdtBalance)} USDT`}
+                  </span>
+                  <img src={USDT_LOGO} alt="USDT" className="token-balance__icon" />
+                </span>
+                <span className="token-balance">
+                  <span>
+                    BNB Balance: {botsLoading ? "—" : `${formatBnb(bot.bnbBalance)} BNB`}
+                  </span>
+                  <img src={BNB_LOGO} alt="BNB" className="token-balance__icon" />
+                </span>
+                <div className="bot-card__profit-box" style={{ textAlign: "center", alignSelf: "center" }}>
+                  <span className="bot-card__profit bot-card__profit-item">
+                    Profit: {botsLoading ? "—" : `${formatUsdt(bot.totalProfit)} USDT`}{" "}
+                    <img src={USDT_LOGO} alt="USDT" className="token-balance__icon" />
+                  </span>
+                </div>
+              </div>
+
+              {botsLoading ? (
+                <button type="button" className="btn btn--ghost" disabled>
+                  Loading…
+                </button>
+              ) : bot.running ? (
+                <button
+                  type="button"
+                  className="btn btn--danger"
+                  onClick={() => onStop(bot.id)}
+                  disabled={togglingId != null || !configured}
+                >
+                  {togglingId === bot.id ? "..." : "Stop"}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="btn btn--success"
+                  onClick={() => onStart(bot.id)}
+                  disabled={togglingId != null || !configured}
+                >
+                  {togglingId === bot.id ? "..." : "Start"}
+                </button>
+              )}
+            </article>
+          );
+        })}
+      </div>
     </section>
   );
 }

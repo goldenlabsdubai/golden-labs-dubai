@@ -1,6 +1,26 @@
 import { useCallback, useEffect, useState } from "react";
-import { usePublicClient, useWalletClient } from "wagmi";
-import { formatUnits, isAddress, parseUnits } from "viem";
+import { useWalletClient } from "wagmi";
+import { createPublicClient, formatUnits, http, isAddress, parseUnits } from "viem";
+import { bsc, bscTestnet } from "viem/chains";
+
+const CONTRACT_CHAIN_ID = (() => {
+  const n = Number(import.meta.env.VITE_CHAIN_ID);
+  if (n === 56 || n === 97) return n;
+  return 97;
+})();
+
+const readChain = CONTRACT_CHAIN_ID === 56 ? bsc : bscTestnet;
+const readRpcUrl =
+  CONTRACT_CHAIN_ID === 56
+    ? import.meta.env.VITE_BSC_RPC_URL || "https://bsc-dataseed.binance.org/"
+    : import.meta.env.VITE_BSC_TESTNET_RPC_URL ||
+      "https://data-seed-prebsc-1-s1.binance.org:8545/";
+
+/** Dedicated RPC client for reads — avoids `usePublicClient()` being undefined before the wallet session is ready. */
+const readPublicClient = createPublicClient({
+  chain: readChain,
+  transport: http(readRpcUrl),
+});
 
 const CONTRACTS = {
   subscription: (import.meta.env.VITE_SUBSCRIPTION_CONTRACT_ADDRESS || "").trim(),
@@ -90,7 +110,6 @@ const NFT_ABI = [
 ];
 
 export default function ContractsPage({ connectedWallet }) {
-  const publicClient = usePublicClient();
   const { data: walletClient } = useWalletClient();
 
   const [loading, setLoading] = useState(false);
@@ -168,34 +187,33 @@ export default function ContractsPage({ connectedWallet }) {
   }, []);
 
   const loadData = useCallback(async () => {
-    if (!publicClient) return;
     setError("");
     setSuccess("");
     setLoading(true);
     try {
       validateContracts();
       const [subscriptionPrice, subscriptionReserveAmount, subscriptionCreatorAmount, subscriptionBotAAmount, subscriptionBotBAmount, inactivityDays, profitThreshold] = await Promise.all([
-        publicClient.readContract({ address: CONTRACTS.subscription, abi: SUBSCRIPTION_ABI, functionName: "subscriptionPrice" }),
-        publicClient.readContract({ address: CONTRACTS.subscription, abi: SUBSCRIPTION_ABI, functionName: "subscriptionReserveAmount" }),
-        publicClient.readContract({ address: CONTRACTS.subscription, abi: SUBSCRIPTION_ABI, functionName: "subscriptionCreatorAmount" }),
-        publicClient.readContract({ address: CONTRACTS.subscription, abi: SUBSCRIPTION_ABI, functionName: "subscriptionBotAAmount" }),
-        publicClient.readContract({ address: CONTRACTS.subscription, abi: SUBSCRIPTION_ABI, functionName: "subscriptionBotBAmount" }),
-        publicClient.readContract({ address: CONTRACTS.subscription, abi: SUBSCRIPTION_ABI, functionName: "inactivityDays" }),
-        publicClient.readContract({ address: CONTRACTS.subscription, abi: SUBSCRIPTION_ABI, functionName: "profitThreshold" }),
+        readPublicClient.readContract({ address: CONTRACTS.subscription, abi: SUBSCRIPTION_ABI, functionName: "subscriptionPrice" }),
+        readPublicClient.readContract({ address: CONTRACTS.subscription, abi: SUBSCRIPTION_ABI, functionName: "subscriptionReserveAmount" }),
+        readPublicClient.readContract({ address: CONTRACTS.subscription, abi: SUBSCRIPTION_ABI, functionName: "subscriptionCreatorAmount" }),
+        readPublicClient.readContract({ address: CONTRACTS.subscription, abi: SUBSCRIPTION_ABI, functionName: "subscriptionBotAAmount" }),
+        readPublicClient.readContract({ address: CONTRACTS.subscription, abi: SUBSCRIPTION_ABI, functionName: "subscriptionBotBAmount" }),
+        readPublicClient.readContract({ address: CONTRACTS.subscription, abi: SUBSCRIPTION_ABI, functionName: "inactivityDays" }),
+        readPublicClient.readContract({ address: CONTRACTS.subscription, abi: SUBSCRIPTION_ABI, functionName: "profitThreshold" }),
       ]);
 
       const referralReads = [
-        publicClient.readContract({ address: CONTRACTS.referral, abi: REFERRAL_ABI, functionName: "referralTotalAmount" }),
-        publicClient.readContract({ address: CONTRACTS.referral, abi: REFERRAL_ABI, functionName: "referralWithdrawChunk" }),
+        readPublicClient.readContract({ address: CONTRACTS.referral, abi: REFERRAL_ABI, functionName: "referralTotalAmount" }),
+        readPublicClient.readContract({ address: CONTRACTS.referral, abi: REFERRAL_ABI, functionName: "referralWithdrawChunk" }),
       ];
       for (let i = 0; i < 10; i++) {
         referralReads.push(
-          publicClient.readContract({ address: CONTRACTS.referral, abi: REFERRAL_ABI, functionName: "levelAmounts", args: [BigInt(i)] })
+          readPublicClient.readContract({ address: CONTRACTS.referral, abi: REFERRAL_ABI, functionName: "levelAmounts", args: [BigInt(i)] })
         );
       }
       for (let i = 0; i < 10; i++) {
         referralReads.push(
-          publicClient.readContract({
+          readPublicClient.readContract({
             address: CONTRACTS.referral,
             abi: REFERRAL_ABI,
             functionName: "minDirectReferralsRequired",
@@ -210,22 +228,22 @@ export default function ContractsPage({ connectedWallet }) {
       const minDirectNums = referralResults.slice(12, 22);
 
       const [creatorWallet, botAWallet, botBWallet, listPrice, tradingIncomeAmount, referralTotalAmount, creatorAmount, botAAmount, botBAmount, reserveBalance, dynamicMintEnabled, dynamicMintStartThreshold, dynamicMintStopThreshold, mintPrice, maxWalletHoldings, dynamicMintBatchSize] = await Promise.all([
-        publicClient.readContract({ address: CONTRACTS.marketplace, abi: MARKETPLACE_ABI, functionName: "creatorWallet" }),
-        publicClient.readContract({ address: CONTRACTS.marketplace, abi: MARKETPLACE_ABI, functionName: "botAWallet" }),
-        publicClient.readContract({ address: CONTRACTS.marketplace, abi: MARKETPLACE_ABI, functionName: "botBWallet" }),
-        publicClient.readContract({ address: CONTRACTS.marketplace, abi: MARKETPLACE_ABI, functionName: "listPrice" }),
-        publicClient.readContract({ address: CONTRACTS.marketplace, abi: MARKETPLACE_ABI, functionName: "tradingIncomeAmount" }),
-        publicClient.readContract({ address: CONTRACTS.marketplace, abi: MARKETPLACE_ABI, functionName: "referralTotalAmount" }),
-        publicClient.readContract({ address: CONTRACTS.marketplace, abi: MARKETPLACE_ABI, functionName: "creatorAmount" }),
-        publicClient.readContract({ address: CONTRACTS.marketplace, abi: MARKETPLACE_ABI, functionName: "botAAmount" }),
-        publicClient.readContract({ address: CONTRACTS.marketplace, abi: MARKETPLACE_ABI, functionName: "botBAmount" }),
-        publicClient.readContract({ address: CONTRACTS.marketplace, abi: MARKETPLACE_ABI, functionName: "getBalance" }),
-        publicClient.readContract({ address: CONTRACTS.marketplace, abi: MARKETPLACE_ABI, functionName: "dynamicMintEnabled" }),
-        publicClient.readContract({ address: CONTRACTS.marketplace, abi: MARKETPLACE_ABI, functionName: "dynamicMintStartThreshold" }),
-        publicClient.readContract({ address: CONTRACTS.marketplace, abi: MARKETPLACE_ABI, functionName: "dynamicMintStopThreshold" }),
-        publicClient.readContract({ address: CONTRACTS.nft, abi: NFT_ABI, functionName: "mintPrice" }),
-        publicClient.readContract({ address: CONTRACTS.nft, abi: NFT_ABI, functionName: "maxWalletHoldings" }),
-        publicClient.readContract({ address: CONTRACTS.nft, abi: NFT_ABI, functionName: "dynamicMintBatchSize" }),
+        readPublicClient.readContract({ address: CONTRACTS.marketplace, abi: MARKETPLACE_ABI, functionName: "creatorWallet" }),
+        readPublicClient.readContract({ address: CONTRACTS.marketplace, abi: MARKETPLACE_ABI, functionName: "botAWallet" }),
+        readPublicClient.readContract({ address: CONTRACTS.marketplace, abi: MARKETPLACE_ABI, functionName: "botBWallet" }),
+        readPublicClient.readContract({ address: CONTRACTS.marketplace, abi: MARKETPLACE_ABI, functionName: "listPrice" }),
+        readPublicClient.readContract({ address: CONTRACTS.marketplace, abi: MARKETPLACE_ABI, functionName: "tradingIncomeAmount" }),
+        readPublicClient.readContract({ address: CONTRACTS.marketplace, abi: MARKETPLACE_ABI, functionName: "referralTotalAmount" }),
+        readPublicClient.readContract({ address: CONTRACTS.marketplace, abi: MARKETPLACE_ABI, functionName: "creatorAmount" }),
+        readPublicClient.readContract({ address: CONTRACTS.marketplace, abi: MARKETPLACE_ABI, functionName: "botAAmount" }),
+        readPublicClient.readContract({ address: CONTRACTS.marketplace, abi: MARKETPLACE_ABI, functionName: "botBAmount" }),
+        readPublicClient.readContract({ address: CONTRACTS.marketplace, abi: MARKETPLACE_ABI, functionName: "getBalance" }),
+        readPublicClient.readContract({ address: CONTRACTS.marketplace, abi: MARKETPLACE_ABI, functionName: "dynamicMintEnabled" }),
+        readPublicClient.readContract({ address: CONTRACTS.marketplace, abi: MARKETPLACE_ABI, functionName: "dynamicMintStartThreshold" }),
+        readPublicClient.readContract({ address: CONTRACTS.marketplace, abi: MARKETPLACE_ABI, functionName: "dynamicMintStopThreshold" }),
+        readPublicClient.readContract({ address: CONTRACTS.nft, abi: NFT_ABI, functionName: "mintPrice" }),
+        readPublicClient.readContract({ address: CONTRACTS.nft, abi: NFT_ABI, functionName: "maxWalletHoldings" }),
+        readPublicClient.readContract({ address: CONTRACTS.nft, abi: NFT_ABI, functionName: "dynamicMintBatchSize" }),
       ]);
 
       const nextState = {
@@ -294,7 +312,7 @@ export default function ContractsPage({ connectedWallet }) {
     } finally {
       setLoading(false);
     }
-  }, [publicClient, validateContracts]);
+  }, [validateContracts]);
 
   useEffect(() => {
     loadData();
@@ -314,7 +332,7 @@ export default function ContractsPage({ connectedWallet }) {
         functionName,
         args,
       });
-      await publicClient.waitForTransactionReceipt({ hash });
+      await readPublicClient.waitForTransactionReceipt({ hash });
       setSuccess(message);
       await loadData();
     } finally {
@@ -350,7 +368,7 @@ export default function ContractsPage({ connectedWallet }) {
           functionName: tx.fn,
           args: [botWallet, enabled],
         });
-        await publicClient.waitForTransactionReceipt({ hash });
+        await readPublicClient.waitForTransactionReceipt({ hash });
       }
       setSuccess(`Bot wallet ${enabled ? "added" : "removed"} in Subscription and Marketplace contracts.`);
       setBotWalletInput("");
@@ -371,7 +389,9 @@ export default function ContractsPage({ connectedWallet }) {
         </button>
       </div>
 
-      <p className="section__empty">Updates here call real contract functions with your connected admin wallet.</p>
+      <p className="section__empty">
+        Live values are read via RPC on chain {CONTRACT_CHAIN_ID} ({readChain.name}). Match <code>VITE_CHAIN_ID</code> and contract addresses to your deployment; use the same network in your wallet before sending transactions.
+      </p>
       {error && <p className="section__error">{error}</p>}
       {success && <p className="section__success">{success}</p>}
 

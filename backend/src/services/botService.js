@@ -187,17 +187,28 @@ export async function getBotStats(address, options = {}) {
   const staleUsdt = cached?.data?.usdtBalance != null ? String(cached.data.usdtBalance) : "0";
   const staleBnb = cached?.data?.bnbBalance != null ? String(cached.data.bnbBalance) : "0";
 
-  const [usdtBalanceRaw, bnbBalanceRaw, dbTrades] = await Promise.all([
-    Promise.race([
-      usdtAddress ? getUsdtBalance(provider, usdtAddress, addr) : Promise.resolve("0"),
-      delay(BOT_BALANCE_FETCH_MS).then(() => ({ __timeout: true })),
-    ]).then((r) => (r && r.__timeout ? staleUsdt : r)),
-    Promise.race([
+  /** USDT then BNB (not parallel) — halves RPC burst and reduces Chainstack -32005 flakes between calls. */
+  const balanceGap = Math.max(0, Number(process.env.BOT_BALANCE_RPC_GAP_MS ?? 350));
+
+  const usdtBalanceRaw = await Promise.race([
+    usdtAddress ? getUsdtBalance(provider, usdtAddress, addr) : Promise.resolve("0"),
+    delay(BOT_BALANCE_FETCH_MS).then(() => ({ __timeout: true })),
+  ]).then((r) => (r && r.__timeout ? staleUsdt : r));
+
+  if (balanceGap) await delay(balanceGap);
+
+  let bnbBalanceRaw = staleBnb;
+  try {
+    bnbBalanceRaw = await Promise.race([
       withRpcRetry(() => provider.getBalance(addr)).then((b) => b.toString()),
       delay(BOT_BALANCE_FETCH_MS).then(() => ({ __timeout: true })),
-    ]).then((r) => (r && r.__timeout ? staleBnb : r)),
-    dbTradesPromise,
-  ]);
+    ]).then((r) => (r && r.__timeout ? staleBnb : r));
+  } catch (e) {
+    console.warn("getBalance (bnb) failed:", (addr || "").slice(0, 12) + "...", e?.message || e);
+    bnbBalanceRaw = staleBnb;
+  }
+
+  const dbTrades = await dbTradesPromise;
 
   const usdtBalance = usdtBalanceRaw;
   const bnbBalance = bnbBalanceRaw;
@@ -354,6 +365,12 @@ async function getTradesAndProfit(provider, marketplaceAddress, botAddress) {
     const stepRaw = Number(process.env.BOT_STATS_BLOCK_STEP || 9);
     const step = Number.isFinite(stepRaw) && stepRaw > 0 ? Math.floor(stepRaw) : 9;
 
+    const interChunkDelayMsRaw = Number(process.env.BOT_STATS_CHUNK_DELAY_MS || 0);
+    const interChunkDelayMs =
+      Number.isFinite(interChunkDelayMsRaw) && interChunkDelayMsRaw > 0
+        ? Math.floor(interChunkDelayMsRaw)
+        : 0;
+
     const events = [];
     for (let start = fromBlock; start <= latestBlock; start += step + 1) {
       const end = Math.min(start + step, latestBlock);
@@ -364,6 +381,14 @@ async function getTradesAndProfit(provider, marketplaceAddress, botAddress) {
       } catch (e) {
         // Continue remaining chunks so one RPC window error doesn't zero out full stats.
         console.warn(`getTradesAndProfit chunk failed [${start}-${end}]:`, e?.message || e);
+        // Exponential backoff / burst pause: consecutive chunks after RPS errors hammer public RPCs.
+        if (isRateLimitedError(e)) {
+          const pause = rateLimitBackoffMs(e) || 400;
+          await sleep(Math.min(5000, Math.max(200, pause)));
+        }
+      }
+      if (interChunkDelayMs > 0 && end < latestBlock) {
+        await sleep(interChunkDelayMs);
       }
     }
     let buyTrades = 0;
@@ -406,6 +431,39 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/** Parse Chainstack-style try_again_in (e.g. "192.250535ms") to milliseconds. */
+function rateLimitBackoffMs(error) {
+  try {
+    const candidates = [
+      error?.info?.error?.data,
+      error?.info?.data,
+      error?.error?.data,
+      error?.data,
+    ];
+    for (const data of candidates) {
+      const raw = data?.try_again_in ?? data?.tryAgainIn;
+      if (raw != null) {
+        const ms = parseTryAgainMs(raw);
+        if (ms > 0) return Math.min(10_000, ms + 75);
+      }
+    }
+    const msg = String(error?.message || error?.shortMessage || "");
+    const m = msg.match(/try_again_in["']?\s*:\s*["']?([\d.]+)\s*ms/i);
+    if (m) return Math.min(10_000, Math.ceil(parseFloat(m[1])) + 75);
+    return 0;
+  } catch {
+    return 0;
+  }
+}
+
+function parseTryAgainMs(raw) {
+  const s = String(raw).trim();
+  const m = s.match(/^([\d.]+)\s*ms$/i);
+  if (m) return Math.ceil(parseFloat(m[1]));
+  const n = Number(s);
+  return Number.isFinite(n) ? Math.ceil(n) : 0;
+}
+
 function isRateLimitedError(error) {
   if (!error) return false;
   if (error.name === "AggregateError" && Array.isArray(error.errors)) {
@@ -436,7 +494,7 @@ function isRateLimitedError(error) {
   return false;
 }
 
-async function withRpcRetry(fn, retries = 2, baseDelayMs = 400) {
+async function withRpcRetry(fn, retries = 5, baseDelayMs = 500) {
   let lastError;
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
@@ -444,7 +502,9 @@ async function withRpcRetry(fn, retries = 2, baseDelayMs = 400) {
     } catch (e) {
       lastError = e;
       if (!isRateLimitedError(e) || attempt === retries) break;
-      await sleep(baseDelayMs * 2 ** attempt);
+      const fromRpc = rateLimitBackoffMs(e);
+      const exp = fromRpc > 0 ? fromRpc : Math.min(4000, baseDelayMs * 2 ** attempt);
+      await sleep(exp);
     }
   }
   throw lastError;

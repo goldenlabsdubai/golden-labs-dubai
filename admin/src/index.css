@@ -234,6 +234,19 @@ body {
   flex-direction: column;
   gap: 0.75rem;
 }
+.bot-card--loading {
+  opacity: 0.92;
+  animation: bot-card-pulse 1.2s ease-in-out infinite;
+}
+@keyframes bot-card-pulse {
+  50% { opacity: 0.78; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .bot-card--loading {
+    animation: none;
+    opacity: 0.9;
+  }
+}
 .bot-card__header {
   display: flex;
   align-items: center;
@@ -309,6 +322,7 @@ body {
 }
 .status--running { background: rgba(72,187,120,0.2); color: var(--success); }
 .status--stopped { background: rgba(160,160,160,0.2); color: var(--muted); }
+.status--loading { background: rgba(120,160,220,0.18); color: var(--muted); }
 .btn {
   padding: 0.4rem 0.75rem;
   border: none;

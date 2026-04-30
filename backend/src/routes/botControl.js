@@ -1,6 +1,7 @@
 import { Router } from "express";
 import * as AdminPg from "../services/adminPostgres.js";
 import * as BotService from "../services/botService.js";
+import * as BotListingQueue from "../services/botListingQueuePg.js";
 import { getPool } from "../config/postgres.js";
 
 const router = Router();
@@ -11,6 +12,23 @@ function isAuthorized(req) {
   const provided = String(req.headers["x-bot-control-key"] || req.query.key || "").trim();
   return Boolean(provided) && provided === expected;
 }
+
+/** Must be registered before `/:id` so "listing-queue" is not parsed as a bot id. */
+router.get("/listing-queue", async (req, res) => {
+  try {
+    if (!isAuthorized(req)) {
+      return res.status(401).json({ error: "Unauthorized bot control access" });
+    }
+    if (!getPool()) {
+      return res.status(503).json({ error: "Database not configured", items: [], source: "no-db" });
+    }
+    const limit = req.query.limit != null ? Number(req.query.limit) : 500;
+    const items = await BotListingQueue.getBotListingQueueCandidates({ limit });
+    return res.json({ items, source: "postgres" });
+  } catch (e) {
+    res.status(500).json({ error: e?.message || "Failed to load listing queue" });
+  }
+});
 
 router.get("/:id", async (req, res) => {
   try {

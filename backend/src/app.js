@@ -23,17 +23,23 @@ if (isVercel && process.env.VERCEL_URL) {
 const app = express();
 
 // CORS: on Vercel with no origins configured, allow all origins so the app works without CORS env (Hobby plan).
-// When CORS_ORIGINS / FRONTEND_URL / ADMIN_PANEL_ORIGIN are set, only those origins are allowed.
+// When CORS_ORIGINS / FRONTEND_URL / ADMIN_PANEL_ORIGIN are set, those plus (unless STRICT_CORS=1) localhost
+// Vite ports are allowed — admin dev server uses 5174 while the main app often uses 5173.
 const platformUrl = (process.env.PLATFORM_URL || "").trim().replace(/\/$/, "");
+const corsSegments = [
+  process.env.PLATFORM_URL || "",
+  process.env.CORS_ORIGINS || "",
+  process.env.ADMIN_PANEL_ORIGIN || "",
+  process.env.FRONTEND_URL || "",
+  platformUrl ? `${platformUrl}:8080` : "",
+];
+// Do not add these on Vercel — an empty env list must stay empty so usePermissiveCors allows all origins.
+if (process.env.STRICT_CORS !== "1" && !isVercel) {
+  corsSegments.push("http://localhost:5173,http://localhost:5174,http://127.0.0.1:5173,http://127.0.0.1:5174");
+}
 const allowedOrigins = Array.from(
   new Set(
-    [
-      process.env.PLATFORM_URL || "",
-      process.env.CORS_ORIGINS || "",
-      process.env.ADMIN_PANEL_ORIGIN || "",
-      process.env.FRONTEND_URL || "",
-      platformUrl ? `${platformUrl}:8080` : "",
-    ]
+    corsSegments
       .join(",")
       .split(",")
       .map((o) => o.trim())

@@ -5,10 +5,19 @@ import { SiweMessage } from "siwe";
 import BotsPage from "./pages/BotsPage";
 import ContractsPage from "./pages/ContractsPage";
 
-const API = import.meta.env.VITE_API_URL ?? "";
+function normalizeApiBase(url) {
+  return String(url || "")
+    .trim()
+    .replace(/\/+$/, "");
+}
+
+/** Backend base must include /api (e.g. http://localhost:3001/api). Dev default avoids broken relative fetches to the Vite server. */
+const API = normalizeApiBase(
+  import.meta.env.VITE_API_URL?.trim() || (import.meta.env.DEV ? "http://localhost:3001/api" : "")
+);
 const TOKEN_KEY = "gl_admin_token";
 const BOTS_REFRESH_MS = Number(import.meta.env.VITE_BOTS_REFRESH_MS || 10000);
-const BOTS_REQUEST_TIMEOUT_MS = Number(import.meta.env.VITE_BOTS_REQUEST_TIMEOUT_MS || 15000);
+const BOTS_REQUEST_TIMEOUT_MS = Number(import.meta.env.VITE_BOTS_REQUEST_TIMEOUT_MS || 45000);
 
 async function fetchWithTimeout(url, options = {}, timeoutMs = BOTS_REQUEST_TIMEOUT_MS) {
   const controller = new AbortController();
@@ -133,7 +142,9 @@ export default function App() {
       setLastUpdatedAt(d.serverTime || Date.now());
       setError("");
     } catch (e) {
-      const reason = isLikelyAbortedError(e) ? "Bots request timed out — backend or RPC may be slow. Try again or increase VITE_BOTS_REQUEST_TIMEOUT_MS." : (e?.message || "Failed to load bots");
+      const reason = isLikelyAbortedError(e)
+        ? `Bots request timed out after ${BOTS_REQUEST_TIMEOUT_MS}ms — backend or RPC may be slow. Increase VITE_BOTS_REQUEST_TIMEOUT_MS in admin env and redeploy, or fix RPC on the server.`
+        : (e?.message || "Failed to load bots");
       setError(reason);
       throw e;
     } finally {
@@ -260,6 +271,23 @@ export default function App() {
             {signingIn ? "Signing in..." : isConnected ? "Sign in" : "Connect wallet"}
           </button>
           {error && <p className="login__error">{error}</p>}
+        </div>
+      </div>
+    );
+  }
+
+  if (!API) {
+    return (
+      <div className="login">
+        <div className="login__card">
+          <h1 className="login__title">Missing API URL</h1>
+          <p className="login__hint">
+            Set <code>VITE_API_URL</code> when building the admin app (for example <code>https://your-api.example.com/api</code>),
+            then rebuild. Relative requests would hit the admin host, not the backend.
+          </p>
+          <button type="button" className="login__btn" onClick={logout}>
+            Disconnect
+          </button>
         </div>
       </div>
     );

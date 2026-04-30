@@ -77,7 +77,8 @@ router.get("/bots", async (req, res) => {
     const runningState = await BotService.getBotRunningState();
     const settings = await BotService.getBotSettings();
     /** Chainstack / free RPC: avoid parallel getBotStats (doubles RPS); small gap between bots. */
-    const staggerMs = Math.max(0, Number(process.env.ADMIN_BOT_STATS_STAGGER_MS || 250));
+    /** Chainstack: wider default gap between bots (was 250ms) to reduce RPS bursts. */
+    const staggerMs = Math.max(0, Number(process.env.ADMIN_BOT_STATS_STAGGER_MS ?? 900));
     const settled = [];
     for (let i = 0; i < config.length; i++) {
       try {

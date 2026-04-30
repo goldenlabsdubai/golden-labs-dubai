@@ -7,25 +7,68 @@
  *
  * Env keys used:
  *   RPC_URL
+ *   CHAIN_ID or BOT_CHAIN_ID — e.g. 97 (BSC testnet), 56 (BSC mainnet); pins network to avoid eth_chainId RPS issues
  *   MARKETPLACE_AND_RESERVE_POOL_CONTRACT_ADDRESS (legacy: MARKETPLACE_CONTRACT_ADDRESS)
  *   NFT_CONTRACT_ADDRESS
  *   USDT_ADDRESS
  *   BOT1_PRIVATE_KEY … BOT5_PRIVATE_KEY
  *   BOT_USER_BUYBACK_SAFETY_SWEEP_MS — re-sync if Listed events missed (default 300000)
  *   BOT_USER_BUYBACK_WAIT_CHUNK_MS — max ms between light RPC checks while waiting buyback delay (default 60000)
+ *   BOT_SKIP_LIST_STATIC_SIMULATE — if "true", skip eth_call simulation for list() only (dynamic mint tail can make eth_call look like a custom error)
+ *   BOT_RELIST_OWNER_RPC_GAP_MS — delay between ownerOf calls during relist scan (default 60; 0 = no gap)
+ *   BOT_LISTED_POLL_MS — how often to scan for Listed via getLogs (default 20000; avoids eth_getFilterChanges)
+ *   BOT_LISTED_LOGS_CHUNK_BLOCKS — max block span per getLogs chunk (default 400)
+ *   BOT_LISTED_CATCHUP_BLOCKS — on first poll, start this many blocks behind head (default 128)
+ *   BOT_EVENT_PENDING_QUEUE — keep user listing candidates from Listed events only (default true; avoids full mint scan)
+ *   BOT_LISTING_SOURCE — rpc (default) or database; database polls GET /api/bot-control/listing-queue (Postgres indexer) instead of Listed getLogs
+ *   BOT_LISTING_QUEUE_URL — optional full URL to listing-queue; else uses BOT_CONTROL_BASE_URL + /listing-queue
+ *   BOT_LISTING_QUEUE_POLL_MS — poll interval for database source (default BOT_LISTED_POLL_MS)
+ *   BOT_SINGLE_CHAIN_LISTENER — if true (default), one process runs getLogs: lowest **admin-running** bot id (from /api/bot-control). No listener when all bots stopped.
+ *   BOT_CHAIN_LISTENER_BOT_ID — optional override only (forces which id listens; normally omit and use admin Start/Stop).
+ *   BOT_SECONDARY_LOCK_DELAY_MS — bot N waits (N-1)*this ms before token lock / buy (bot 1 first)
+ *   BOT_RELIST_RETRY_MIN_MS / BOT_RELIST_RETRY_MAX_MS — random backoff between relist retries (default 60s–5m)
+ *   BOT_BOOTSTRAP_LISTING_SCAN — one-time full mint scan on startup to seed pending file (default false; heavy)
  */
 import "dotenv/config";
-import { ethers } from "ethers";
+import { ethers, Network } from "ethers";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { LIST_PRICE_WEI } from "./config.js";
 
 const RPC = process.env.RPC_URL || "http://127.0.0.1:8545";
+/** If set, skips automatic chain detection (fewer RPC calls; avoids RPS failures during startup). BSC testnet = 97, BSC mainnet = 56. */
+const BOT_CHAIN_ID_RAW = process.env.CHAIN_ID || process.env.BOT_CHAIN_ID || "";
+const BOT_CHAIN_ID = (() => {
+  const s = String(BOT_CHAIN_ID_RAW || "").trim();
+  if (!s) return NaN;
+  const n = Number(s);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : NaN;
+})();
 const MARKETPLACE_ADDR =
   process.env.MARKETPLACE_AND_RESERVE_POOL_CONTRACT_ADDRESS || process.env.MARKETPLACE_CONTRACT_ADDRESS;
 const NFT_ADDR = process.env.NFT_CONTRACT_ADDRESS;
 const USDT_ADDR = process.env.USDT_ADDRESS;
+/** When CHAIN_ID is unset, infer from common RPC host patterns so JsonRpcProvider skips detectNetwork (saves RPS). */
+function inferChainIdFromRpcUrl(url) {
+  const u = String(url || "").toLowerCase();
+  if (
+    u.includes("bsc-testnet") ||
+    u.includes("chapel") ||
+    u.includes("prebsc") ||
+    (u.includes("chainstack") && u.includes("testnet"))
+  ) {
+    return 97;
+  }
+  if (u.includes("bsc-mainnet") || u.includes("bsc-dataseed") || u.includes("binance.org/nodes")) {
+    return 56;
+  }
+  return NaN;
+}
+const RESOLVED_CHAIN_ID = (() => {
+  if (Number.isFinite(BOT_CHAIN_ID) && BOT_CHAIN_ID > 0) return BOT_CHAIN_ID;
+  return inferChainIdFromRpcUrl(RPC);
+})();
 const LOCK_TTL_MS = Number(process.env.BOT_LOCK_TTL_MS || 2 * 60 * 1000);
 const CONTROL_REFRESH_MS = Number(process.env.BOT_CONTROL_REFRESH_MS || 5000);
 const CONTROL_REQUEST_TIMEOUT_MS = Number(process.env.BOT_CONTROL_REQUEST_TIMEOUT_MS || 4000);
@@ -42,6 +85,15 @@ const USER_BUYBACK_WAIT_CHUNK_MS = Number(process.env.BOT_USER_BUYBACK_WAIT_CHUN
 const RELIST_CHECK_MS = Number(process.env.BOT_RELIST_CHECK_MS || 30000);
 const RELIST_SCAN_BATCH_SIZE = Number(process.env.BOT_RELIST_SCAN_BATCH_SIZE || 40);
 const RELIST_MAX_PER_RUN = Number(process.env.BOT_RELIST_MAX_PER_RUN || 3);
+/** Pause between each ownerOf during relist scan (0 = no gap). Reduces RPS bursts on low Chainstack tiers. */
+const RELIST_OWNER_RPC_GAP_MS = Math.max(0, Number(process.env.BOT_RELIST_OWNER_RPC_GAP_MS ?? 60));
+/**
+ * Listed discovery: ethers `contract.on` uses eth_newFilter + eth_getFilterChanges every poll — brutal on Chainstack RPS.
+ * Instead we poll getLogs on an interval (see pollListedEventsLoop).
+ */
+const LISTED_POLL_MS = Math.max(4000, Number(process.env.BOT_LISTED_POLL_MS ?? 20000));
+const LISTED_LOGS_CHUNK_BLOCKS = Math.max(30, Math.min(Number(process.env.BOT_LISTED_LOGS_CHUNK_BLOCKS ?? 400), 8000));
+const LISTED_CATCHUP_BLOCKS = Math.max(0, Math.min(Number(process.env.BOT_LISTED_CATCHUP_BLOCKS ?? 128), 50_000));
 const INTER_BOT_COOLDOWN_MS = Number(process.env.BOT_INTERBOT_COOLDOWN_MS || 24 * 60 * 60 * 1000);
 const USER_LISTING_MIN_AGE_MS = Number(process.env.BOT_USER_LISTING_MIN_AGE_MS || 60 * 60 * 1000);
 /** Max blocks to scan backward for latest Listed(tokenId) when resolving listing time (startup sweep). */
@@ -52,7 +104,32 @@ const LISTED_EVENT_LOOKBACK_BLOCKS = Math.max(
 const BUY_MAX_ATTEMPTS = Math.max(1, Math.min(Number(process.env.BOT_BUY_MAX_ATTEMPTS || 2), 5));
 const RELIST_AFTER_BUY_MAX_ATTEMPTS = Math.max(1, Math.min(Number(process.env.BOT_RELIST_AFTER_BUY_MAX_ATTEMPTS || 4), 10));
 const RELIST_RETRY_GAP_MS = Math.max(500, Number(process.env.BOT_RELIST_RETRY_GAP_MS || 2500));
+/** Randomized relist backoff (preferred over RELIST_RETRY_GAP_MS when both min/max set). */
+const RELIST_RETRY_MIN_MS = Math.max(5000, Number(process.env.BOT_RELIST_RETRY_MIN_MS ?? 60_000));
+const RELIST_RETRY_MAX_MS = Math.max(
+  RELIST_RETRY_MIN_MS,
+  Number(process.env.BOT_RELIST_RETRY_MAX_MS ?? 300_000)
+);
 const BUY_RETRY_GAP_MS = Math.max(500, Number(process.env.BOT_BUY_RETRY_GAP_MS || 2000));
+/** Bot 2+ waits (id-1) * this ms before competing for the same token lock (bot 1 tries first). */
+const BOT_SECONDARY_LOCK_DELAY_MS = Math.max(0, Number(process.env.BOT_SECONDARY_LOCK_DELAY_MS ?? 2500));
+/** True: user buyback candidates come from Listed events + small validation reads only (no full supply scan). */
+const USE_EVENT_PENDING_QUEUE =
+  String(process.env.BOT_EVENT_PENDING_QUEUE ?? "true").toLowerCase() !== "false";
+/** Only one bot process runs getLogs (Listed/Sold/Cancel) — set false for legacy dual-listener. */
+const BOT_SINGLE_CHAIN_LISTENER =
+  String(process.env.BOT_SINGLE_CHAIN_LISTENER ?? "true").toLowerCase() !== "false";
+/** Optional: force chain listener id (overrides admin “lowest running bot id” election). */
+const BOT_CHAIN_LISTENER_BOT_ID_ENV = String(process.env.BOT_CHAIN_LISTENER_BOT_ID || "").trim();
+const BOT_BOOTSTRAP_LISTING_SCAN =
+  String(process.env.BOT_BOOTSTRAP_LISTING_SCAN ?? "false").toLowerCase() === "true";
+/** When database, universal listener fills pending queue from backend Postgres instead of Listed/Sold getLogs. */
+const BOT_LISTING_SOURCE = String(process.env.BOT_LISTING_SOURCE || "rpc").toLowerCase();
+const BOT_LISTING_QUEUE_URL = String(process.env.BOT_LISTING_QUEUE_URL || "").trim();
+const USE_DB_LISTING_QUEUE = BOT_LISTING_SOURCE === "database" && USE_EVENT_PENDING_QUEUE;
+const LISTING_DISCOVERY_POLL_MS = USE_DB_LISTING_QUEUE
+  ? Math.max(4000, Number(process.env.BOT_LISTING_QUEUE_POLL_MS ?? LISTED_POLL_MS))
+  : LISTED_POLL_MS;
 const POST_APPROVE_DELAY_MS = Number(process.env.BOT_POST_APPROVE_DELAY_MS || 2000);
 /** Extra wait after NFT approve is mined, before `list` (defaults to same as USDT delay). */
 const POST_NFT_APPROVE_DELAY_MS =
@@ -61,7 +138,7 @@ const POST_NFT_APPROVE_DELAY_MS =
     : POST_APPROVE_DELAY_MS;
 /** Block confirmations to wait on approve txs (1 = first receipt, 2+ = safer on reorgs). */
 const APPROVE_TX_CONFIRMATIONS = Math.max(1, Math.min(Number(process.env.BOT_APPROVE_TX_CONFIRMATIONS || 1), 32));
-const RPC_POLLING_INTERVAL_MS = Number(process.env.BOT_RPC_POLLING_INTERVAL_MS || 12000);
+const RPC_POLLING_INTERVAL_MS = Number(process.env.BOT_RPC_POLLING_INTERVAL_MS || 20000);
 const BOT_TX_GAS_GWEI = Number(process.env.BOT_TX_GAS_GWEI || 3);
 const BOT_GAS_LIMIT_APPROVE = Number(process.env.BOT_GAS_LIMIT_APPROVE || 120000);
 const BOT_GAS_LIMIT_BUY = Number(process.env.BOT_GAS_LIMIT_BUY || 350000);
@@ -73,12 +150,18 @@ const BOT_SKIP_USDT_APPROVE_IF_OK =
   String(process.env.BOT_SKIP_USDT_APPROVE_IF_OK ?? "true").toLowerCase() !== "false";
 const BOT_SKIP_NFT_APPROVE_IF_OK =
   String(process.env.BOT_SKIP_NFT_APPROVE_IF_OK ?? "true").toLowerCase() !== "false";
+const BOT_SKIP_LIST_STATIC_SIMULATE =
+  String(process.env.BOT_SKIP_LIST_STATIC_SIMULATE ?? "false").toLowerCase() === "true";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const LOCK_DIR = path.join(__dirname, ".locks");
 const COOLDOWN_FILE = path.join(__dirname, ".bot-intercooldowns.json");
 const LISTING_TIMESTAMPS_FILE = path.join(__dirname, ".bot-listing-timestamps.json");
+/** Shared across PM2 bots: user listings discovered via events (seller ≠ marketplace, ∉ bots). */
+const PENDING_USER_LISTINGS_FILE = path.join(__dirname, ".bot-pending-user-listings.json");
+/** Last block scanned for Listed/Sold/ListingCancelled — shared so listener handoff does not skip logs. */
+const LISTENER_CURSOR_FILE = path.join(__dirname, ".bot-listener-cursor.json");
 
 function resolveBotId() {
   const argId = (process.argv[2] || "").trim();
@@ -91,10 +174,20 @@ function resolveBotId() {
   return String(id);
 }
 
+function pendingPriceMatchesRecord(meta) {
+  try {
+    if (!meta?.priceWei) return true;
+    return BigInt(String(meta.priceWei)) === LIST_PRICE_WEI;
+  } catch {
+    return false;
+  }
+}
+
 const marketplaceAbi = [
   "function listings(uint256) view returns (address seller, uint256 tokenId, uint256 price, bool active)",
   "function listingListedAt(uint256) view returns (uint64)",
   "function isBotTrader(address) view returns (bool)",
+  "function listPrice() view returns (uint256)",
   "event Listed(uint256 indexed tokenId, address indexed seller, uint256 price)",
   "event Sold(uint256 indexed tokenId, address seller, address buyer, uint256 price)",
   "event ListingCancelled(uint256 indexed tokenId)",
@@ -167,12 +260,27 @@ async function main() {
     return;
   }
 
-  // staticNetwork avoids frequent eth_chainId calls on each RPC request.
-  const provider = new ethers.JsonRpcProvider(RPC, undefined, { staticNetwork: true });
+  // staticNetwork + explicit chain avoids extra eth_chainId / detectNetwork traffic (helps on low RPS plans).
+  const staticNetwork =
+    Number.isFinite(RESOLVED_CHAIN_ID) && RESOLVED_CHAIN_ID > 0
+      ? Network.from(RESOLVED_CHAIN_ID)
+      : undefined;
+  const provider = new ethers.JsonRpcProvider(RPC, staticNetwork, { staticNetwork: true });
   provider.pollingInterval = Math.max(4000, RPC_POLLING_INTERVAL_MS);
+  if (Number.isFinite(RESOLVED_CHAIN_ID) && RESOLVED_CHAIN_ID > 0) {
+    const src =
+      Number.isFinite(BOT_CHAIN_ID) && BOT_CHAIN_ID > 0 ? "CHAIN_ID/BOT_CHAIN_ID" : "RPC_URL (inferred)";
+    console.log(`Bot ${botId}: RPC chain pinned CHAIN_ID=${RESOLVED_CHAIN_ID} (${src})`);
+  } else {
+    console.warn(
+      `Bot ${botId}: set CHAIN_ID in .env (e.g. 97 BSC testnet, 56 BSC mainnet) to skip network auto-detect and reduce RPC usage`
+    );
+  }
   const wallet = new ethers.Wallet(privateKey, provider);
   const self = wallet.address.toLowerCase();
   const marketplace = new ethers.Contract(MARKETPLACE_ADDR, marketplaceAbi, wallet);
+  /** Read-only contract for view calls (no wallet sender on eth_call). */
+  const marketplaceRead = new ethers.Contract(MARKETPLACE_ADDR, marketplaceAbi, provider);
   const nft = new ethers.Contract(NFT_ADDR, nftAbi, wallet);
   const usdt = new ethers.Contract(USDT_ADDR, usdtAbi, wallet);
   let queue = Promise.resolve();
@@ -190,9 +298,16 @@ async function main() {
   let marketLc = "";
   const interBotCooldowns = readInterBotCooldowns();
   let listingTimestamps = readListingTimestamps();
+  /** Listener-owned mirror of pending file; traders re-read file when not leader. */
+  let pendingUserListings = readPendingUserListingsFile();
+  /** Set by refreshUniversalListenerRole(): this process runs getLogs (admin: lowest running bot id). */
+  let runsChainPoll = false;
+  let wasUniversalChainListener = false;
   let dynamicUserListingMinAgeMs = Math.max(60_000, USER_LISTING_MIN_AGE_MS);
   /** Bump to cancel in-flight buyback wait; new Listed events reschedule oldest-list logic. */
   let userBuybackGeneration = 0;
+  /** Last block fully scanned for Listed logs (getLogs polling; avoids contract.on filter RPC spam). */
+  let lastListedBlockScanned = null;
 
   async function getListingListedAtMs(tokenId) {
     try {
@@ -236,11 +351,18 @@ async function main() {
   }
 
   process.on("unhandledRejection", (reason) => {
-    if (isRateLimitError(reason)) {
-      console.warn(`Bot ${botId}: RPC rate limited, retrying automatically`);
+    if (isRateLimitError(reason) || isRateLimitError(reason?.cause)) {
+      console.warn(`Bot ${botId}: RPC rate limited (background)`);
       return;
     }
-    console.error(`Bot ${botId}: unhandled rejection`, reason?.message || reason);
+    try {
+      const blob = JSON.stringify(reason?.error || reason || "").toLowerCase();
+      if (blob.includes("-32005") || blob.includes("429") || blob.includes("rate limit")) {
+        console.warn(`Bot ${botId}: RPC rate limited (background)`);
+        return;
+      }
+    } catch (_) {}
+    console.error(`Bot ${botId}: unhandled rejection`, reason?.shortMessage || reason?.message || reason);
   });
 
   function enqueue(task) {
@@ -320,19 +442,113 @@ function writeListingTimestamps(data) {
   } catch (_) {}
 }
 
+function readPendingUserListingsFile() {
+  try {
+    if (!fs.existsSync(PENDING_USER_LISTINGS_FILE)) return {};
+    const raw = fs.readFileSync(PENDING_USER_LISTINGS_FILE, "utf8");
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch (_) {
+    return {};
+  }
+}
+
+function writePendingUserListingsFile(data) {
+  try {
+    fs.writeFileSync(PENDING_USER_LISTINGS_FILE, JSON.stringify(data, null, 2));
+  } catch (_) {}
+}
+
+function readListenerCursorBlock() {
+  try {
+    if (!fs.existsSync(LISTENER_CURSOR_FILE)) return null;
+    const raw = fs.readFileSync(LISTENER_CURSOR_FILE, "utf8");
+    const j = JSON.parse(raw);
+    const n = Number(j?.lastListedBlockScanned);
+    return Number.isFinite(n) && n >= 0 ? Math.floor(n) : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeListenerCursorBlock(blockNumber) {
+  try {
+    const n = Math.floor(Number(blockNumber));
+    if (!Number.isFinite(n) || n < 0) return;
+    fs.writeFileSync(LISTENER_CURSOR_FILE, JSON.stringify({ lastListedBlockScanned: n }, null, 2));
+  } catch (_) {}
+}
+
+function relistRandomBackoffMs() {
+  const span = Math.max(0, RELIST_RETRY_MAX_MS - RELIST_RETRY_MIN_MS);
+  return RELIST_RETRY_MIN_MS + Math.floor(Math.random() * (span + 1));
+}
+
 function isRateLimitError(e) {
   const msg = String(e?.message || e?.shortMessage || JSON.stringify(e?.info || e?.value || "")).toLowerCase();
+  const codes = [
+    Number(e?.code),
+    Number(e?.error?.code),
+    Number(e?.info?.error?.code),
+  ];
   return (
     msg.includes("429") ||
     msg.includes("rate limit") ||
     msg.includes("-32005") ||
     msg.includes("exceeded the rps") ||
     msg.includes("compute units per second") ||
-    Number(e?.code) === 429 ||
-    Number(e?.code) === -32005 ||
-    Number(e?.error?.code) === 429 ||
-    Number(e?.error?.code) === -32005
+    msg.includes("could not coalesce") ||
+    codes.some((c) => c === 429 || c === -32005)
   );
+}
+
+/** Readable RPC / revert line for logs (ethers often hides JSON-RPC details behind "could not coalesce error"). */
+function summarizeEthersError(e) {
+  const parts = [];
+  const sm = e?.shortMessage;
+  const m = e?.message;
+  if (sm) parts.push(sm);
+  if (m && m !== sm) parts.push(m);
+  try {
+    const rpc = e?.error || e?.info?.error;
+    if (rpc?.message) parts.push(`jsonrpc: ${rpc.message}`);
+    if (rpc?.code != null && String(rpc.code) !== "") parts.push(`code=${rpc.code}`);
+    const d = rpc?.data ?? e?.data;
+    if (d && typeof d === "object" && d.try_again_in != null) {
+      parts.push(`try_again_in=${d.try_again_in}`);
+    }
+    if (typeof d === "string" && d.startsWith("0x") && d.length > 2) {
+      parts.push(`data=${d.slice(0, 18)}…`);
+    }
+  } catch {
+    /* ignore */
+  }
+  return parts.length ? parts.join(" | ") : String(e ?? "error");
+}
+
+/** One-line log: shorten Chainstack RPS noise; keep detail for real reverts. */
+function formatEthersErrorForLog(e) {
+  if (isRateLimitError(e)) {
+    const ms = rateLimitPauseMs(e) || 500;
+    return `RPC rate limit (Chainstack RPS) — retry after ~${ms}ms`;
+  }
+  return summarizeEthersError(e);
+}
+
+/** Chainstack / similar: parse try_again_in e.g. "595.814718ms". */
+function rateLimitPauseMs(e) {
+  try {
+    const data = e?.info?.error?.data ?? e?.data ?? e?.error?.data;
+    const raw = data?.try_again_in ?? data?.tryAgainIn;
+    if (raw == null) return 0;
+    const s = String(raw).trim();
+    const m = s.match(/^([\d.]+)\s*ms$/i);
+    if (m) return Math.ceil(parseFloat(m[1]));
+    const n = Number(s);
+    return Number.isFinite(n) ? Math.ceil(n) : 0;
+  } catch {
+    return 0;
+  }
 }
 
 function txOverrides(kind = "default") {
@@ -354,29 +570,190 @@ function txOverrides(kind = "default") {
       return true;
     } catch (e) {
       console.log(
-        `Bot ${botId}: buy simulation would revert, skip token ${tokenId.toString()}`,
-        e?.shortMessage || e?.message || e
+        `Bot ${botId}: buy simulation would revert, skip token ${tokenId.toString()} — ${summarizeEthersError(e)}`
       );
       return false;
     }
   }
 
   async function simulateListCall(tokenId) {
-    if (!BOT_STATIC_SIMULATE) return true;
+    if (!BOT_STATIC_SIMULATE || BOT_SKIP_LIST_STATIC_SIMULATE) return true;
     try {
       await marketplace.list.staticCall(tokenId, LIST_PRICE_WEI);
       return true;
     } catch (e) {
-      console.log(
-        `Bot ${botId}: list simulation would revert token ${tokenId.toString()}`,
-        e?.shortMessage || e?.message || e
-      );
+      const s = summarizeEthersError(e);
+      console.log(`Bot ${botId}: list simulation would revert token ${tokenId.toString()} — ${s}`);
+      const raw = String(e?.data || e?.info?.error?.data || "");
+      const hasInsufficientApproval =
+        raw.startsWith("0x177e802f") || s.includes("0x177e802f") || raw.toLowerCase().includes("177e802f");
+      if (hasInsufficientApproval) {
+        console.log(
+          `Bot ${botId}: list sim revert = ERC721InsufficientApproval (marketplace cannot transfer this tokenId; approve marketplace on NFT first)`
+        );
+      } else if (
+        String(s).toLowerCase().includes("custom error") ||
+        String(s).toLowerCase().includes("unknown")
+      ) {
+        console.log(
+          `Bot ${botId}: hint: list() ends with _runDynamicMintIfNeeded(); nested NFT revert can look like a custom error. ` +
+            `If real list txs work, set BOT_SKIP_LIST_STATIC_SIMULATE=true.`
+        );
+      }
       return false;
     }
   }
 
   async function delayMs(ms) {
     if (ms > 0) await new Promise((r) => setTimeout(r, ms));
+  }
+
+  async function withBotRpcRetry(fn, { retries = 6, baseMs = 500 } = {}) {
+    let last;
+    for (let i = 0; i <= retries; i++) {
+      try {
+        return await fn();
+      } catch (e) {
+        last = e;
+        if (!isRateLimitError(e) || i === retries) throw e;
+        const pause = rateLimitPauseMs(e) || baseMs * 2 ** i;
+        await delayMs(Math.min(15_000, Math.max(300, pause)));
+      }
+    }
+    throw last;
+  }
+
+  function configuredBotIdsWithKeys() {
+    const ids = [];
+    for (let i = 1; i <= 5; i++) {
+      if ((process.env[`BOT${i}_PRIVATE_KEY`] || "").trim()) ids.push(String(i));
+    }
+    return ids.sort((a, b) => Number(a) - Number(b));
+  }
+
+  async function fetchControlGet(pathSuffix) {
+    const base = (BOT_CONTROL_BASE_URL || "").replace(/\/$/, "");
+    const url = `${base}/${pathSuffix}`;
+    const headers = BOT_CONTROL_API_KEY ? { "x-bot-control-key": BOT_CONTROL_API_KEY } : {};
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), Math.max(1000, CONTROL_REQUEST_TIMEOUT_MS));
+    try {
+      return await fetch(url, { headers, signal: controller.signal });
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /** Full URL override or bot-control relative /listing-queue (same auth as other bot-control calls). */
+  async function fetchListingQueueResponse() {
+    const explicit = BOT_LISTING_QUEUE_URL.replace(/\/$/, "");
+    if (explicit) {
+      const headers = { accept: "application/json" };
+      if (BOT_CONTROL_API_KEY) headers["x-bot-control-key"] = BOT_CONTROL_API_KEY;
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), Math.max(1000, CONTROL_REQUEST_TIMEOUT_MS));
+      try {
+        return await fetch(explicit, { headers, signal: controller.signal });
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+    const base = (BOT_CONTROL_BASE_URL || "").replace(/\/$/, "");
+    if (!base) return null;
+    return fetchControlGet("listing-queue");
+  }
+
+  let cachedRunningBotIds = null;
+  let cachedRunningBotIdsAt = 0;
+  const RUNNING_BOT_IDS_TTL_MS = Math.min(15_000, Math.max(2500, CONTROL_REFRESH_MS));
+
+  async function getRunningBotIdsFromAdmin() {
+    const now = Date.now();
+    if (cachedRunningBotIds != null && now - cachedRunningBotIdsAt < RUNNING_BOT_IDS_TTL_MS) {
+      return cachedRunningBotIds;
+    }
+    const configured = configuredBotIdsWithKeys();
+    let next = [];
+    const base = (BOT_CONTROL_BASE_URL || "").replace(/\/$/, "");
+    if (!base) {
+      next = [...configured];
+    } else {
+      for (const id of configured) {
+        try {
+          const res = await fetchControlGet(id);
+          if (!res.ok) continue;
+          const data = await res.json();
+          if (data?.running) next.push(id);
+        } catch (_) {
+          /* skip */
+        }
+      }
+      if (next.length === 0 && configured.length > 0) {
+        next = cachedRunningBotIds != null ? [...cachedRunningBotIds] : [];
+      }
+    }
+    cachedRunningBotIds = next;
+    cachedRunningBotIdsAt = now;
+    return next;
+  }
+
+  async function refreshUniversalListenerRole() {
+    if (!BOT_SINGLE_CHAIN_LISTENER) {
+      runsChainPoll = true;
+      wasUniversalChainListener = true;
+      return;
+    }
+    if (BOT_CHAIN_LISTENER_BOT_ID_ENV) {
+      runsChainPoll = botId === BOT_CHAIN_LISTENER_BOT_ID_ENV;
+      wasUniversalChainListener = runsChainPoll;
+      return;
+    }
+    const running = await getRunningBotIdsFromAdmin();
+    const prevLeader = wasUniversalChainListener;
+    if (running.length === 0) {
+      if (prevLeader && runsChainPoll) {
+        console.log(`Bot ${botId}: universal chain listener stopped — all bots stopped in admin`);
+      }
+      runsChainPoll = false;
+      wasUniversalChainListener = false;
+      return;
+    }
+    const leader = running.reduce((a, b) => (Number(a) <= Number(b) ? a : b));
+    const amLeader = botId === leader;
+    if (amLeader && !prevLeader) {
+      pendingUserListings = readPendingUserListingsFile();
+      const persisted = readListenerCursorBlock();
+      lastListedBlockScanned = persisted != null ? persisted : null;
+      console.log(
+        `Bot ${botId}: universal chain listener (admin: running bots ${running.join(", ")})`
+      );
+    }
+    if (!amLeader && prevLeader) {
+      console.log(`Bot ${botId}: handed off chain listener to bot ${leader}`);
+    }
+    wasUniversalChainListener = amLeader;
+    runsChainPoll = amLeader;
+  }
+
+  function prunePendingKey(tokenIdStr) {
+    if (!USE_EVENT_PENDING_QUEUE) return;
+    const disk = readPendingUserListingsFile();
+    if (!disk[tokenIdStr]) return;
+    delete disk[tokenIdStr];
+    writePendingUserListingsFile(disk);
+    if (runsChainPoll) delete pendingUserListings[tokenIdStr];
+  }
+
+  function upsertPendingForUserListing(tokenIdStr, sellerLc, priceBn, listedAtMs) {
+    if (!USE_EVENT_PENDING_QUEUE || !runsChainPoll) return;
+    if (!sellerLc || sellerLc === marketLc || knownBotWallets.has(sellerLc)) return;
+    if (priceBn !== LIST_PRICE_WEI) return;
+    pendingUserListings[tokenIdStr] = {
+      seller: sellerLc,
+      priceWei: priceBn.toString(),
+      listedAtMs: Number(listedAtMs),
+    };
+    writePendingUserListingsFile(pendingUserListings);
   }
 
   async function hasAnyActiveUserListing(force = false) {
@@ -386,6 +763,22 @@ function txOverrides(kind = "default") {
     }
     lastUserListingsCheckAt = now;
     try {
+      if (USE_EVENT_PENDING_QUEUE && BOT_SINGLE_CHAIN_LISTENER) {
+        await refreshUniversalListenerRole();
+      }
+      if (USE_EVENT_PENDING_QUEUE) {
+        const snap = runsChainPoll ? pendingUserListings : readPendingUserListingsFile();
+        const n = Object.keys(snap).filter((k) => {
+          const m = snap[k];
+          if (!m || typeof m !== "object") return false;
+          if (!pendingPriceMatchesRecord(m)) return false;
+          const s = (m.seller || "").toLowerCase();
+          if (!s || s === marketLc || knownBotWallets.has(s)) return false;
+          return true;
+        }).length;
+        cachedHasUserListings = n > 0;
+        return cachedHasUserListings;
+      }
       const totalMinted = await getTotalMintedSafe();
       if (!Number.isFinite(totalMinted) || totalMinted <= 0) {
         cachedHasUserListings = false;
@@ -424,8 +817,70 @@ function txOverrides(kind = "default") {
     }
   }
 
-  /** Active member listings (non-bot, non-marketplace contract seller) at list price — for oldest-first buyback. */
-  async function collectUserListingRows() {
+  /** Pending queue + one `listings()` per candidate (not O(totalMinted)). */
+  async function collectUserListingRowsFromPendingOnly() {
+    if (USE_EVENT_PENDING_QUEUE && BOT_SINGLE_CHAIN_LISTENER) {
+      await refreshUniversalListenerRole();
+    }
+    const snap = runsChainPoll ? pendingUserListings : readPendingUserListingsFile();
+    const out = [];
+    for (const [tidStr, meta] of Object.entries(snap)) {
+      if (!meta || typeof meta !== "object") continue;
+      if (!pendingPriceMatchesRecord(meta)) {
+        prunePendingKey(tidStr);
+        continue;
+      }
+      const sellerLc = (meta.seller || "").toLowerCase();
+      if (!sellerLc || sellerLc === marketLc || knownBotWallets.has(sellerLc)) {
+        prunePendingKey(tidStr);
+        continue;
+      }
+      let tokenId;
+      try {
+        tokenId = BigInt(tidStr);
+      } catch {
+        prunePendingKey(tidStr);
+        continue;
+      }
+      try {
+        const l = await marketplace.listings(tokenId);
+        const active = Boolean(l?.active ?? l?.[3]);
+        if (!active) {
+          prunePendingKey(tidStr);
+          continue;
+        }
+        const curSeller = (l?.seller || l?.[0] || "").toString().toLowerCase();
+        if (curSeller !== sellerLc) {
+          prunePendingKey(tidStr);
+          continue;
+        }
+        const price = l?.price ?? l?.[2] ?? 0n;
+        if (BigInt(price.toString()) !== LIST_PRICE_WEI) {
+          prunePendingKey(tidStr);
+          continue;
+        }
+        let listedAtMs = meta.listedAtMs;
+        if (listedAtMs == null || !Number.isFinite(Number(listedAtMs))) {
+          listedAtMs = listingTimestamps[tidStr];
+        }
+        const chainMs = await getListingListedAtMs(tokenId);
+        if (chainMs != null) listedAtMs = chainMs;
+        if (listedAtMs == null || !Number.isFinite(Number(listedAtMs))) listedAtMs = Date.now();
+        out.push({
+          tokenId,
+          seller: l?.seller || l?.[0],
+          price,
+          listedAtMs: Number(listedAtMs),
+        });
+      } catch {
+        /* keep entry; RPC flake */
+      }
+    }
+    return out;
+  }
+
+  /** Full mint scan — optional bootstrap / legacy when BOT_EVENT_PENDING_QUEUE=false. */
+  async function collectUserListingRowsFullScan() {
     const totalMinted = await getTotalMintedSafe();
     if (!Number.isFinite(totalMinted) || totalMinted <= 0) return [];
     const batchSize = Math.max(1, Math.min(ACTIVE_SCAN_BATCH_SIZE, 200));
@@ -480,6 +935,13 @@ function txOverrides(kind = "default") {
       }
     }
     return out;
+  }
+
+  async function collectUserListingRows() {
+    if (USE_EVENT_PENDING_QUEUE) {
+      return collectUserListingRowsFromPendingOnly();
+    }
+    return collectUserListingRowsFullScan();
   }
 
   async function runUserBuybackWorkerImpl() {
@@ -567,6 +1029,200 @@ function txOverrides(kind = "default") {
     enqueue(runUserBuybackWorkerImpl);
   }
 
+  function handleListedLogArgs(tokenId, seller, price, blockNumber) {
+    enqueue(async () => {
+      const enabled = await isBotEnabled();
+      if (!enabled) return;
+      const sellerAddr = (seller || "").toString().toLowerCase();
+      const isUserListing = sellerAddr && sellerAddr !== marketLc && !knownBotWallets.has(sellerAddr);
+      if (!isUserListing) return;
+      const tid = tokenId.toString();
+      let tsMs = Date.now();
+      try {
+        if (blockNumber != null) {
+          const blk = await withBotRpcRetry(() => provider.getBlock(blockNumber), { retries: 4, baseMs: 400 });
+          if (blk?.timestamp != null) tsMs = Number(blk.timestamp) * 1000;
+        }
+      } catch (_) {}
+      listingTimestamps[tid] = tsMs;
+      writeListingTimestamps(listingTimestamps);
+      const priceBn = price != null ? BigInt(price.toString()) : 0n;
+      upsertPendingForUserListing(tid, sellerAddr, priceBn, tsMs);
+      kickUserBuybackRescan();
+    });
+  }
+
+  async function pollListingQueueFromApiLoop() {
+    await refreshUniversalListenerRole();
+    if (!runsChainPoll) return;
+    let res;
+    try {
+      res = await fetchListingQueueResponse();
+    } catch (e) {
+      console.warn(`Bot ${botId}: listing-queue fetch`, e?.message || e);
+      return;
+    }
+    if (res == null) {
+      console.warn(
+        `Bot ${botId}: BOT_LISTING_SOURCE=database needs BOT_CONTROL_BASE_URL or BOT_LISTING_QUEUE_URL`
+      );
+      return;
+    }
+    try {
+      if (!res.ok) {
+        let msg = res.statusText || "";
+        try {
+          const errBody = await res.json();
+          msg = String(errBody?.error || msg);
+        } catch (_) {}
+        console.warn(`Bot ${botId}: listing-queue HTTP ${res.status} — ${msg}`);
+        return;
+      }
+      const data = await res.json();
+      const items = Array.isArray(data?.items) ? data.items : [];
+      const next = {};
+      for (const it of items) {
+        const tidStr = String(it?.tokenId ?? "").trim();
+        if (!tidStr) continue;
+        const sellerLc = String(it?.seller ?? "").toLowerCase();
+        if (!sellerLc || sellerLc === marketLc || knownBotWallets.has(sellerLc)) continue;
+        let priceWei;
+        try {
+          priceWei = BigInt(String(it?.priceWei ?? "0"));
+        } catch {
+          continue;
+        }
+        if (priceWei !== LIST_PRICE_WEI) continue;
+
+        const prev = pendingUserListings[tidStr] || {};
+        let listedAtMs = Number(it?.listedAtMs);
+        if (!Number.isFinite(listedAtMs) || listedAtMs <= 0) {
+          listedAtMs = Number(prev.listedAtMs);
+        }
+        if (!Number.isFinite(listedAtMs) || listedAtMs <= 0) {
+          listedAtMs = Number(listingTimestamps[tidStr]);
+        }
+        if (!Number.isFinite(listedAtMs) || listedAtMs <= 0) {
+          listedAtMs = Date.now();
+        }
+        next[tidStr] = {
+          seller: sellerLc,
+          priceWei: priceWei.toString(),
+          listedAtMs: Math.floor(listedAtMs),
+        };
+      }
+      pendingUserListings = next;
+      writePendingUserListingsFile(pendingUserListings);
+      for (const [tidStr, m] of Object.entries(next)) {
+        listingTimestamps[tidStr] = m.listedAtMs;
+      }
+      writeListingTimestamps(listingTimestamps);
+      kickUserBuybackRescan();
+    } catch (e) {
+      console.warn(`Bot ${botId}: listing-queue poll`, e?.message || e);
+    }
+  }
+
+  async function pollListingDiscoveryLoop() {
+    if (USE_DB_LISTING_QUEUE) {
+      await pollListingQueueFromApiLoop();
+      return;
+    }
+    await pollListedEventsLoop();
+  }
+
+  async function pollListedEventsLoop() {
+    await refreshUniversalListenerRole();
+    if (!runsChainPoll) return;
+    try {
+      const latest = await withBotRpcRetry(() => provider.getBlockNumber(), { retries: 5, baseMs: 500 });
+      if (lastListedBlockScanned == null) {
+        const persisted = readListenerCursorBlock();
+        if (persisted != null && persisted <= latest) {
+          lastListedBlockScanned = persisted;
+        } else {
+          lastListedBlockScanned = Math.max(0, latest - LISTED_CATCHUP_BLOCKS);
+        }
+      }
+      let from = lastListedBlockScanned + 1;
+      if (from > latest) return;
+
+      const listedFilter = marketplace.filters.Listed();
+      while (from <= latest) {
+        const chunkFrom = from;
+        const to = Math.min(from + LISTED_LOGS_CHUNK_BLOCKS - 1, latest);
+        let events;
+        try {
+          events = await withBotRpcRetry(() => marketplace.queryFilter(listedFilter, chunkFrom, to), {
+            retries: 5,
+            baseMs: 550,
+          });
+        } catch (e) {
+          if (isRateLimitError(e)) {
+            await delayMs(Math.min(12_000, Math.max(500, rateLimitPauseMs(e) || 900)));
+          } else {
+            console.warn(`Bot ${botId}: Listed getLogs [${chunkFrom}-${to}]`, formatEthersErrorForLog(e));
+          }
+          return;
+        }
+        for (const ev of events) {
+          const a = ev.args;
+          const tokenId = a?.tokenId ?? a?.[0];
+          const seller = a?.seller ?? a?.[1];
+          const price = a?.price ?? a?.[2];
+          if (tokenId == null || seller == null) continue;
+          handleListedLogArgs(tokenId, seller, price, ev.blockNumber);
+        }
+
+        if (USE_EVENT_PENDING_QUEUE) {
+          const soldFilter = marketplace.filters.Sold();
+          const cancelFilter = marketplace.filters.ListingCancelled();
+          try {
+            const soldEvs = await withBotRpcRetry(() => marketplace.queryFilter(soldFilter, chunkFrom, to), {
+              retries: 4,
+              baseMs: 550,
+            });
+            for (const ev of soldEvs) {
+              const st = ev.args?.tokenId ?? ev.args?.[0];
+              if (st != null) prunePendingKey(st.toString());
+            }
+          } catch (e) {
+            if (!isRateLimitError(e)) {
+              console.warn(`Bot ${botId}: Sold getLogs [${chunkFrom}-${to}]`, formatEthersErrorForLog(e));
+            }
+          }
+          try {
+            const canEvs = await withBotRpcRetry(() => marketplace.queryFilter(cancelFilter, chunkFrom, to), {
+              retries: 4,
+              baseMs: 550,
+            });
+            for (const ev of canEvs) {
+              const ct = ev.args?.tokenId ?? ev.args?.[0];
+              if (ct != null) prunePendingKey(ct.toString());
+            }
+          } catch (e) {
+            if (!isRateLimitError(e)) {
+              console.warn(
+                `Bot ${botId}: ListingCancelled getLogs [${chunkFrom}-${to}]`,
+                formatEthersErrorForLog(e)
+              );
+            }
+          }
+        }
+
+        from = to + 1;
+      }
+      lastListedBlockScanned = latest;
+      writeListenerCursorBlock(latest);
+    } catch (e) {
+      if (isRateLimitError(e)) {
+        console.warn(`Bot ${botId}: Listed poll rate limited`);
+      } else {
+        console.warn(`Bot ${botId}: Listed poll error`, formatEthersErrorForLog(e));
+      }
+    }
+  }
+
   async function tryBuyAndRelist(tokenId, seller, price, source) {
     const tokenIdStr = tokenId.toString();
     const sellerAddr = (seller || "").toString().toLowerCase();
@@ -598,6 +1254,9 @@ function txOverrides(kind = "default") {
         return;
       }
     }
+
+    const lockStagger = (Number(botId) - 1) * BOT_SECONDARY_LOCK_DELAY_MS;
+    if (lockStagger > 0) await delayMs(lockStagger);
 
     const lock = await acquireTokenLock(tokenIdStr);
     if (!lock) {
@@ -657,15 +1316,18 @@ function txOverrides(kind = "default") {
           buyReceipt = await buyTx.wait();
           break;
         } catch (e) {
+          const summary = summarizeEthersError(e);
           console.warn(
-            `Bot ${botId}: buy attempt ${attempt}/${BUY_MAX_ATTEMPTS} failed token ${tokenIdStr}`,
-            e?.shortMessage || e?.message || e
+            `Bot ${botId}: buy attempt ${attempt}/${BUY_MAX_ATTEMPTS} failed token ${tokenIdStr} — ${summary}`
           );
           if (attempt >= BUY_MAX_ATTEMPTS) {
             console.error(`Bot ${botId}: buy aborted after ${BUY_MAX_ATTEMPTS} attempts; another bot may succeed`);
             return;
           }
-          await new Promise((r) => setTimeout(r, BUY_RETRY_GAP_MS * attempt));
+          const backoff = isRateLimitError(e)
+            ? Math.min(15_000, Math.max(BUY_RETRY_GAP_MS * attempt, rateLimitPauseMs(e) || 600))
+            : BUY_RETRY_GAP_MS * attempt;
+          await delayMs(backoff);
         }
       }
       if (!buyTx || !buyReceipt) return;
@@ -673,6 +1335,7 @@ function txOverrides(kind = "default") {
       console.log(`Bot ${botId}: bought token ${tokenIdStr} (${source})`);
       delete listingTimestamps[tokenIdStr];
       writeListingTimestamps(listingTimestamps);
+      prunePendingKey(tokenIdStr);
       await reportPurchaseToBackend({
         buyer: self,
         seller: sellerAddr,
@@ -685,12 +1348,8 @@ function txOverrides(kind = "default") {
       let relistOk = false;
       for (let attempt = 1; attempt <= RELIST_AFTER_BUY_MAX_ATTEMPTS; attempt++) {
         try {
-          if (!(await simulateListCall(tokenId))) {
-            if (attempt < RELIST_AFTER_BUY_MAX_ATTEMPTS) {
-              await new Promise((r) => setTimeout(r, RELIST_RETRY_GAP_MS * attempt));
-            }
-            continue;
-          }
+          // NFT approve must exist before list() (transferFrom) or staticCall(list) reverts with
+          // ERC721InsufficientApproval (selector 0x177e802f on recent OZ).
           let skipNftApprove = false;
           if (BOT_SKIP_NFT_APPROVE_IF_OK) {
             try {
@@ -705,18 +1364,31 @@ function txOverrides(kind = "default") {
             await approveNftTx.wait(APPROVE_TX_CONFIRMATIONS);
             await delayMs(POST_NFT_APPROVE_DELAY_MS);
           }
+          if (!(await simulateListCall(tokenId))) {
+            if (attempt < RELIST_AFTER_BUY_MAX_ATTEMPTS) {
+              await new Promise((r) => setTimeout(r, relistRandomBackoffMs()));
+            }
+            continue;
+          }
           const listTx = await marketplace.list(tokenId, LIST_PRICE_WEI, txOverrides("list"));
           await listTx.wait();
           relistOk = true;
           console.log(`Bot ${botId}: relisted token ${tokenIdStr} at $30 (attempt ${attempt})`);
           break;
         } catch (e) {
-          console.warn(
-            `Bot ${botId}: relist attempt ${attempt}/${RELIST_AFTER_BUY_MAX_ATTEMPTS} token ${tokenIdStr}`,
-            e?.shortMessage || e?.message || e
-          );
-          if (attempt < RELIST_AFTER_BUY_MAX_ATTEMPTS) {
-            await new Promise((r) => setTimeout(r, RELIST_RETRY_GAP_MS * attempt));
+          if (isRateLimitError(e)) {
+            const ms = Math.min(15_000, Math.max(250, rateLimitPauseMs(e) || 600));
+            console.warn(
+              `Bot ${botId}: relist attempt ${attempt}/${RELIST_AFTER_BUY_MAX_ATTEMPTS} token ${tokenIdStr} — RPC rate limit, wait ${ms}ms`
+            );
+            await delayMs(ms);
+          } else {
+            console.warn(
+              `Bot ${botId}: relist attempt ${attempt}/${RELIST_AFTER_BUY_MAX_ATTEMPTS} token ${tokenIdStr} — ${formatEthersErrorForLog(e)}`
+            );
+            if (attempt < RELIST_AFTER_BUY_MAX_ATTEMPTS) {
+              await new Promise((r) => setTimeout(r, relistRandomBackoffMs()));
+            }
           }
         }
       }
@@ -726,6 +1398,15 @@ function txOverrides(kind = "default") {
         );
       }
     } catch (e) {
+      if (isRateLimitError(e)) {
+        const ms = rateLimitPauseMs(e) || 700;
+        console.warn(
+          `Bot ${botId}: trade path rate-limited (${source}) token ${tokenIdStr}; ` +
+            `Chainstack RPS — backing off ~${Math.min(10_000, Math.max(400, ms))}ms then worker retries.`
+        );
+        await delayMs(Math.min(10_000, Math.max(400, ms)));
+        return;
+      }
       console.error(`Bot ${botId} trade error (${source}) token ${tokenIdStr}:`, e?.message || e);
     } finally {
       await releaseTokenLock(lock);
@@ -745,8 +1426,6 @@ function txOverrides(kind = "default") {
       const owner = (await nft.ownerOf(tokenId)).toString().toLowerCase();
       if (owner !== self) return false; // not held anymore
 
-      if (!(await simulateListCall(tokenId))) return false;
-
       let skipNftApprove = false;
       if (BOT_SKIP_NFT_APPROVE_IF_OK) {
         try {
@@ -761,12 +1440,24 @@ function txOverrides(kind = "default") {
         await approveTx.wait(APPROVE_TX_CONFIRMATIONS);
         await delayMs(POST_NFT_APPROVE_DELAY_MS);
       }
+      if (!(await simulateListCall(tokenId))) return false;
+
       const listTx = await marketplace.list(tokenId, LIST_PRICE_WEI, txOverrides("list"));
       await listTx.wait();
       console.log(`Bot ${botId}: relisted held token ${tokenIdStr} (${source})`);
       return true;
     } catch (e) {
-      console.warn(`Bot ${botId}: relist retry failed token ${tokenIdStr} (${source})`, e?.message || e);
+      if (isRateLimitError(e)) {
+        const ms = Math.min(12_000, Math.max(200, rateLimitPauseMs(e) || 400));
+        console.warn(
+          `Bot ${botId}: relist token ${tokenIdStr} (${source}) — RPC rate limit, wait ${ms}ms (next relist interval will retry)`
+        );
+        await delayMs(ms);
+      } else {
+        console.warn(
+          `Bot ${botId}: relist retry failed token ${tokenIdStr} (${source}) — ${formatEthersErrorForLog(e)}`
+        );
+      }
       return false;
     } finally {
       await releaseTokenLock(lock);
@@ -785,9 +1476,17 @@ function txOverrides(kind = "default") {
       for (let start = 1; start <= totalMinted; start += scanBatch) {
         const end = Math.min(totalMinted, start + scanBatch - 1);
         const tokenIds = Array.from({ length: end - start + 1 }, (_, idx) => start + idx);
-        const owners = await Promise.all(
-          tokenIds.map((tokenId) => nft.ownerOf(tokenId).then((o) => String(o || "").toLowerCase()).catch(() => ""))
-        );
+        const owners = [];
+        for (const tid of tokenIds) {
+          try {
+            owners.push(String(await nft.ownerOf(tid) || "").toLowerCase());
+          } catch {
+            owners.push("");
+          }
+          if (RELIST_OWNER_RPC_GAP_MS > 0) {
+            await delayMs(RELIST_OWNER_RPC_GAP_MS);
+          }
+        }
         for (let i = 0; i < tokenIds.length; i++) {
           if (owners[i] !== self) continue;
           const didRelist = await relistTokenIfNeeded(tokenIds[i], source);
@@ -901,7 +1600,10 @@ function txOverrides(kind = "default") {
   async function ensureBotTraderEligibility() {
     if (botTraderEligible !== null) return botTraderEligible;
     try {
-      botTraderEligible = await marketplace.isBotTrader(wallet.address);
+      botTraderEligible = await withBotRpcRetry(() => marketplaceRead.isBotTrader(wallet.address), {
+        retries: 8,
+        baseMs: 600,
+      });
       if (!botTraderEligible) {
         console.error(
           `Bot ${botId}: wallet is NOT whitelisted as bot trader. ` +
@@ -911,44 +1613,78 @@ function txOverrides(kind = "default") {
       }
       return botTraderEligible;
     } catch (e) {
-      console.warn(`Bot ${botId}: could not check isBotTrader`, e?.message || e);
+      console.warn(
+        `Bot ${botId}: could not check isBotTrader after retries`,
+        e?.shortMessage || e?.message || e
+      );
       return false;
     }
   }
   await ensureBotTraderEligibility();
+
+  if (BOT_SKIP_LIST_STATIC_SIMULATE) {
+    console.log(`Bot ${botId}: BOT_SKIP_LIST_STATIC_SIMULATE=true — skipping list() eth_call simulation`);
+  }
+  try {
+    const onChainLp = await marketplaceRead.listPrice();
+    const onChainBn = BigInt(onChainLp.toString());
+    if (onChainBn !== LIST_PRICE_WEI) {
+      console.warn(
+        `Bot ${botId}: marketplace listPrice=${onChainBn.toString()} bot expects LIST_PRICE_WEI=${LIST_PRICE_WEI.toString()} (config.js); list() reverts with "Invalid price" if mismatched`
+      );
+    }
+  } catch (e) {
+    console.warn(`Bot ${botId}: could not read marketplace listPrice()`, summarizeEthersError(e));
+  }
+
+  await refreshUniversalListenerRole();
+
+  if (USE_EVENT_PENDING_QUEUE && runsChainPoll && BOT_BOOTSTRAP_LISTING_SCAN) {
+    try {
+      if (Object.keys(pendingUserListings).length === 0) {
+        console.log(`Bot ${botId}: BOT_BOOTSTRAP_LISTING_SCAN — one-time full mint scan to seed pending queue`);
+        const rows = await collectUserListingRowsFullScan();
+        for (const row of rows) {
+          const tid = row.tokenId.toString();
+          const sl = (row.seller || "").toString().toLowerCase();
+          upsertPendingForUserListing(tid, sl, BigInt(row.price.toString()), row.listedAtMs);
+        }
+      }
+    } catch (e) {
+      console.warn(`Bot ${botId}: bootstrap listing scan failed`, e?.message || e);
+    }
+  }
 
   await hasAnyActiveUserListing(true).catch(() => {});
   const initialEnabled = await isBotEnabled(true);
   wasEnabled = Boolean(initialEnabled);
   if (!wasEnabled) console.log(`Bot ${botId} paused by admin state (running=false). Listening only.`);
 
-  console.log(`Bot ${botId} running. User buyback: oldest listing after buyback delay (admin buybackDelayMs); token locks + no bot-to-bot.`);
+  if (USE_DB_LISTING_QUEUE && !BOT_SINGLE_CHAIN_LISTENER) {
+    console.warn(
+      `Bot ${botId}: BOT_LISTING_SOURCE=database with BOT_SINGLE_CHAIN_LISTENER=false may duplicate listing-queue writes across processes`
+    );
+  }
+  if (BOT_LISTING_SOURCE === "database" && !USE_EVENT_PENDING_QUEUE) {
+    console.warn(
+      `Bot ${botId}: BOT_LISTING_SOURCE=database has no effect while BOT_EVENT_PENDING_QUEUE=false (using rpc/full-scan paths)`
+    );
+  }
+  console.log(
+    `Bot ${botId} running. Buyback from admin delay; event queue=${USE_EVENT_PENDING_QUEUE}; ` +
+      `listing source=${USE_DB_LISTING_QUEUE ? "database" : "rpc"}; ` +
+      `universal listener=${runsChainPoll} (${USE_DB_LISTING_QUEUE ? "listing-queue API" : "getLogs"}); ` +
+      `poll ${LISTING_DISCOVERY_POLL_MS}ms when leader.`
+  );
 
   if (wasEnabled) {
     enqueue(runUserBuybackWorkerImpl);
   }
 
-  marketplace.on("Listed", (tokenId, seller, price, eventPayload) => {
-    enqueue(async () => {
-      const enabled = await isBotEnabled();
-      if (!enabled) return;
-      const sellerAddr = (seller || "").toString().toLowerCase();
-      const isUserListing = sellerAddr && sellerAddr !== marketLc && !knownBotWallets.has(sellerAddr);
-      if (!isUserListing) return;
-      const tid = tokenId.toString();
-      let tsMs = Date.now();
-      try {
-        const bn = eventPayload?.log?.blockNumber;
-        if (bn != null) {
-          const blk = await provider.getBlock(bn);
-          if (blk?.timestamp != null) tsMs = Number(blk.timestamp) * 1000;
-        }
-      } catch (_) {}
-      listingTimestamps[tid] = tsMs;
-      writeListingTimestamps(listingTimestamps);
-      kickUserBuybackRescan();
-    });
-  });
+  enqueue(pollListingDiscoveryLoop);
+  setInterval(() => {
+    enqueue(pollListingDiscoveryLoop);
+  }, LISTING_DISCOVERY_POLL_MS);
 
   setInterval(() => {
     enqueue(async () => {
@@ -964,6 +1700,7 @@ function txOverrides(kind = "default") {
       const enabled = await isBotEnabled();
       if (enabled !== wasEnabled) {
         wasEnabled = enabled;
+        cachedRunningBotIdsAt = 0;
         console.log(`Bot ${botId}: ${enabled ? "resumed" : "paused"} by admin state`);
         if (enabled) {
           kickUserBuybackRescan();
@@ -983,7 +1720,7 @@ function txOverrides(kind = "default") {
     });
   }, Math.max(5000, RELIST_CHECK_MS));
 
-  // Keep process alive for event listener.
+  // Keep process alive (timers + task queue).
   await new Promise(() => {});
 }
 
