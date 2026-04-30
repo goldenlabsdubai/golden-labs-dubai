@@ -13,8 +13,20 @@ function isAuthorized(req) {
   return Boolean(provided) && provided === expected;
 }
 
-/** Must be registered before `/:id` so "listing-queue" is not parsed as a bot id. */
-router.get("/listing-queue", async (req, res) => {
+/** So opening /api/bot-control in a browser is not a bare 404 (no auth — metadata only). */
+router.get("/", (_req, res) => {
+  res.json({
+    ok: true,
+    service: "bot-control",
+    endpoints: {
+      botState: "GET /api/bot-control/1 … /5 (running + settings)",
+      listingQueue: "GET /api/bot-control/listing-queue",
+    },
+    auth: "When BOT_CONTROL_API_KEY is set, send header x-bot-control-key or ?key= on state/listing routes.",
+  });
+});
+
+const listingQueueHandler = async (req, res) => {
   try {
     if (!isAuthorized(req)) {
       return res.status(401).json({ error: "Unauthorized bot control access" });
@@ -28,7 +40,11 @@ router.get("/listing-queue", async (req, res) => {
   } catch (e) {
     res.status(500).json({ error: e?.message || "Failed to load listing queue" });
   }
-});
+};
+
+/** Before `/:id` — otherwise Express maps `listing-queue` onto :id and returns "Invalid bot id". */
+router.get("/listing-queue", listingQueueHandler);
+router.get("/listing-queue/", listingQueueHandler);
 
 router.get("/:id", async (req, res) => {
   try {
@@ -37,6 +53,12 @@ router.get("/:id", async (req, res) => {
     }
     const id = String(req.params.id || "").trim();
     if (!/^[1-5]$/.test(id)) {
+      if (id.toLowerCase() === "listing-queue") {
+        return res.status(503).json({
+          error:
+            "GET /listing-queue is missing or misordered (redeploy latest backend). Bots can use BOT_LISTING_SOURCE=rpc until then.",
+        });
+      }
       return res.status(400).json({ error: "Invalid bot id" });
     }
     const settings = await BotService.getBotSettings();

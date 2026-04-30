@@ -644,6 +644,18 @@ router.get("/my-nfts", async (req, res) => {
   }
 });
 
+// Browser GET shows this is a POST endpoint (otherwise GET returns 404 and looks "broken").
+router.get("/record-purchase", (_req, res) => {
+  res.json({
+    ok: true,
+    endpoint: "record-purchase",
+    method: "POST",
+    contentType: "application/json",
+    body: { tokenId: "required", seller: "optional", price: "optional", txHash: "optional", buyer: "optional (bots)" },
+    auth: "User session / Bearer token, or x-bot-control-key for bot callers",
+  });
+});
+
 // Record purchase in PostgreSQL (buyer + tokenId). Call after successful buy.
 router.post("/record-purchase", async (req, res) => {
   try {
