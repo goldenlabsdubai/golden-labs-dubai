@@ -16,9 +16,17 @@
  * Logs: pm2 logs bot1 --lines 100
  * Errors: tail -n 80 ~/.pm2/logs/bot1-error.log
  */
+const fs = require("fs");
 const path = require("path");
 const botsDir = __dirname;
-const scriptPath = path.join(botsDir, "universal-bot.js");
+/** PM2 resolves a relative `script` against `cwd` — avoids brittle absolute paths in dumps / cwd drift. */
+const scriptRel = "universal-bot.js";
+const scriptAbs = path.join(botsDir, scriptRel);
+if (!fs.existsSync(scriptAbs)) {
+  throw new Error(
+    `PM2 ecosystem: missing ${scriptAbs}. From repo: cd bots && git pull && ls -la universal-bot.js`
+  );
+}
 
 try {
   require("dotenv").config({ path: path.join(botsDir, ".env") });
@@ -32,7 +40,7 @@ module.exports = {
   apps: [
     {
       name: "bot1",
-      script: scriptPath,
+      script: scriptRel,
       args: "1",
       cwd: botsDir,
       interpreter: "node",
@@ -47,7 +55,7 @@ module.exports = {
     },
     {
       name: "bot2",
-      script: scriptPath,
+      script: scriptRel,
       args: "2",
       cwd: botsDir,
       interpreter: "node",
