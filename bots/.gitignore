@@ -6,6 +6,7 @@ coverage
 .bot-pending-user-listings.json
 .bot-listener-cursor.json
 .bot-listing-timestamps.json
+.bot-intercooldowns.json
 .locks/
 *.log
 *.map
