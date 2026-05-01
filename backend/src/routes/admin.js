@@ -1,9 +1,16 @@
 import { Router } from "express";
 import { ethers } from "ethers";
 import * as AdminPg from "../services/adminPostgres.js";
+import {
+  PLATFORM_MAINTENANCE_SETTINGS_ID,
+  normalizeMaintenancePayload,
+  normalizeMaintenanceFromDb,
+  isPlatformMaintenanceActive,
+} from "../services/platformMaintenance.js";
 import { authMiddleware } from "../middleware/auth.js";
 import * as BotService from "../services/botService.js";
 import { getMarketplaceAndReservePoolAddress } from "../config/contractsEnv.js";
+import { notifyActivity } from "../services/telegramNotify.js";
 
 const router = Router();
 /** Require wallet to be in PostgreSQL `admins` or env admin list. Must be used after authMiddleware. */
@@ -175,6 +182,65 @@ router.patch("/bots/settings", async (req, res) => {
       (req.wallet || "").toLowerCase()
     );
     res.json({ ok: true, settings: next });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+/** GET /api/admin/platform-maintenance – current schedule (admin UI). */
+router.get("/platform-maintenance", async (req, res) => {
+  try {
+    const stored = await AdminPg.getAdminSettingsByIdPg(PLATFORM_MAINTENANCE_SETTINGS_ID);
+    const data = normalizeMaintenanceFromDb(stored);
+    res.json({
+      ...data,
+      usersBlockedNow: isPlatformMaintenanceActive(data),
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+/**
+ * PUT /api/admin/platform-maintenance – body: { enabled, startsAt, endsAt?, message? }
+ * When enabling, startsAt + endsAt (ISO) required; end must be after start.
+ */
+router.put("/platform-maintenance", async (req, res) => {
+  try {
+    const wallet = (req.wallet || "").toLowerCase();
+    const prevRaw = await AdminPg.getAdminSettingsByIdPg(PLATFORM_MAINTENANCE_SETTINGS_ID);
+    const prev = normalizeMaintenanceFromDb(prevRaw || {});
+    const payload = normalizeMaintenancePayload(req.body);
+    if (payload.enabled) {
+      const s = payload.startsAt ? Date.parse(payload.startsAt) : NaN;
+      const e = payload.endsAt ? Date.parse(payload.endsAt) : NaN;
+      if (!Number.isFinite(s) || !Number.isFinite(e)) {
+        return res.status(400).json({
+          error: "When enabling maintenance, provide valid startsAt and endsAt (ISO date strings).",
+        });
+      }
+      if (e <= s) {
+        return res.status(400).json({ error: "End time must be after start time." });
+      }
+    }
+    await AdminPg.setAdminSettingsByIdPg(PLATFORM_MAINTENANCE_SETTINGS_ID, payload, wallet);
+    const data = normalizeMaintenanceFromDb(payload);
+    if (payload.enabled) {
+      notifyActivity("maintenance", {
+        startsAt: data.startsAt || "",
+        endsAt: data.endsAt || "",
+        message: data.message || "",
+      }).catch((e) => console.warn("[telegram] maintenance alert:", e?.message || e));
+    } else if (prev.enabled) {
+      notifyActivity("maintenance_resumed", {}).catch((e) =>
+        console.warn("[telegram] maintenance_resumed alert:", e?.message || e)
+      );
+    }
+    res.json({
+      ok: true,
+      ...data,
+      usersBlockedNow: isPlatformMaintenanceActive(data),
+    });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

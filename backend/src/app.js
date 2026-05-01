@@ -78,6 +78,8 @@ import cronRoutes from "./routes/cron.js";
 import { authMiddleware, optionalAuthMiddleware } from "./middleware/auth.js";
 import { getPool, requirePostgres } from "./config/postgres.js";
 import { getDeployedContractsSnapshot } from "./config/contractsEnv.js";
+import * as AdminPg from "./services/adminPostgres.js";
+import { publicMaintenanceDto, PLATFORM_MAINTENANCE_SETTINGS_ID } from "./services/platformMaintenance.js";
 
 try {
   requirePostgres();
@@ -96,6 +98,18 @@ setImmediate(() => {
 });
 
 app.get("/api/health", (_, res) => res.json({ ok: true }));
+/** Public: scheduled maintenance overlay for the web app (no auth). */
+app.get("/api/public/platform-maintenance", async (_, res) => {
+  try {
+    if (!getPool()) {
+      return res.json({ active: false });
+    }
+    const stored = await AdminPg.getAdminSettingsByIdPg(PLATFORM_MAINTENANCE_SETTINGS_ID);
+    res.json(publicMaintenanceDto(stored));
+  } catch {
+    res.json({ active: false });
+  }
+});
 /** Public: which contract addresses this API uses (compare to Vercel VITE_* so wallet only hits one deployment). */
 app.get("/api/health/contracts", (_, res) => res.json(getDeployedContractsSnapshot()));
 // Root (and /api for Vercel rewrite of "/" -> "/api") – so visiting base URL returns something

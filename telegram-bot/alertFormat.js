@@ -51,6 +51,22 @@ function linkTxWithLabel(hash, anchorText) {
   return `<a href="${escapeHtml(url)}">${escapeHtml(label)}</a>`;
 }
 
+function formatMaintenanceRangeLocale(startsAt, endsAt) {
+  const s = startsAt ? new Date(String(startsAt)) : null;
+  const e = endsAt ? new Date(String(endsAt)) : null;
+  if (!s || Number.isNaN(s.getTime())) return "";
+  const opts = { dateStyle: "medium", timeStyle: "short" };
+  const sStr = s.toLocaleString(undefined, opts);
+  if (!e || Number.isNaN(e.getTime())) return sStr;
+  return `${sStr} → ${e.toLocaleString(undefined, opts)}`;
+}
+
+function formatAdminMaintenanceNoteHtml(raw) {
+  const t = String(raw || "").trim();
+  if (!t) return "";
+  return t.split(/\r?\n/).map(escapeHtml).join("<br/>");
+}
+
 function formatUsdtFromWei6(weiStr) {
   try {
     const n = BigInt(weiStr || 0);
@@ -77,7 +93,7 @@ function poweredByGoldenLabsLine(emoji = "✨") {
 }
 
 /**
- * @param {"user_joined"|"subscription"|"mint"|"listed"|"bought"} kind
+ * @param {"user_joined"|"subscription"|"mint"|"listed"|"bought"|"maintenance"|"maintenance_resumed"} kind
  * @param {Record<string, string|null|undefined>} fields
  * @returns {string} Telegram HTML
  */
@@ -187,6 +203,32 @@ function formatActivityMessage(kind, fields) {
       lines.push("");
       lines.push("━━━━━━━━━━━━━━━");
       lines.push(poweredByGoldenLabsLine("🚀"));
+      break;
+    }
+    case "maintenance": {
+      const noteHtml = formatAdminMaintenanceNoteHtml(fields.message);
+      const range = formatMaintenanceRangeLocale(fields.startsAt, fields.endsAt);
+      lines.push("🔧 <b>Scheduled maintenance</b>");
+      lines.push("");
+      if (noteHtml) {
+        lines.push(noteHtml);
+        lines.push("");
+      }
+      if (range) {
+        lines.push(`⏰ <b>Window:</b> ${escapeHtml(range)}`);
+        lines.push("");
+      }
+      lines.push("━━━━━━━━━━━━━━━");
+      lines.push(poweredByGoldenLabsLine());
+      break;
+    }
+    case "maintenance_resumed": {
+      lines.push("✅ <b>Platform resumed</b>");
+      lines.push("");
+      lines.push("🟢 <b>Scheduled maintenance has been lifted — Golden Labs is back online.</b>");
+      lines.push("");
+      lines.push("━━━━━━━━━━━━━━━");
+      lines.push(poweredByGoldenLabsLine());
       break;
     }
     default:

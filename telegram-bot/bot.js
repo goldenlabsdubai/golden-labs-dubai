@@ -7,7 +7,7 @@
  * - Groups/channels are auto-registered (silent) so alerts have a chat_id; see alert-chats.json.
  *   Optional TELEGRAM_CHAT_ID seeds an extra target.
  *
- * POST /alert: { "kind": "subscription"|"mint"|..., ...fields } or { "message": "..." }
+ * POST /alert: { "kind": "subscription"|"mint"|"maintenance"|"maintenance_resumed"|..., ...fields } or { "message": "..." }
  * Optional: mediaUrl / imageUrl (HTTPS) or env TELEGRAM_ALERT_MEDIA_<KIND> — see .env.example
  */
 require("dotenv").config();
@@ -83,18 +83,25 @@ const KIND_MEDIA_ENV = {
   mint: "TELEGRAM_ALERT_MEDIA_MINT",
   listed: "TELEGRAM_ALERT_MEDIA_LISTED",
   bought: "TELEGRAM_ALERT_MEDIA_BOUGHT",
+  maintenance: "TELEGRAM_ALERT_MEDIA_MAINTENANCE",
 };
 
 const PHOTO_VIDEO_CAPTION_MAX = 1024;
 
+function logicalMediaKind(kind) {
+  const k = String(kind || "").toLowerCase();
+  return k === "maintenance_resumed" ? "maintenance" : k;
+}
+
 function resolveAlertMediaUrl(targetChatId, kind, override) {
   const o = (override || "").trim();
   if (/^https?:\/\//i.test(o)) return o;
-  if (targetChatId && kind) {
-    const per = botSettings.getMediaUrl(targetChatId, kind);
+  const logical = logicalMediaKind(kind);
+  if (targetChatId && logical) {
+    const per = botSettings.getMediaUrl(targetChatId, logical);
     if (per && /^https?:\/\//i.test(per)) return per;
   }
-  const k = kind ? String(kind).toLowerCase() : "";
+  const k = logical ? String(logical).toLowerCase() : "";
   const envKey = KIND_MEDIA_ENV[k];
   const fromKind = envKey ? (process.env[envKey] || "").trim() : "";
   if (fromKind) return fromKind;
@@ -107,7 +114,7 @@ function isProbablyVideoUrl(url) {
 
 /**
  * Send image/video with caption when URL works; long captions split into media + text message.
- * @returns {Promise<boolean>} true if media was sent (with or without follow-up message)
+ * @returns {Promise<{ ok: boolean, messageId?: number }>}
  */
 async function sendMediaAlert(chatId, mediaUrl, caption, parseMode) {
   const msgOpts = { disable_web_page_preview: true };
@@ -120,24 +127,25 @@ async function sendMediaAlert(chatId, mediaUrl, caption, parseMode) {
       } else {
         await bot.sendPhoto(chatId, mediaUrl, {});
       }
-      await bot.sendMessage(chatId, caption, msgOpts);
-    } else {
-      if (isProbablyVideoUrl(mediaUrl)) {
-        await bot.sendVideo(chatId, mediaUrl, { caption, ...capOpts });
-      } else {
-        await bot.sendPhoto(chatId, mediaUrl, { caption, ...capOpts });
-      }
+      const textMsg = await bot.sendMessage(chatId, caption, msgOpts);
+      return { ok: true, messageId: textMsg.message_id };
     }
-    return true;
+    let mediaMsg;
+    if (isProbablyVideoUrl(mediaUrl)) {
+      mediaMsg = await bot.sendVideo(chatId, mediaUrl, { caption, ...capOpts });
+    } else {
+      mediaMsg = await bot.sendPhoto(chatId, mediaUrl, { caption, ...capOpts });
+    }
+    return { ok: true, messageId: mediaMsg.message_id };
   } catch (e) {
     console.warn(`[telegram] media send failed, falling back to text:`, e?.message || e);
-    return false;
+    return { ok: false };
   }
 }
 
 /**
  * @param {string|undefined} parseMode
- * @param {{ kind?: string, mediaUrl?: string }} [extra] kind selects env TELEGRAM_ALERT_MEDIA_<KIND>; mediaUrl overrides
+ * @param {{ kind?: string, mediaUrl?: string, pin?: boolean }} [extra] kind selects env TELEGRAM_ALERT_MEDIA_<KIND>; mediaUrl overrides
  */
 async function sendAlert(message, parseMode, extra = {}) {
   const unique = [...new Set([...alertChatIds].map(String))];
@@ -149,6 +157,7 @@ async function sendAlert(message, parseMode, extra = {}) {
   const opts = { disable_web_page_preview: true };
   if (parseMode) opts.parse_mode = parseMode;
   const errors = [];
+  const pin = Boolean(extra.pin);
   for (const id of unique) {
     try {
       if (extra.kind && !botSettings.isAlertEnabled(id, extra.kind)) {
@@ -156,15 +165,28 @@ async function sendAlert(message, parseMode, extra = {}) {
       }
       const mediaUrl = resolveAlertMediaUrl(id, extra.kind, extra.mediaUrl);
       const useMedia = Boolean(mediaUrl && /^https?:\/\//i.test(mediaUrl));
+      /** @type {number|undefined} */
+      let messageId;
       if (useMedia) {
-        const ok = await sendMediaAlert(id, mediaUrl, message, parseMode);
-        if (ok) {
+        const mediaResult = await sendMediaAlert(id, mediaUrl, message, parseMode);
+        if (mediaResult.ok && mediaResult.messageId != null) {
+          messageId = mediaResult.messageId;
           console.log(`[telegram] Alert (+media) sent to chat ${id}`);
-          continue;
         }
       }
-      await bot.sendMessage(id, message, opts);
-      console.log(`[telegram] Alert sent to chat ${id} (${message.length} chars)`);
+      if (messageId == null) {
+        const sent = await bot.sendMessage(id, message, opts);
+        messageId = sent.message_id;
+        console.log(`[telegram] Alert sent to chat ${id} (${message.length} chars)`);
+      }
+      if (pin && messageId != null) {
+        try {
+          await bot.pinChatMessage(id, messageId, { disable_notification: true });
+          console.log(`[telegram] Pinned alert in chat ${id} (msg ${messageId})`);
+        } catch (pe) {
+          console.warn(`[telegram] pinChatMessage failed for ${id} (needs admin + can_pin_messages):`, pe?.message || pe);
+        }
+      }
     } catch (e) {
       const body = e?.response?.body;
       console.error(`[telegram] sendMessage failed for ${id}:`, body || e?.message || e);
@@ -293,8 +315,10 @@ const server = http.createServer(async (req, res) => {
       );
       return;
     }
+    const pinKinds = new Set(["maintenance", "maintenance_resumed"]);
+    const shouldPin = json.kind ? pinKinds.has(String(json.kind)) : false;
     console.log("[bridge] /alert → forwarding to Telegram…");
-    await sendAlert(msg, parseMode, { kind: kindForMedia, mediaUrl: mediaOverride || undefined });
+    await sendAlert(msg, parseMode, { kind: kindForMedia, mediaUrl: mediaOverride || undefined, pin: shouldPin });
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ ok: true }));
   } catch (e) {

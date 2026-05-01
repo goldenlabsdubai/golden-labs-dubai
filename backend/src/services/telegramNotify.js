@@ -57,6 +57,43 @@ function shouldSendListedAlert(fields) {
   return true;
 }
 
+const maintenanceAlertDedup = new Map();
+const MAINTENANCE_DEDUP_MS = 600_000;
+
+function shouldSendMaintenanceAlert(fields) {
+  const s = fields?.startsAt != null ? String(fields.startsAt) : "";
+  const e = fields?.endsAt != null ? String(fields.endsAt) : "";
+  const m = fields?.message != null ? String(fields.message) : "";
+  const key = `maint:${s}|${e}|${m.slice(0, 200)}`;
+  const now = Date.now();
+  const prev = maintenanceAlertDedup.get(key);
+  if (prev && now - prev < MAINTENANCE_DEDUP_MS) return false;
+  maintenanceAlertDedup.set(key, now);
+  if (maintenanceAlertDedup.size > 120) {
+    for (const [k, t] of maintenanceAlertDedup) {
+      if (now - t > MAINTENANCE_DEDUP_MS) maintenanceAlertDedup.delete(k);
+    }
+  }
+  return true;
+}
+
+const maintenanceResumedDedup = new Map();
+const MAINTENANCE_RESUMED_DEDUP_MS = 120_000;
+
+function shouldSendMaintenanceResumedAlert() {
+  const key = "maintenance_resumed";
+  const now = Date.now();
+  const prev = maintenanceResumedDedup.get(key);
+  if (prev && now - prev < MAINTENANCE_RESUMED_DEDUP_MS) return false;
+  maintenanceResumedDedup.set(key, now);
+  if (maintenanceResumedDedup.size > 20) {
+    for (const [k, t] of maintenanceResumedDedup) {
+      if (now - t > MAINTENANCE_RESUMED_DEDUP_MS) maintenanceResumedDedup.delete(k);
+    }
+  }
+  return true;
+}
+
 export function isTelegramSendConfigured() {
   return Boolean(bridgeUrl());
 }
@@ -106,13 +143,15 @@ export async function sendTelegramText(text, options = {}) {
 
 /**
  * Structured alert — formatted in telegram-bot from `kind` + fields.
- * @param {"user_joined"|"subscription"|"mint"|"listed"|"bought"} kind
+ * @param {"user_joined"|"subscription"|"mint"|"listed"|"bought"|"maintenance"|"maintenance_resumed"} kind
  */
 export async function notifyActivity(kind, fields) {
   const base = bridgeUrl();
   if (!base) return;
   if (kind === "bought" && !shouldSendBoughtAlert(fields)) return;
   if (kind === "listed" && !shouldSendListedAlert(fields)) return;
+  if (kind === "maintenance" && !shouldSendMaintenanceAlert(fields)) return;
+  if (kind === "maintenance_resumed" && !shouldSendMaintenanceResumedAlert()) return;
   try {
     await postToTelegramBotBridge({ kind, ...(fields && typeof fields === "object" ? fields : {}) });
     if ((process.env.TELEGRAM_DEBUG || "").trim() === "1") {
@@ -127,7 +166,7 @@ export function logTelegramAlertsStatus() {
   const b = bridgeUrl();
   if (b) {
     console.log(
-      `[telegram] Alerts forwarded to telegram-bot (${b}); sources: DB poller, GET /api/marketplace/listings poller, /api/telegram/alert`
+      `[telegram] Alerts forwarded to telegram-bot (${b}); sources: admin maintenance, DB poller, listings API poller, /api/telegram/alert`
     );
   } else {
     console.warn("[telegram] TELEGRAM_BRIDGE_URL not set — alerts off. Run `telegram-bot` and set e.g. http://127.0.0.1:3847");
