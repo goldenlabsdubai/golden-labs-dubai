@@ -4,6 +4,8 @@
  * Usage:
  *   node universal-bot.js 1
  *   BOT_ID=2 node universal-bot.js
+ *   Crash restart (no PM2): node bot-supervisor.mjs 1  or  npm run bot1:supervise
+ *   Production: pm2 start ecosystem.config.cjs
  *
  * Env keys used:
  *   RPC_URL
@@ -20,12 +22,13 @@
  *   BOT_LISTED_LOGS_CHUNK_BLOCKS — max block span per getLogs chunk (default 400)
  *   BOT_LISTED_CATCHUP_BLOCKS — on first poll, start this many blocks behind head (default 128)
  *   BOT_EVENT_PENDING_QUEUE — keep user listing candidates from Listed events only (default true; avoids full mint scan)
- *   BOT_LISTING_SOURCE — rpc (default) or database; database polls GET /api/bot-control/listing-queue (Postgres indexer) instead of Listed getLogs
+ *   BOT_LISTING_SOURCE — rpc (default), database, api (or listings). database = GET /api/bot-control/listing-queue. api = GET /api/marketplace/listings (same listedAt as UI; oldest-first buyback).
  *   BOT_LISTING_QUEUE_URL — optional full URL to listing-queue; else uses BOT_CONTROL_BASE_URL + /listing-queue
- *   BOT_LISTING_QUEUE_POLL_MS — poll interval for database source (default BOT_LISTED_POLL_MS)
- *   BOT_SINGLE_CHAIN_LISTENER — if true (default), one process runs getLogs: lowest **admin-running** bot id (from /api/bot-control). No listener when all bots stopped.
+ *   BOT_MARKETPLACE_LISTINGS_URL — optional full URL to GET /marketplace/listings; else derived from BOT_CONTROL_BASE_URL (/bot-control → /marketplace/listings)
+ *   BOT_LISTING_QUEUE_POLL_MS — poll interval for database / api listing source (default BOT_LISTED_POLL_MS)
+ *   BOT_SINGLE_CHAIN_LISTENER — if true (default), one process polls **on-chain** getLogs (Listed/Sold): lowest **admin-running** bot id. **Not** used for HTTP listing sources: database / api listing-queue + marketplace polls run in **every** bot process so followers always have the same queue as the leader.
+ *   User buyback (parallel): queue sorted by listedAt (oldest first). Running bots (from admin, or all key-configured ids if admin list is empty) take slot 0,1,2… on **unlocked** rows only — rows with an active `.locks/token-*.lock` are skipped so peers pick the next oldest.
  *   BOT_CHAIN_LISTENER_BOT_ID — optional override only (forces which id listens; normally omit and use admin Start/Stop).
- *   BOT_SECONDARY_LOCK_DELAY_MS — bot N waits (N-1)*this ms before token lock / buy (bot 1 first)
  *   BOT_RELIST_RETRY_MIN_MS / BOT_RELIST_RETRY_MAX_MS — random backoff between relist retries (default 60s–5m)
  *   BOT_BOOTSTRAP_LISTING_SCAN — one-time full mint scan on startup to seed pending file (default false; heavy)
  */
@@ -35,6 +38,16 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { LIST_PRICE_WEI } from "./config.js";
+
+/** Exit non-zero so PM2 or `node bot-supervisor.mjs` can restart the process. */
+process.on("unhandledRejection", (reason) => {
+  console.error("[bot fatal] unhandledRejection:", reason);
+  process.exit(1);
+});
+process.on("uncaughtException", (err) => {
+  console.error("[bot fatal] uncaughtException:", err);
+  process.exit(1);
+});
 
 const RPC = process.env.RPC_URL || "http://127.0.0.1:8545";
 /** If set, skips automatic chain detection (fewer RPC calls; avoids RPS failures during startup). BSC testnet = 97, BSC mainnet = 56. */
@@ -112,7 +125,6 @@ const RELIST_RETRY_MAX_MS = Math.max(
 );
 const BUY_RETRY_GAP_MS = Math.max(500, Number(process.env.BOT_BUY_RETRY_GAP_MS || 2000));
 /** Bot 2+ waits (id-1) * this ms before competing for the same token lock (bot 1 tries first). */
-const BOT_SECONDARY_LOCK_DELAY_MS = Math.max(0, Number(process.env.BOT_SECONDARY_LOCK_DELAY_MS ?? 2500));
 /** True: user buyback candidates come from Listed events + small validation reads only (no full supply scan). */
 const USE_EVENT_PENDING_QUEUE =
   String(process.env.BOT_EVENT_PENDING_QUEUE ?? "true").toLowerCase() !== "false";
@@ -123,13 +135,25 @@ const BOT_SINGLE_CHAIN_LISTENER =
 const BOT_CHAIN_LISTENER_BOT_ID_ENV = String(process.env.BOT_CHAIN_LISTENER_BOT_ID || "").trim();
 const BOT_BOOTSTRAP_LISTING_SCAN =
   String(process.env.BOT_BOOTSTRAP_LISTING_SCAN ?? "false").toLowerCase() === "true";
-/** When database, universal listener fills pending queue from backend Postgres instead of Listed/Sold getLogs. */
+/** When database, universal listener fills pending queue from backend Postgres instead of Listed/Sold getLogs. When api/listings, from GET /api/marketplace/listings (listedAt ms). */
 const BOT_LISTING_SOURCE = String(process.env.BOT_LISTING_SOURCE || "rpc").toLowerCase();
 const BOT_LISTING_QUEUE_URL = String(process.env.BOT_LISTING_QUEUE_URL || "").trim();
+const BOT_MARKETPLACE_LISTINGS_URL = String(process.env.BOT_MARKETPLACE_LISTINGS_URL || "").trim();
 const USE_DB_LISTING_QUEUE = BOT_LISTING_SOURCE === "database" && USE_EVENT_PENDING_QUEUE;
-const LISTING_DISCOVERY_POLL_MS = USE_DB_LISTING_QUEUE
+const USE_MARKETPLACE_LISTINGS_API =
+  (BOT_LISTING_SOURCE === "api" || BOT_LISTING_SOURCE === "listings") && USE_EVENT_PENDING_QUEUE;
+const USE_HTTP_LISTING_DISCOVERY = USE_DB_LISTING_QUEUE || USE_MARKETPLACE_LISTINGS_API;
+const LISTING_DISCOVERY_POLL_MS = USE_HTTP_LISTING_DISCOVERY
   ? Math.max(4000, Number(process.env.BOT_LISTING_QUEUE_POLL_MS ?? LISTED_POLL_MS))
   : LISTED_POLL_MS;
+
+function resolveMarketplaceListingsUrl() {
+  const explicit = (BOT_MARKETPLACE_LISTINGS_URL || "").replace(/\/$/, "");
+  if (explicit) return explicit;
+  const base = (BOT_CONTROL_BASE_URL || "").replace(/\/$/, "");
+  if (/\/bot-control$/i.test(base)) return base.replace(/\/bot-control$/i, "/marketplace/listings");
+  return "";
+}
 const POST_APPROVE_DELAY_MS = Number(process.env.BOT_POST_APPROVE_DELAY_MS || 2000);
 /** Extra wait after NFT approve is mined, before `list` (defaults to same as USDT delay). */
 const POST_NFT_APPROVE_DELAY_MS =
@@ -245,6 +269,20 @@ async function releaseTokenLock(lock) {
   try {
     await fs.promises.unlink(lock.path);
   } catch (_) {}
+}
+
+/** True if another bot holds a non-expired buy lock for this token (parallel buyback: skip this row). */
+function isTokenLockFileHeld(tokenIdStr) {
+  const tid = String(tokenIdStr ?? "").trim();
+  if (!tid) return false;
+  const p = lockPathForToken(tid);
+  const now = Date.now();
+  try {
+    const st = fs.statSync(p);
+    return now - st.mtimeMs <= LOCK_TTL_MS;
+  } catch {
+    return false;
+  }
 }
 
 async function main() {
@@ -663,6 +701,20 @@ function txOverrides(kind = "default") {
     return fetchControlGet("listing-queue");
   }
 
+  /** Public GET /api/marketplace/listings — same listedAt as dashboard (no bot-control auth). */
+  async function fetchMarketplaceListingsResponse() {
+    const url = resolveMarketplaceListingsUrl();
+    if (!url) return null;
+    const headers = { accept: "application/json" };
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), Math.max(1000, CONTROL_REQUEST_TIMEOUT_MS));
+    try {
+      return await fetch(url, { headers, signal: controller.signal });
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   let cachedRunningBotIds = null;
   let cachedRunningBotIdsAt = 0;
   const RUNNING_BOT_IDS_TTL_MS = Math.min(15_000, Math.max(2500, CONTROL_REFRESH_MS));
@@ -741,7 +793,7 @@ function txOverrides(kind = "default") {
     if (!disk[tokenIdStr]) return;
     delete disk[tokenIdStr];
     writePendingUserListingsFile(disk);
-    if (runsChainPoll) delete pendingUserListings[tokenIdStr];
+    if (runsChainPoll || USE_HTTP_LISTING_DISCOVERY) delete pendingUserListings[tokenIdStr];
   }
 
   function upsertPendingForUserListing(tokenIdStr, sellerLc, priceBn, listedAtMs) {
@@ -767,7 +819,7 @@ function txOverrides(kind = "default") {
         await refreshUniversalListenerRole();
       }
       if (USE_EVENT_PENDING_QUEUE) {
-        const snap = runsChainPoll ? pendingUserListings : readPendingUserListingsFile();
+        const snap = runsChainPoll || USE_HTTP_LISTING_DISCOVERY ? pendingUserListings : readPendingUserListingsFile();
         const n = Object.keys(snap).filter((k) => {
           const m = snap[k];
           if (!m || typeof m !== "object") return false;
@@ -822,7 +874,7 @@ function txOverrides(kind = "default") {
     if (USE_EVENT_PENDING_QUEUE && BOT_SINGLE_CHAIN_LISTENER) {
       await refreshUniversalListenerRole();
     }
-    const snap = runsChainPoll ? pendingUserListings : readPendingUserListingsFile();
+    const snap = runsChainPoll || USE_HTTP_LISTING_DISCOVERY ? pendingUserListings : readPendingUserListingsFile();
     const out = [];
     for (const [tidStr, meta] of Object.entries(snap)) {
       if (!meta || typeof meta !== "object") continue;
@@ -952,6 +1004,19 @@ function txOverrides(kind = "default") {
       if (!enabled) return;
       if (myGen !== userBuybackGeneration) return;
 
+      let runningForSlots = await getRunningBotIdsFromAdmin();
+      if (!runningForSlots.length) {
+        runningForSlots = [...configuredBotIdsWithKeys()].sort((a, b) => Number(a) - Number(b));
+      }
+      if (!runningForSlots.length) runningForSlots = [String(botId)];
+      const activeSorted = [...runningForSlots].sort((a, b) => Number(a) - Number(b));
+      const idxInRunning = activeSorted.indexOf(String(botId));
+      if (idxInRunning < 0) {
+        idleNoListings = true;
+        return;
+      }
+      const buybackSlotIndex = idxInRunning;
+
       const rows = await collectUserListingRows();
       if (!rows.length) {
         idleNoListings = true;
@@ -964,29 +1029,36 @@ function txOverrides(kind = "default") {
         if (a.tokenId > b.tokenId) return 1;
         return 0;
       });
-      const oldest = rows[0];
-      const sellerNorm = (oldest.seller || "").toString().toLowerCase();
+      const availableRows = rows.filter((r) => !isTokenLockFileHeld(String(r.tokenId)));
+      if (buybackSlotIndex >= availableRows.length) {
+        idleNoListings = true;
+        return;
+      }
+      const myRow = availableRows[buybackSlotIndex];
+      const sellerNorm = (myRow.seller || "").toString().toLowerCase();
 
       await isBotEnabled(true);
-      let until = oldest.listedAtMs + dynamicUserListingMinAgeMs;
+      let until = myRow.listedAtMs + dynamicUserListingMinAgeMs;
       let lastLoggedMins = null;
       while (Date.now() < until) {
         if (myGen !== userBuybackGeneration) return;
         await isBotEnabled(true);
-        until = oldest.listedAtMs + dynamicUserListingMinAgeMs;
+        until = myRow.listedAtMs + dynamicUserListingMinAgeMs;
         const now = Date.now();
         if (now >= until) break;
         const minsLeft = Math.ceil((until - now) / 60000);
         if (minsLeft !== lastLoggedMins) {
           lastLoggedMins = minsLeft;
-          console.log(`Bot ${botId}: user buyback ~${minsLeft}m remaining (oldest token ${oldest.tokenId})`);
+          console.log(
+            `Bot ${botId}: user buyback ~${minsLeft}m remaining (slot ${buybackSlotIndex + 1}/${activeSorted.length}, open queue #${buybackSlotIndex + 1}/${availableRows.length} of ${rows.length} listings, token ${myRow.tokenId})`
+          );
         }
         try {
-          const l = await marketplace.listings(oldest.tokenId);
+          const l = await marketplace.listings(myRow.tokenId);
           const active = Boolean(l?.active ?? l?.[3]);
           const curSeller = (l?.seller || l?.[0] || "").toString().toLowerCase();
           if (!active || curSeller !== sellerNorm) {
-            console.log(`Bot ${botId}: buyback target token ${oldest.tokenId} changed — re-scan`);
+            console.log(`Bot ${botId}: buyback target token ${myRow.tokenId} changed — re-scan`);
             return;
           }
         } catch (_) {}
@@ -1005,9 +1077,11 @@ function txOverrides(kind = "default") {
         if (a.tokenId > b.tokenId) return 1;
         return 0;
       });
-      const target = rows2[0];
+      const available2 = rows2.filter((r) => !isTokenLockFileHeld(String(r.tokenId)));
+      if (buybackSlotIndex >= available2.length) return;
+      const target = available2[buybackSlotIndex];
       if (Date.now() < target.listedAtMs + dynamicUserListingMinAgeMs) return;
-      await tryBuyAndRelist(target.tokenId, target.seller, target.price, "buyback-oldest");
+      await tryBuyAndRelist(target.tokenId, target.seller, target.price, `buyback-slot-${buybackSlotIndex}`);
     } catch (e) {
       console.warn(`Bot ${botId}: user buyback worker`, e?.message || e);
     } finally {
@@ -1054,7 +1128,6 @@ function txOverrides(kind = "default") {
 
   async function pollListingQueueFromApiLoop() {
     await refreshUniversalListenerRole();
-    if (!runsChainPoll) return;
     let res;
     try {
       res = await fetchListingQueueResponse();
@@ -1123,9 +1196,85 @@ function txOverrides(kind = "default") {
     }
   }
 
+  async function pollMarketplaceListingsFromApiLoop() {
+    await refreshUniversalListenerRole();
+    let res;
+    try {
+      res = await fetchMarketplaceListingsResponse();
+    } catch (e) {
+      console.warn(`Bot ${botId}: marketplace listings fetch`, e?.message || e);
+      return;
+    }
+    if (res == null) {
+      console.warn(
+        `Bot ${botId}: BOT_LISTING_SOURCE=api needs BOT_MARKETPLACE_LISTINGS_URL or BOT_CONTROL_BASE_URL ending in /bot-control`
+      );
+      return;
+    }
+    try {
+      if (!res.ok) {
+        let msg = res.statusText || "";
+        try {
+          const errBody = await res.json();
+          msg = String(errBody?.error || msg);
+        } catch (_) {}
+        console.warn(`Bot ${botId}: marketplace listings HTTP ${res.status} — ${msg}`);
+        return;
+      }
+      const data = await res.json();
+      const raw = Array.isArray(data?.listings) ? data.listings : [];
+      const next = {};
+      for (const it of raw) {
+        const tier = String(it?.listingTier || "").toLowerCase();
+        if (tier && tier !== "user") continue;
+        const tidStr = String(it?.tokenId ?? "").trim();
+        if (!tidStr) continue;
+        const sellerLc = String(it?.seller ?? "").toLowerCase();
+        if (!sellerLc || sellerLc === marketLc || knownBotWallets.has(sellerLc)) continue;
+        let priceWei;
+        try {
+          priceWei = BigInt(String(it?.price ?? it?.priceWei ?? "0"));
+        } catch {
+          continue;
+        }
+        if (priceWei !== LIST_PRICE_WEI) continue;
+
+        const prev = pendingUserListings[tidStr] || {};
+        let listedAtMs = Number(it?.listedAt ?? it?.listedAtMs);
+        if (!Number.isFinite(listedAtMs) || listedAtMs <= 0) {
+          listedAtMs = Number(prev.listedAtMs);
+        }
+        if (!Number.isFinite(listedAtMs) || listedAtMs <= 0) {
+          listedAtMs = Number(listingTimestamps[tidStr]);
+        }
+        if (!Number.isFinite(listedAtMs) || listedAtMs <= 0) {
+          listedAtMs = Date.now();
+        }
+        next[tidStr] = {
+          seller: sellerLc,
+          priceWei: priceWei.toString(),
+          listedAtMs: Math.floor(listedAtMs),
+        };
+      }
+      pendingUserListings = next;
+      writePendingUserListingsFile(pendingUserListings);
+      for (const [tidStr, m] of Object.entries(next)) {
+        listingTimestamps[tidStr] = m.listedAtMs;
+      }
+      writeListingTimestamps(listingTimestamps);
+      kickUserBuybackRescan();
+    } catch (e) {
+      console.warn(`Bot ${botId}: marketplace listings poll`, e?.message || e);
+    }
+  }
+
   async function pollListingDiscoveryLoop() {
     if (USE_DB_LISTING_QUEUE) {
       await pollListingQueueFromApiLoop();
+      return;
+    }
+    if (USE_MARKETPLACE_LISTINGS_API) {
+      await pollMarketplaceListingsFromApiLoop();
       return;
     }
     await pollListedEventsLoop();
@@ -1254,9 +1403,6 @@ function txOverrides(kind = "default") {
         return;
       }
     }
-
-    const lockStagger = (Number(botId) - 1) * BOT_SECONDARY_LOCK_DELAY_MS;
-    if (lockStagger > 0) await delayMs(lockStagger);
 
     const lock = await acquireTokenLock(tokenIdStr);
     if (!lock) {
@@ -1660,21 +1806,37 @@ function txOverrides(kind = "default") {
   wasEnabled = Boolean(initialEnabled);
   if (!wasEnabled) console.log(`Bot ${botId} paused by admin state (running=false). Listening only.`);
 
-  if (USE_DB_LISTING_QUEUE && !BOT_SINGLE_CHAIN_LISTENER) {
+  if (USE_HTTP_LISTING_DISCOVERY && !BOT_SINGLE_CHAIN_LISTENER) {
     console.warn(
-      `Bot ${botId}: BOT_LISTING_SOURCE=database with BOT_SINGLE_CHAIN_LISTENER=false may duplicate listing-queue writes across processes`
+      `Bot ${botId}: BOT_LISTING_SOURCE=${BOT_LISTING_SOURCE} with BOT_SINGLE_CHAIN_LISTENER=false may duplicate shared pending-listing writes across processes`
     );
   }
-  if (BOT_LISTING_SOURCE === "database" && !USE_EVENT_PENDING_QUEUE) {
+  if (
+    (BOT_LISTING_SOURCE === "database" ||
+      BOT_LISTING_SOURCE === "api" ||
+      BOT_LISTING_SOURCE === "listings") &&
+    !USE_EVENT_PENDING_QUEUE
+  ) {
     console.warn(
-      `Bot ${botId}: BOT_LISTING_SOURCE=database has no effect while BOT_EVENT_PENDING_QUEUE=false (using rpc/full-scan paths)`
+      `Bot ${botId}: BOT_LISTING_SOURCE=${BOT_LISTING_SOURCE} has no effect while BOT_EVENT_PENDING_QUEUE=false (using rpc/full-scan paths)`
     );
   }
+  const listingSourceLog = USE_DB_LISTING_QUEUE
+    ? "database"
+    : USE_MARKETPLACE_LISTINGS_API
+      ? "api (/marketplace/listings)"
+      : "rpc";
+  const listingDiscoveryLog = USE_DB_LISTING_QUEUE
+    ? "listing-queue API (each bot process)"
+    : USE_MARKETPLACE_LISTINGS_API
+      ? "marketplace listings API (each bot process)"
+      : "getLogs";
+  const listenerNote = USE_HTTP_LISTING_DISCOVERY
+    ? `${listingDiscoveryLog}; poll ${LISTING_DISCOVERY_POLL_MS}ms`
+    : `universal getLogs leader=${runsChainPoll} (${listingDiscoveryLog}); poll ${LISTING_DISCOVERY_POLL_MS}ms when leader`;
   console.log(
     `Bot ${botId} running. Buyback from admin delay; event queue=${USE_EVENT_PENDING_QUEUE}; ` +
-      `listing source=${USE_DB_LISTING_QUEUE ? "database" : "rpc"}; ` +
-      `universal listener=${runsChainPoll} (${USE_DB_LISTING_QUEUE ? "listing-queue API" : "getLogs"}); ` +
-      `poll ${LISTING_DISCOVERY_POLL_MS}ms when leader.`
+      `listing source=${listingSourceLog}; ${listenerNote}.`
   );
 
   if (wasEnabled) {
