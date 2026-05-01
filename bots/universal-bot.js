@@ -44,16 +44,6 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 dotenv.config({ path: path.join(__dirname, ".env") });
 
-/** Exit non-zero so PM2 or `node bot-supervisor.mjs` can restart the process. */
-process.on("unhandledRejection", (reason) => {
-  console.error("[bot fatal] unhandledRejection:", reason);
-  process.exit(1);
-});
-process.on("uncaughtException", (err) => {
-  console.error("[bot fatal] uncaughtException:", err);
-  process.exit(1);
-});
-
 const RPC = process.env.RPC_URL || "http://127.0.0.1:8545";
 /** If set, skips automatic chain detection (fewer RPC calls; avoids RPS failures during startup). BSC testnet = 97, BSC mainnet = 56. */
 const BOT_CHAIN_ID_RAW = process.env.CHAIN_ID || process.env.BOT_CHAIN_ID || "";
@@ -288,6 +278,7 @@ function isTokenLockFileHeld(tokenIdStr) {
 }
 
 async function main() {
+  registerProcessFatalHandlers();
   const botId = resolveBotId();
   const keyVar = `BOT${botId}_PRIVATE_KEY`;
   const privateKey = process.env[keyVar];
@@ -389,21 +380,6 @@ async function main() {
     listingTimestamps[tokenIdStr] = chainMs ?? Date.now();
     writeListingTimestamps(listingTimestamps);
   }
-
-  process.on("unhandledRejection", (reason) => {
-    if (isRateLimitError(reason) || isRateLimitError(reason?.cause)) {
-      console.warn(`Bot ${botId}: RPC rate limited (background)`);
-      return;
-    }
-    try {
-      const blob = JSON.stringify(reason?.error || reason || "").toLowerCase();
-      if (blob.includes("-32005") || blob.includes("429") || blob.includes("rate limit")) {
-        console.warn(`Bot ${botId}: RPC rate limited (background)`);
-        return;
-      }
-    } catch (_) {}
-    console.error(`Bot ${botId}: unhandled rejection`, reason?.shortMessage || reason?.message || reason);
-  });
 
   function enqueue(task) {
     queue = queue
@@ -540,6 +516,37 @@ function isRateLimitError(e) {
     msg.includes("could not coalesce") ||
     codes.some((c) => c === 429 || c === -32005)
   );
+}
+
+function registerProcessFatalHandlers() {
+  process.on("unhandledRejection", (reason) => {
+    if (isRateLimitError(reason) || isRateLimitError(reason?.cause)) {
+      console.warn("[bot] unhandledRejection (RPC rate limit) — not exiting");
+      return;
+    }
+    try {
+      const blob = JSON.stringify(reason?.error ?? reason ?? "").toLowerCase();
+      if (
+        blob.includes("-32005") ||
+        blob.includes("429") ||
+        blob.includes("rate limit") ||
+        blob.includes("too many requests")
+      ) {
+        console.warn("[bot] unhandledRejection (rate limit pattern) — not exiting");
+        return;
+      }
+    } catch (_) {}
+    console.error("[bot fatal] unhandledRejection:", reason?.shortMessage || reason?.message || reason);
+    process.exit(1);
+  });
+  process.on("uncaughtException", (err) => {
+    if (isRateLimitError(err)) {
+      console.warn("[bot] uncaughtException (RPC rate limit) — not exiting");
+      return;
+    }
+    console.error("[bot fatal] uncaughtException:", err);
+    process.exit(1);
+  });
 }
 
 /** Readable RPC / revert line for logs (ethers often hides JSON-RPC details behind "could not coalesce error"). */
