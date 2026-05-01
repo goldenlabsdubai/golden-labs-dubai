@@ -4,6 +4,12 @@
  */
 require("dotenv").config();
 
+/**
+ * Same wording as the web modal (`PlatformMaintenanceOverlay.jsx`) — update both if copy changes.
+ */
+const MAINTENANCE_MODAL_INTRO =
+  "Dear Golden Labs community members — our platform will be available again shortly. Thank you for your patience while we complete scheduled maintenance.";
+
 function explorerBase() {
   return (process.env.TELEGRAM_EXPLORER_BASE || "https://bscscan.com").trim().replace(/\/$/, "");
 }
@@ -209,6 +215,8 @@ function formatActivityMessage(kind, fields) {
       const noteHtml = formatAdminMaintenanceNoteHtml(fields.message);
       const range = formatMaintenanceRangeLocale(fields.startsAt, fields.endsAt);
       lines.push("🔧 <b>Scheduled maintenance</b>");
+      lines.push("");
+      lines.push(escapeHtml(MAINTENANCE_MODAL_INTRO));
       lines.push("");
       if (noteHtml) {
         lines.push(noteHtml);

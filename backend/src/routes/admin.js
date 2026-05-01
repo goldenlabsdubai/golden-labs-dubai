@@ -202,7 +202,7 @@ router.get("/platform-maintenance", async (req, res) => {
 });
 
 /**
- * PUT /api/admin/platform-maintenance – body: { enabled, startsAt, endsAt?, message? }
+ * PUT /api/admin/platform-maintenance – body: { enabled, startsAt, endsAt?, message?, imageUrl? }
  * When enabling, startsAt + endsAt (ISO) required; end must be after start.
  */
 router.put("/platform-maintenance", async (req, res) => {
@@ -230,6 +230,7 @@ router.put("/platform-maintenance", async (req, res) => {
         startsAt: data.startsAt || "",
         endsAt: data.endsAt || "",
         message: data.message || "",
+        imageUrl: data.imageUrl || "",
       }).catch((e) => console.warn("[telegram] maintenance alert:", e?.message || e));
     } else if (prev.enabled) {
       notifyActivity("maintenance_resumed", {}).catch((e) =>

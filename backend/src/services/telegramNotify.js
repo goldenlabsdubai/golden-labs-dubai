@@ -64,7 +64,8 @@ function shouldSendMaintenanceAlert(fields) {
   const s = fields?.startsAt != null ? String(fields.startsAt) : "";
   const e = fields?.endsAt != null ? String(fields.endsAt) : "";
   const m = fields?.message != null ? String(fields.message) : "";
-  const key = `maint:${s}|${e}|${m.slice(0, 200)}`;
+  const img = fields?.imageUrl != null ? String(fields.imageUrl) : "";
+  const key = `maint:${s}|${e}|${img.slice(0, 120)}|${m.slice(0, 200)}`;
   const now = Date.now();
   const prev = maintenanceAlertDedup.get(key);
   if (prev && now - prev < MAINTENANCE_DEDUP_MS) return false;
