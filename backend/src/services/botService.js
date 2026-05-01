@@ -144,9 +144,11 @@ function pgTradesToShape(pg) {
 /** Get on-chain stats for one address: balances, buy/sell counts, total trades, total profit (USDT 6 decimals).
  * Options:
  *   - tradesFromChainOnly: true – skip Postgres `user_activities`; use only on-chain Sold events (slow; can time out).
- *   - default / false – use Postgres activity stats when present; otherwise fall back to chain (admin panel uses false). */
+ *   - default / false – use Postgres activity stats when present; otherwise fall back to chain (admin panel uses false).
+ *   - skipMarketplaceListedNft: true – NFT count = wallet balanceOf only (fast; undercounts tokens listed on marketplace). */
 export async function getBotStats(address, options = {}) {
   const tradesFromChainOnly = Boolean(options?.tradesFromChainOnly);
+  const skipMarketplaceListedNft = Boolean(options?.skipMarketplaceListedNft);
   const rpcUrl = (process.env.BOT_STATS_RPC_URL || process.env.RPC_URL || "").trim();
   const usdtAddress = process.env.USDT_ADDRESS;
   const nftAddress = process.env.NFT_CONTRACT_ADDRESS;
@@ -164,7 +166,7 @@ export async function getBotStats(address, options = {}) {
   }
   const addr = address.startsWith("0x") ? address : `0x${address}`;
   const provider = getProvider(rpcUrl);
-  const cacheKey = `${addr.toLowerCase()}${tradesFromChainOnly ? ":chain" : ":pg"}:v2`;
+  const cacheKey = `${addr.toLowerCase()}${tradesFromChainOnly ? ":chain" : ":pg"}${skipMarketplaceListedNft ? ":nftw" : ":nftf"}:v2`;
   const now = Date.now();
   const cached = botStatsCache.get(cacheKey);
   if (cached && now - cached.ts < Math.max(2000, BOT_STATS_CACHE_TTL_MS)) {
@@ -214,8 +216,14 @@ export async function getBotStats(address, options = {}) {
   const bnbBalance = bnbBalanceRaw;
 
   const nftBalance = await withTimeoutFallback(
-    nftAddress && marketplaceAddress ? getNftHoldings(provider, marketplaceAddress, nftAddress, addr) : Promise.resolve(0),
-    BOT_NFT_HOLDINGS_TIMEOUT_MS,
+    !nftAddress
+      ? Promise.resolve(0)
+      : skipMarketplaceListedNft
+        ? getNftWalletBalanceOnly(provider, nftAddress, addr)
+        : marketplaceAddress
+          ? getNftHoldings(provider, marketplaceAddress, nftAddress, addr)
+          : getNftWalletBalanceOnly(provider, nftAddress, addr),
+    skipMarketplaceListedNft ? Math.min(BOT_NFT_HOLDINGS_TIMEOUT_MS, 12000) : BOT_NFT_HOLDINGS_TIMEOUT_MS,
     cached?.data?.nftBalance ?? 0
   );
 
@@ -268,6 +276,139 @@ async function getUsdtBalance(provider, usdtAddress, account) {
   }
 }
 
+/** Wallet NFT count only (no marketplace listings scan). */
+async function getNftWalletBalanceOnly(provider, nftAddress, account) {
+  try {
+    const nft = new ethers.Contract(nftAddress, ["function balanceOf(address) view returns (uint256)"], provider);
+    const bal = await withRpcRetry(() => nft.balanceOf(account));
+    return Number(bal ?? 0);
+  } catch (_) {
+    return 0;
+  }
+}
+
+/**
+ * Listed tokens escrow in marketplace — wallet balanceOf misses them. NFT is not ERC721Enumerable,
+ * so token IDs in-wallet cannot be enumerated on-chain without indexing. We avoid scanning 1..totalMinted
+ * by querying `Listed` logs for this seller, then verifying each candidate with `listings(tokenId)`.
+ */
+function getListedEventsFromBlock(latestBlock) {
+  const configured = parseOptionalNonNegativeInt(process.env.BOT_NFT_LISTED_EVENTS_FROM_BLOCK);
+  if (configured != null) return Math.min(configured, latestBlock);
+  const lookback = Number(process.env.BOT_NFT_LISTED_EVENTS_LOOKBACK_BLOCKS || 2_000_000);
+  const safe = Number.isFinite(lookback) && lookback > 0 ? Math.floor(lookback) : 2_000_000;
+  return Math.max(0, latestBlock - safe);
+}
+
+/** Returns active listing count for seller via events + verify; `null` = use full-range fallback. */
+async function countListedForSellerViaEvents(provider, marketplaceAddress, sellerAddress) {
+  const target = (sellerAddress || "").toLowerCase();
+  if (!target.startsWith("0x")) return 0;
+
+  const marketplace = new ethers.Contract(
+    marketplaceAddress,
+    [
+      "function listings(uint256) view returns (address seller, uint256, uint256, bool active)",
+      "event Listed(uint256 indexed tokenId, address indexed seller, uint256 price)",
+    ],
+    provider
+  );
+
+  let latest;
+  try {
+    latest = await withRpcRetry(() => provider.getBlockNumber());
+  } catch {
+    return null;
+  }
+
+  const fromBlock = getListedEventsFromBlock(Number(latest));
+  let logs;
+  try {
+    let sellerTopic;
+    try {
+      sellerTopic = ethers.getAddress(sellerAddress);
+    } catch {
+      return null;
+    }
+    const filter = marketplace.filters.Listed(null, sellerTopic);
+    logs = await withRpcRetry(() => marketplace.queryFilter(filter, fromBlock, latest));
+  } catch (e) {
+    console.warn("getNftHoldings Listed logs:", e?.message || e);
+    return null;
+  }
+
+  const uniqueTokenIds = [];
+  const seen = new Set();
+  for (const log of logs) {
+    const tid = log.args?.tokenId ?? log.args?.[0];
+    if (tid == null) continue;
+    const key = BigInt(tid.toString()).toString();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    uniqueTokenIds.push(BigInt(tid.toString()));
+  }
+
+  const cap = Math.max(50, Math.min(Number(process.env.BOT_NFT_LISTED_VERIFY_CAP || 600), 15_000));
+  if (uniqueTokenIds.length > cap) {
+    console.warn(
+      `getNftHoldings: unique Listed tokenIds (${uniqueTokenIds.length}) > cap ${cap}, falling back to 1..totalMinted scan`
+    );
+    return null;
+  }
+
+  const listingStaggerMs = Math.max(0, Number(process.env.BOT_NFT_LISTING_RPC_STAGGER_MS || 0));
+  let listed = 0;
+  for (const tokenId of uniqueTokenIds) {
+    try {
+      const l = await withRpcRetry(() => marketplace.listings(tokenId));
+      const active = Boolean(l?.[3]);
+      const seller = String(l?.[0] ?? "").toLowerCase();
+      if (active && seller === target) listed++;
+    } catch (_) {}
+    if (listingStaggerMs > 0) await delay(listingStaggerMs);
+  }
+  return listed;
+}
+
+/** Legacy: scan every tokenId 1..max (slow; RPC-heavy). */
+async function countListedForSellerFullScan(provider, marketplaceAddress, nftAddress, account) {
+  const target = (account || "").toLowerCase();
+  const marketplace = new ethers.Contract(
+    marketplaceAddress,
+    ["function listings(uint256) view returns (address seller, uint256, uint256, bool active)"],
+    provider
+  );
+  let maxTokenId = Number(process.env.MARKETPLACE_MAX_TOKEN_ID || 500);
+  try {
+    const nft = new ethers.Contract(nftAddress, ["function totalMinted() view returns (uint256)"], provider);
+    const minted = await withRpcRetry(() => nft.totalMinted());
+    const n = Number(minted ?? 0);
+    if (Number.isFinite(n) && n > 0) maxTokenId = Math.min(n + 10, 10000);
+  } catch (_) {}
+  maxTokenId = Math.max(1, Math.min(maxTokenId, 10000));
+
+  let listed = 0;
+  const batch = BOT_NFT_LISTING_SCAN_BATCH;
+  const listingStaggerMs = Math.max(0, Number(process.env.BOT_NFT_LISTING_RPC_STAGGER_MS || 35));
+  for (let start = 1; start <= maxTokenId; start += batch) {
+    const end = Math.min(start + batch - 1, maxTokenId);
+    const rows = [];
+    for (let tokenId = start; tokenId <= end; tokenId++) {
+      try {
+        const l = await withRpcRetry(() => marketplace.listings(tokenId));
+        rows.push({ active: !!l?.[3], seller: String(l?.[0] ?? "").toLowerCase() });
+      } catch {
+        rows.push({ active: false, seller: "" });
+      }
+      if (listingStaggerMs > 0 && tokenId < end) await delay(listingStaggerMs);
+    }
+    for (const r of rows) {
+      if (r.active && r.seller === target) listed++;
+    }
+  }
+  return listed;
+}
+
 /** NFT holdings = in wallet + listed on marketplace (listed NFTs are still "held" by the bot). */
 async function getNftHoldings(provider, marketplaceAddress, nftAddress, account) {
   let inWallet = 0;
@@ -278,38 +419,14 @@ async function getNftHoldings(provider, marketplaceAddress, nftAddress, account)
   } catch (_) {}
   const target = (account || "").toLowerCase();
   if (!target.startsWith("0x") || !marketplaceAddress) return inWallet;
+
   let listed = 0;
   try {
-    const marketplace = new ethers.Contract(
-      marketplaceAddress,
-      ["function listings(uint256) view returns (address seller, uint256, uint256, bool active)"],
-      provider
-    );
-    let maxTokenId = Number(process.env.MARKETPLACE_MAX_TOKEN_ID || 500);
-    try {
-      const nft = new ethers.Contract(nftAddress, ["function totalMinted() view returns (uint256)"], provider);
-      const minted = await withRpcRetry(() => nft.totalMinted());
-      const n = Number(minted ?? 0);
-      if (Number.isFinite(n) && n > 0) maxTokenId = Math.min(n + 10, 10000);
-    } catch (_) {}
-    maxTokenId = Math.max(1, Math.min(maxTokenId, 10000));
-    const batch = BOT_NFT_LISTING_SCAN_BATCH;
-    const listingStaggerMs = Math.max(0, Number(process.env.BOT_NFT_LISTING_RPC_STAGGER_MS || 35));
-    for (let start = 1; start <= maxTokenId; start += batch) {
-      const end = Math.min(start + batch - 1, maxTokenId);
-      const rows = [];
-      for (let tokenId = start; tokenId <= end; tokenId++) {
-        try {
-          const l = await withRpcRetry(() => marketplace.listings(tokenId));
-          rows.push({ active: !!l?.[3], seller: String(l?.[0] ?? "").toLowerCase() });
-        } catch {
-          rows.push({ active: false, seller: "" });
-        }
-        if (listingStaggerMs > 0 && tokenId < end) await delay(listingStaggerMs);
-      }
-      for (const r of rows) {
-        if (r.active && r.seller === target) listed++;
-      }
+    const viaEvents = await countListedForSellerViaEvents(provider, marketplaceAddress, account);
+    if (viaEvents !== null) {
+      listed = viaEvents;
+    } else {
+      listed = await countListedForSellerFullScan(provider, marketplaceAddress, nftAddress, account);
     }
   } catch (e) {
     console.warn("getNftHoldings listed count failed:", e?.message);

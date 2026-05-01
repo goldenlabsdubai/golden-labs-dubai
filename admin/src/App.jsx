@@ -201,7 +201,7 @@ export default function App() {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (!r.ok) throw new Error("Failed to start");
-      await loadBots();
+      await loadBots({ silent: true });
     } catch (e) {
       setError(e.message);
     } finally {
@@ -218,7 +218,7 @@ export default function App() {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (!r.ok) throw new Error("Failed to stop");
-      await loadBots();
+      await loadBots({ silent: true });
     } catch (e) {
       setError(e.message);
     } finally {

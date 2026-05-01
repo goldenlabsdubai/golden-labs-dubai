@@ -112,69 +112,86 @@ export default function BotsPage({
 
       <div className="bots-grid">
         {rows.map((bot) => {
-          const configured = Boolean(bot.address) && !botsLoading;
-          const statusClass = botsLoading
+          const isThisToggling = String(togglingId) === String(bot.id);
+          const cardLoading = botsLoading;
+          const configured = Boolean(bot.address) && !cardLoading;
+          const statusClass = cardLoading
             ? "loading"
-            : configured && bot.running
-              ? "running"
-              : "stopped";
-          const statusLabel = botsLoading ? "Loading…" : configured ? (bot.running ? "Running" : "Stopped") : "Not configured";
+            : isThisToggling
+              ? "loading"
+              : configured && bot.running
+                ? "running"
+                : "stopped";
+          const statusLabel = cardLoading
+            ? "Loading…"
+            : isThisToggling
+              ? bot.running
+                ? "Stopping…"
+                : "Starting…"
+              : configured
+                ? bot.running
+                  ? "Running"
+                  : "Stopped"
+                : "Not configured";
 
           return (
-            <article key={`bot-${bot.id}`} className={`bot-card${botsLoading ? " bot-card--loading" : ""}`}>
+            <article
+              key={`bot-${bot.id}`}
+              className={`bot-card${cardLoading || isThisToggling ? " bot-card--loading" : ""}`}
+            >
               <div className="bot-card__header">
                 <strong>Bot {bot.id}</strong>
                 <span className={`status status--${statusClass}`}>{statusLabel}</span>
               </div>
 
-              <p className="bot-card__address" title={botsLoading ? "" : configured ? bot.address : "Not configured"}>
-                {botsLoading ? "—" : configured ? bot.address : "Not configured"}
+              <p className="bot-card__address" title={cardLoading ? "" : configured ? bot.address : "Not configured"}>
+                {cardLoading ? "—" : configured ? bot.address : "Not configured"}
               </p>
-              {!botsLoading && bot.statsError ? (
+              {!cardLoading && bot.statsError ? (
                 <p className="section__error bot-card__error">{bot.statsError}</p>
               ) : null}
 
               <div className="bot-card__grid">
                 <div>
                   <span>Buys</span>
-                  <strong>{botsLoading ? "—" : bot.buyTrades ?? 0}</strong>
+                  <strong>{cardLoading ? "—" : bot.buyTrades ?? 0}</strong>
                 </div>
                 <div>
                   <span>Sells</span>
-                  <strong>{botsLoading ? "—" : bot.sellTrades ?? 0}</strong>
+                  <strong>{cardLoading ? "—" : bot.sellTrades ?? 0}</strong>
                 </div>
                 <div>
                   <span>Total trades</span>
-                  <strong>{botsLoading ? "—" : bot.totalTrades ?? 0}</strong>
+                  <strong>{cardLoading ? "—" : bot.totalTrades ?? 0}</strong>
                 </div>
                 <div>
                   <span>NFT holdings</span>
-                  <strong>{botsLoading ? "—" : bot.nftHoldings ?? 0}</strong>
+                  <strong>{cardLoading ? "—" : bot.nftHoldings ?? 0}</strong>
                 </div>
               </div>
 
               <div className="bot-card__balances">
                 <span className="token-balance">
                   <span>
-                    USDT Balance: {botsLoading ? "—" : `${formatUsdt(bot.usdtBalance)} USDT`}
+                    USDT Balance: {cardLoading ? "—" : `${formatUsdt(bot.usdtBalance)} USDT`}
                   </span>
                   <img src={USDT_LOGO} alt="USDT" className="token-balance__icon" />
                 </span>
                 <span className="token-balance">
                   <span>
-                    BNB Balance: {botsLoading ? "—" : `${formatBnb(bot.bnbBalance)} BNB`}
+                    BNB Balance: {cardLoading ? "—" : `${formatBnb(bot.bnbBalance)} BNB`}
                   </span>
                   <img src={BNB_LOGO} alt="BNB" className="token-balance__icon" />
                 </span>
                 <div className="bot-card__profit-box" style={{ textAlign: "center", alignSelf: "center" }}>
                   <span className="bot-card__profit bot-card__profit-item">
-                    Profit: {botsLoading ? "—" : `${formatUsdt(bot.totalProfit)} USDT`}{" "}
+                    Profit: {cardLoading ? "—" : `${formatUsdt(bot.totalProfit)} USDT`}{" "}
                     <img src={USDT_LOGO} alt="USDT" className="token-balance__icon" />
                   </span>
                 </div>
               </div>
 
-              {botsLoading ? (
+              {cardLoading ? (
                 <button type="button" className="btn btn--ghost" disabled>
                   Loading…
                 </button>
@@ -185,7 +202,7 @@ export default function BotsPage({
                   onClick={() => onStop(bot.id)}
                   disabled={togglingId != null || !configured}
                 >
-                  {togglingId === bot.id ? "..." : "Stop"}
+                  {isThisToggling ? "Stopping…" : "Stop"}
                 </button>
               ) : (
                 <button
@@ -194,7 +211,7 @@ export default function BotsPage({
                   onClick={() => onStart(bot.id)}
                   disabled={togglingId != null || !configured}
                 >
-                  {togglingId === bot.id ? "..." : "Start"}
+                  {isThisToggling ? "Starting…" : "Start"}
                 </button>
               )}
             </article>

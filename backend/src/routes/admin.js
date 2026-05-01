@@ -76,19 +76,31 @@ router.get("/bots", async (req, res) => {
     const config = BotService.getBotConfig();
     const runningState = await BotService.getBotRunningState();
     const settings = await BotService.getBotSettings();
-    /** Chainstack / free RPC: avoid parallel getBotStats (doubles RPS); small gap between bots. */
-    /** Chainstack: wider default gap between bots (was 250ms) to reduce RPS bursts. */
-    const staggerMs = Math.max(0, Number(process.env.ADMIN_BOT_STATS_STAGGER_MS ?? 900));
-    const settled = [];
-    for (let i = 0; i < config.length; i++) {
-      try {
-        const stats = await BotService.getBotStats(config[i].address, { tradesFromChainOnly: false });
-        settled.push({ status: "fulfilled", value: stats });
-      } catch (reason) {
-        settled.push({ status: "rejected", reason });
-      }
-      if (i < config.length - 1 && staggerMs > 0) {
-        await new Promise((r) => setTimeout(r, staggerMs));
+    /** Parallel stats by default (faster for several bots). ADMIN_BOT_STATS_PARALLEL=false uses staggered sequential + ADMIN_BOT_STATS_STAGGER_MS. */
+    const parallel = String(process.env.ADMIN_BOT_STATS_PARALLEL ?? "true").toLowerCase() !== "false";
+    /** Full NFT = wallet + scanning listings(tokenId) on chain (slow). Default off; set ADMIN_BOTS_FULL_NFT_HOLDINGS=true for exact listed count. */
+    const fullNft = String(process.env.ADMIN_BOTS_FULL_NFT_HOLDINGS ?? "").trim().toLowerCase() === "true";
+    const statsOptions = {
+      tradesFromChainOnly: false,
+      skipMarketplaceListedNft: !fullNft,
+    };
+
+    let settled;
+    if (parallel) {
+      settled = await Promise.allSettled(config.map((bot) => BotService.getBotStats(bot.address, statsOptions)));
+    } else {
+      settled = [];
+      const staggerMs = Math.max(0, Number(process.env.ADMIN_BOT_STATS_STAGGER_MS ?? 900));
+      for (let i = 0; i < config.length; i++) {
+        try {
+          const stats = await BotService.getBotStats(config[i].address, statsOptions);
+          settled.push({ status: "fulfilled", value: stats });
+        } catch (reason) {
+          settled.push({ status: "rejected", reason });
+        }
+        if (i < config.length - 1 && staggerMs > 0) {
+          await new Promise((r) => setTimeout(r, staggerMs));
+        }
       }
     }
     const bots = config.map((bot, index) => {
