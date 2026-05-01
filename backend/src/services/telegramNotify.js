@@ -35,6 +35,28 @@ function shouldSendBoughtAlert(fields) {
   return true;
 }
 
+/** Skip duplicate "listed" when both indexer DB row and listings API poller fire for the same listing. */
+const listedAlertDedup = new Map();
+const LISTED_DEDUP_MS = 300_000;
+
+function shouldSendListedAlert(fields) {
+  const tid = fields?.tokenId != null ? String(fields.tokenId) : "";
+  const seller = fields?.seller ? String(fields.seller).trim().toLowerCase() : "";
+  const priceWei = fields?.priceWei != null ? String(fields.priceWei) : "";
+  const key = `listed:${tid}:${seller}:${priceWei}`;
+  if (!tid || !seller) return true;
+  const now = Date.now();
+  const prev = listedAlertDedup.get(key);
+  if (prev && now - prev < LISTED_DEDUP_MS) return false;
+  listedAlertDedup.set(key, now);
+  if (listedAlertDedup.size > 800) {
+    for (const [k, t] of listedAlertDedup) {
+      if (now - t > LISTED_DEDUP_MS) listedAlertDedup.delete(k);
+    }
+  }
+  return true;
+}
+
 export function isTelegramSendConfigured() {
   return Boolean(bridgeUrl());
 }
@@ -90,6 +112,7 @@ export async function notifyActivity(kind, fields) {
   const base = bridgeUrl();
   if (!base) return;
   if (kind === "bought" && !shouldSendBoughtAlert(fields)) return;
+  if (kind === "listed" && !shouldSendListedAlert(fields)) return;
   try {
     await postToTelegramBotBridge({ kind, ...(fields && typeof fields === "object" ? fields : {}) });
     if ((process.env.TELEGRAM_DEBUG || "").trim() === "1") {
@@ -103,7 +126,9 @@ export async function notifyActivity(kind, fields) {
 export function logTelegramAlertsStatus() {
   const b = bridgeUrl();
   if (b) {
-    console.log(`[telegram] Alerts forwarded to telegram-bot (${b}); sources: DB poller + /api/telegram/alert`);
+    console.log(
+      `[telegram] Alerts forwarded to telegram-bot (${b}); sources: DB poller, GET /api/marketplace/listings poller, /api/telegram/alert`
+    );
   } else {
     console.warn("[telegram] TELEGRAM_BRIDGE_URL not set — alerts off. Run `telegram-bot` and set e.g. http://127.0.0.1:3847");
   }
