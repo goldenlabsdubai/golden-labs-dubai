@@ -32,12 +32,17 @@
  *   BOT_RELIST_RETRY_MIN_MS / BOT_RELIST_RETRY_MAX_MS — random backoff between relist retries (default 60s–5m)
  *   BOT_BOOTSTRAP_LISTING_SCAN — one-time full mint scan on startup to seed pending file (default false; heavy)
  */
-import "dotenv/config";
+import dotenv from "dotenv";
 import { ethers, Network } from "ethers";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { LIST_PRICE_WEI } from "./config.js";
+
+/** Same folder as universal-bot.js — works under PM2 when cwd is not the bots directory. */
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+dotenv.config({ path: path.join(__dirname, ".env") });
 
 /** Exit non-zero so PM2 or `node bot-supervisor.mjs` can restart the process. */
 process.on("unhandledRejection", (reason) => {
@@ -124,7 +129,6 @@ const RELIST_RETRY_MAX_MS = Math.max(
   Number(process.env.BOT_RELIST_RETRY_MAX_MS ?? 300_000)
 );
 const BUY_RETRY_GAP_MS = Math.max(500, Number(process.env.BOT_BUY_RETRY_GAP_MS || 2000));
-/** Bot 2+ waits (id-1) * this ms before competing for the same token lock (bot 1 tries first). */
 /** True: user buyback candidates come from Listed events + small validation reads only (no full supply scan). */
 const USE_EVENT_PENDING_QUEUE =
   String(process.env.BOT_EVENT_PENDING_QUEUE ?? "true").toLowerCase() !== "false";
@@ -177,8 +181,6 @@ const BOT_SKIP_NFT_APPROVE_IF_OK =
 const BOT_SKIP_LIST_STATIC_SIMULATE =
   String(process.env.BOT_SKIP_LIST_STATIC_SIMULATE ?? "false").toLowerCase() === "true";
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 const LOCK_DIR = path.join(__dirname, ".locks");
 const COOLDOWN_FILE = path.join(__dirname, ".bot-intercooldowns.json");
 const LISTING_TIMESTAMPS_FILE = path.join(__dirname, ".bot-listing-timestamps.json");
