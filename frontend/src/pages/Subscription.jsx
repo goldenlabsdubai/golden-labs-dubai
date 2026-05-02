@@ -14,6 +14,7 @@ import {
   DEFAULT_SUBSCRIBE_GAS,
 } from "../utils/safeContractGas";
 import InsufficientBalanceModal from "../components/InsufficientBalanceModal";
+import { NavbarBrandLink } from "../components/NavbarBrandLink";
 
 // USDT (BEP20) – balance and approve. Use same chain as connected wallet.
 const USDT_ABI = [
@@ -235,9 +236,7 @@ export default function Subscription() {
       {portalReady && portalContainer && createPortal(subscriptionBg, portalContainer)}
 
       <header className="profile-modern__header landing-v2__header">
-        <AppRouteLink to="/" className="landing-v2__logo">
-          Golden Labs
-        </AppRouteLink>
+        <NavbarBrandLink to="/" className="landing-v2__logo" />
         <div className="landing-v2__header-right">
           {displayAddress ? (
             <div className="landing-v2__address-wrap" ref={menuRef}>

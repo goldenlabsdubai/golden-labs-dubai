@@ -22,6 +22,7 @@ import {
 } from "../utils/safeContractGas";
 import NFTMedia from "../components/NFTMedia";
 import InsufficientBalanceModal from "../components/InsufficientBalanceModal";
+import { NavbarBrandLink } from "../components/NavbarBrandLink";
 
 const NFT_ABI = [
   { name: "approve", type: "function", stateMutability: "nonpayable", inputs: [{ name: "to", type: "address" }, { name: "tokenId", type: "uint256" }], outputs: [] },
@@ -537,7 +538,7 @@ export default function Marketplace() {
 
       <header className="marketplace-page__nav">
         <div className="marketplace-page__nav-left">
-          <AppRouteLink to="/" className="marketplace-page__logo">Golden Labs</AppRouteLink>
+          <NavbarBrandLink to="/" className="marketplace-page__logo" />
         </div>
         {canAccessTradingNav(user) && (
           <nav className="marketplace-page__links">

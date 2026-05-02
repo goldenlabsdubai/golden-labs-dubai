@@ -6,6 +6,7 @@ import { useAuth } from "../hooks/useAuth";
 import { useWalletConnect } from "../hooks/useWalletConnect";
 import { API, getAvatarUrl } from "../config";
 import { canAccessTradingNav } from "../utils/tradingAccess";
+import { NavbarBrandLink } from "../components/NavbarBrandLink";
 
 const TOP_SELLERS_LIMIT = 10;
 
@@ -75,7 +76,7 @@ export default function Leaderboard() {
 
       <header className="marketplace-page__nav">
         <div className="marketplace-page__nav-left">
-          <AppRouteLink to="/" className="marketplace-page__logo">Golden Labs</AppRouteLink>
+          <NavbarBrandLink to="/" className="marketplace-page__logo" />
         </div>
         {canAccessTradingNav(user) && (
           <nav className="marketplace-page__links">

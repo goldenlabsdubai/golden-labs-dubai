@@ -4,7 +4,6 @@
  */
 import { useState, useEffect } from "react";
 import { createPortal } from "react-dom";
-import { AppRouteLink } from "../components/AppRouteLink";
 import { assignAppPath } from "../utils/appNavigation";
 import { useAccount, useSignMessage, useWriteContract, usePublicClient } from "wagmi";
 import { getAddress, zeroAddress } from "viem";
@@ -13,6 +12,7 @@ import { useAuth } from "../hooks/useAuth";
 import { useWalletConnect } from "../hooks/useWalletConnect";
 import { API, ASSET_IMAGE } from "../config";
 import { getTransactionErrorMessage } from "../utils/transactionError";
+import { NavbarBrandLink } from "../components/NavbarBrandLink";
 
 const TOKEN_KEY = "gl_token";
 const USER_KEY = "gl_user";
@@ -302,7 +302,7 @@ export default function ProfileSetup() {
       <div className="profile-modern">
         {portalReady && portalContainer && createPortal(profileBg, portalContainer)}
         <header className="profile-modern__header landing-v2__header">
-          <AppRouteLink to="/" className="landing-v2__logo">Golden Labs</AppRouteLink>
+          <NavbarBrandLink to="/" className="landing-v2__logo" />
           <div className="landing-v2__header-right">
             <button type="button" className="landing-v2__btn landing-v2__btn--primary" onClick={() => openModal?.()}>
               Connect Wallet
@@ -331,7 +331,7 @@ export default function ProfileSetup() {
     <div className="profile-modern">
       {portalReady && portalContainer && createPortal(profileBg, portalContainer)}
       <header className="profile-modern__header landing-v2__header">
-        <AppRouteLink to="/" className="landing-v2__logo">Golden Labs</AppRouteLink>
+        <NavbarBrandLink to="/" className="landing-v2__logo" />
         <div className="landing-v2__header-right">
           <span className="profile-modern__wallet-badge">{address.slice(0, 6)}…{address.slice(-4)}</span>
         </div>

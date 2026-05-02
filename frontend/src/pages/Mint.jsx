@@ -9,6 +9,7 @@ import { useWalletConnect } from "../hooks/useWalletConnect";
 import { API, ASSET_IMAGE, EXPLORER_BY_CHAIN } from "../config";
 import { applyWalletTxError } from "../utils/transactionError";
 import InsufficientBalanceModal from "../components/InsufficientBalanceModal";
+import { NavbarBrandLink } from "../components/NavbarBrandLink";
 import { canAccessTradingNav } from "../utils/tradingAccess";
 
 const USDT_ABI = [
@@ -230,7 +231,7 @@ export default function Mint() {
       {portalReady && portalContainer && createPortal(mintBg, portalContainer)}
 
       <header className="profile-modern__header landing-v2__header">
-        <AppRouteLink to="/" className="landing-v2__logo">Golden Labs</AppRouteLink>
+        <NavbarBrandLink to="/" className="landing-v2__logo" />
         <div className="landing-v2__header-right">
           {displayAddress ? (
             <div className="landing-v2__address-wrap" ref={menuRef}>

@@ -7,6 +7,7 @@ import { useWalletConnect } from "../hooks/useWalletConnect";
 import { useSignInWithWallet } from "../hooks/useSignInWithWallet";
 import { API, getAvatarUrl } from "../config.js";
 import { getTransactionErrorMessage } from "../utils/transactionError";
+import { NavbarBrandLink } from "../components/NavbarBrandLink";
 
 const POLL_TOP_SELLERS_MS = 8000;
 
@@ -284,7 +285,7 @@ export default function Landing() {
     <div className="landing-v2">
       <div className="landing-v2__particles" aria-hidden="true" />
       <header className="landing-v2__header">
-        <span className="landing-v2__logo">Golden Labs</span>
+        <NavbarBrandLink to="/" className="landing-v2__logo" />
         <div className="landing-v2__header-right">
           {displayAddress ? (
             <div className="landing-v2__address-wrap" ref={menuRef}>

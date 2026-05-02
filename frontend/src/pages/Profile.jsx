@@ -10,6 +10,7 @@ import { API, getAvatarUrl, ASSET_IMAGE } from "../config";
 import { applyWalletTxError, getTransactionErrorMessage } from "../utils/transactionError";
 import { canAccessTradingNav } from "../utils/tradingAccess";
 import InsufficientBalanceModal from "../components/InsufficientBalanceModal";
+import { NavbarBrandLink } from "../components/NavbarBrandLink";
 
 const USDT_ABI = [
   { name: "balanceOf", type: "function", stateMutability: "view", inputs: [{ name: "account", type: "address" }], outputs: [{ type: "uint256" }] },
@@ -287,9 +288,7 @@ export default function Profile() {
       {portalReady && portalContainer && createPortal(profileBg, portalContainer)}
 
       <header className="profile-modern__header landing-v2__header">
-        <AppRouteLink to="/" className="landing-v2__logo">
-          Golden Labs
-        </AppRouteLink>
+        <NavbarBrandLink to="/" className="landing-v2__logo" />
         {hasProfile && canAccessTradingNav(user) && (
           <nav className="marketplace-page__links" aria-label="Main">
             <AppRouteLink to="/marketplace">Marketplace</AppRouteLink>

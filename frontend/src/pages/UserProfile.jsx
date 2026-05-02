@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { useParams } from "react-router-dom";
 import { AppRouteLink } from "../components/AppRouteLink";
 import { API, getAvatarUrl } from "../config";
+import { NavbarBrandLink } from "../components/NavbarBrandLink";
 
 /** Turn handle or full URL into clickable URL for X or Telegram. */
 function normalizeUrl(value, type) {
@@ -56,7 +57,7 @@ export default function UserProfile() {
     return (
       <div className="user-profile user-profile--loading">
         <header className="user-profile__nav">
-          <AppRouteLink to="/marketplace" className="user-profile__logo">Golden Labs</AppRouteLink>
+          <NavbarBrandLink to="/marketplace" className="user-profile__logo" />
         </header>
         <div className="user-profile__content">
           <p className="user-profile__loading">Loading profile…</p>
@@ -69,7 +70,7 @@ export default function UserProfile() {
     return (
       <div className="user-profile">
         <header className="user-profile__nav">
-          <AppRouteLink to="/marketplace" className="user-profile__logo">Golden Labs</AppRouteLink>
+          <NavbarBrandLink to="/marketplace" className="user-profile__logo" />
         </header>
         <div className="user-profile__content">
           <p className="user-profile__error">{error || "User not found"}</p>
@@ -82,7 +83,7 @@ export default function UserProfile() {
   return (
     <div className="user-profile">
       <header className="user-profile__nav">
-        <AppRouteLink to="/marketplace" className="user-profile__logo">Golden Labs</AppRouteLink>
+        <NavbarBrandLink to="/marketplace" className="user-profile__logo" />
         <nav className="user-profile__links">
           <AppRouteLink to="/marketplace">Marketplace</AppRouteLink>
           <AppRouteLink to="/leaderboard">Leaderboard</AppRouteLink>

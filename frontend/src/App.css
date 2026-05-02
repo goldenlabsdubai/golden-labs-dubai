@@ -4802,6 +4802,36 @@ a.profile-hub__refresh {
   overflow-x: hidden;
 }
 
+/* === Navbar brand (logo + wordmark) — landing, marketplace-style navs === */
+.navbar-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.65rem;
+  text-decoration: none;
+  min-width: 0;
+}
+
+.navbar-brand__logo-img {
+  height: 3rem;
+  width: auto;
+  max-width: 4.25rem;
+  object-fit: contain;
+  object-position: bottom center;
+  flex-shrink: 0;
+  display: block;
+}
+
+.navbar-brand__wordmark {
+  white-space: nowrap;
+}
+
+@media (max-width: 480px) {
+  .navbar-brand__logo-img {
+    height: 2.5rem;
+    max-width: 3.5rem;
+  }
+}
+
 .marketplace-page__nav {
   display: flex;
   align-items: center;
