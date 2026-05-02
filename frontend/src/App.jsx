@@ -8,6 +8,7 @@ import ParticleNetwork from "./components/ParticleNetwork";
 import SupportChat from "./components/SupportChat";
 import MobileBottomNav from "./components/MobileBottomNav";
 import PlatformMaintenanceOverlay from "./components/PlatformMaintenanceOverlay";
+import { SeoHead } from "./components/SeoHead";
 
 const BSC_TESTNET_CHAIN_ID = 97;
 
@@ -168,6 +169,7 @@ export default function App() {
 
   return (
     <div className={`app${showMobileBottomNav ? " app--mobile-nav" : ""}`}>
+      <SeoHead />
       <ReconnectOnLoad />
       <ForceBscTestnet />
       <div className={`app-content${isLandingPage ? " app-content--landing" : ""}`}>
