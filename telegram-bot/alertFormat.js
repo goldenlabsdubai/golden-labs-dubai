@@ -57,14 +57,26 @@ function linkTxWithLabel(hash, anchorText) {
   return `<a href="${escapeHtml(url)}">${escapeHtml(label)}</a>`;
 }
 
+/** Match web modal (`PlatformMaintenanceOverlay.jsx`) — fixed zone, no timezone name in the string. */
+const MAINT_DISPLAY_LOCALE = "en-IN";
+const MAINT_DISPLAY_TZ = "Asia/Kolkata";
+
 function formatMaintenanceRangeLocale(startsAt, endsAt) {
   const s = startsAt ? new Date(String(startsAt)) : null;
   const e = endsAt ? new Date(String(endsAt)) : null;
   if (!s || Number.isNaN(s.getTime())) return "";
-  const opts = { dateStyle: "medium", timeStyle: "short" };
-  const sStr = s.toLocaleString(undefined, opts);
+  const opts = {
+    timeZone: MAINT_DISPLAY_TZ,
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  };
+  const sStr = s.toLocaleString(MAINT_DISPLAY_LOCALE, opts);
   if (!e || Number.isNaN(e.getTime())) return sStr;
-  return `${sStr} → ${e.toLocaleString(undefined, opts)}`;
+  return `${sStr} → ${e.toLocaleString(MAINT_DISPLAY_LOCALE, opts)}`;
 }
 
 function formatAdminMaintenanceNoteHtml(raw) {
