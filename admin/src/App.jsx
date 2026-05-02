@@ -4,6 +4,7 @@ import { useAccount, useSignMessage } from "wagmi";
 import { SiweMessage } from "siwe";
 import BotsPage from "./pages/BotsPage";
 import ContractsPage from "./pages/ContractsPage";
+import MaintenancePage from "./pages/MaintenancePage";
 
 function normalizeApiBase(url) {
   return String(url || "")
@@ -315,6 +316,13 @@ export default function App() {
         </button>
         <button
           type="button"
+          className={`nav__link ${activeTab === "maintenance" ? "nav__link--active" : ""}`}
+          onClick={() => setActiveTab("maintenance")}
+        >
+          Maintenance
+        </button>
+        <button
+          type="button"
           className={`nav__link ${activeTab === "contracts" ? "nav__link--active" : ""}`}
           onClick={() => setActiveTab("contracts")}
         >
@@ -337,6 +345,8 @@ export default function App() {
           onStop={handleStop}
           onSaveSettings={handleSaveBotSettings}
         />
+      ) : activeTab === "maintenance" ? (
+        <MaintenancePage token={token} />
       ) : (
         <ContractsPage connectedWallet={address} />
       )}

@@ -8574,3 +8574,127 @@ div.marketplace-page__nav-profile.marketplace-page__profile-icon-btn {
     bottom: calc(5.25rem + env(safe-area-inset-bottom, 0px));
   }
 }
+
+/* ─── Platform maintenance — Golden Labs theme (glass + gold, matches profile/marketplace modals) ─── */
+.platform-maintenance-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200000;
+  pointer-events: auto;
+}
+
+.platform-maintenance-overlay__blur {
+  position: absolute;
+  inset: 0;
+  background: rgba(5, 5, 8, 0.78);
+  backdrop-filter: blur(14px) saturate(1.2);
+  -webkit-backdrop-filter: blur(14px) saturate(1.2);
+}
+
+.platform-maintenance-overlay__modal {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: calc(100% - 2.5rem);
+  max-width: 26rem;
+  padding: 2rem 1.75rem 1.6rem;
+  border-radius: 24px;
+  text-align: center;
+  background: rgba(255, 255, 255, 0.04);
+  backdrop-filter: blur(80px) saturate(1.8);
+  -webkit-backdrop-filter: blur(80px) saturate(1.8);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.35),
+    0 0 0 1px rgba(212, 175, 55, 0.12) inset,
+    0 0 48px var(--gold-glow, rgba(212, 175, 55, 0.2));
+  color: var(--text);
+  isolation: isolate;
+}
+
+.platform-maintenance-overlay__accent-cap {
+  position: absolute;
+  top: 0;
+  left: 1.25rem;
+  right: 1.25rem;
+  height: 3px;
+  border-radius: 0 0 4px 4px;
+  background: linear-gradient(90deg, var(--accent-dim, #b8960c), var(--accent, #d4af37), var(--accent-bright, #e8c547));
+  pointer-events: none;
+}
+
+.platform-maintenance-overlay__step {
+  margin: 0.35rem 0 0.65rem;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.platform-maintenance-overlay__title {
+  margin: 0 0 1rem;
+  font-size: clamp(1.35rem, 4vw, 1.55rem);
+  font-weight: 700;
+  line-height: 1.2;
+  color: var(--text);
+}
+
+.platform-maintenance-overlay__image {
+  display: block;
+  width: 100%;
+  max-height: 12rem;
+  margin: 0 auto 1.1rem;
+  object-fit: contain;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+}
+
+.platform-maintenance-overlay__intro {
+  margin: 0 0 1.25rem;
+  line-height: 1.55;
+  font-size: 0.95rem;
+  color: var(--muted);
+}
+
+.platform-maintenance-overlay__window {
+  margin: 0 0 1rem;
+  padding: 0.9rem 1rem;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.22);
+  border: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  text-align: center;
+}
+
+.platform-maintenance-overlay__window-label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.platform-maintenance-overlay__times {
+  font-size: 0.92rem;
+  color: var(--accent-bright);
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.platform-maintenance-overlay__note {
+  margin: 0 0 1rem;
+  font-size: 0.88rem;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+.platform-maintenance-overlay__footer {
+  margin: 0;
+  font-size: 0.78rem;
+  color: var(--muted);
+  opacity: 0.9;
+}

@@ -7,6 +7,7 @@ import { withTradingGateOverlay } from "./utils/tradingRouteGate";
 import ParticleNetwork from "./components/ParticleNetwork";
 import SupportChat from "./components/SupportChat";
 import MobileBottomNav from "./components/MobileBottomNav";
+import PlatformMaintenanceOverlay from "./components/PlatformMaintenanceOverlay";
 
 const BSC_TESTNET_CHAIN_ID = 97;
 
@@ -192,6 +193,7 @@ export default function App() {
         </div>
       </div>
       {showMobileBottomNav ? <MobileBottomNav /> : null}
+      <PlatformMaintenanceOverlay />
     </div>
   );
 }
