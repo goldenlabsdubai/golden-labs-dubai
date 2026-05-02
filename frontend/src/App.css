@@ -7618,9 +7618,31 @@ div.marketplace-page__nav-profile.marketplace-page__profile-icon-btn {
   border-radius: inherit;
 }
 .landing-v2__banner-text,
-.landing-v2__banner .landing-v2__btn {
+.landing-v2__banner .landing-v2__btn,
+.landing-v2__banner .landing-v2__banner-cta {
   position: relative;
   z-index: 1;
+}
+.landing-v2__banner-actions {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+}
+.landing-v2__banner-cta {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  text-decoration: none;
+  box-sizing: border-box;
+}
+.landing-v2__banner-cta-icon {
+  width: 1.35em;
+  height: 1.35em;
+  flex-shrink: 0;
 }
 .landing-v2__banner-text {
   font-size: 1.5rem;
