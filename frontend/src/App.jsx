@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { useAccount, useSwitchChain, useReconnect } from "wagmi";
+import { Analytics } from "@vercel/analytics/react";
 import "./App.css";
 import { useAuth } from "./hooks/useAuth";
 import { withTradingGateOverlay } from "./utils/tradingRouteGate";
@@ -194,6 +195,7 @@ export default function App() {
       </div>
       {showMobileBottomNav ? <MobileBottomNav /> : null}
       <PlatformMaintenanceOverlay />
+      <Analytics />
     </div>
   );
 }
