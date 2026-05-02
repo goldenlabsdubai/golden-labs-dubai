@@ -1,0 +1,5 @@
+# https://goldenlabs.finance
+User-agent: *
+Allow: /
+
+Sitemap: https://goldenlabs.finance/sitemap.xml
