@@ -1,13 +1,11 @@
 import { useEffect } from "react";
 import { useLocation } from "react-router-dom";
 import {
-  SITE_ORIGIN,
+  SEO_OG_IMAGE,
   SEO_KEYWORDS,
   seoForLocation,
   canonicalUrl,
 } from "../config/seo";
-
-const OG_IMAGE = `${SITE_ORIGIN}/goldenlabslogo.png`;
 
 function upsertMeta(selectorAttr, key, content) {
   let el = document.querySelector(`meta[${selectorAttr}="${key}"]`);
@@ -47,7 +45,7 @@ export function SeoHead() {
     upsertMeta("property", "og:url", canonical);
     upsertMeta("property", "og:title", title);
     upsertMeta("property", "og:description", description);
-    upsertMeta("property", "og:image", OG_IMAGE);
+    upsertMeta("property", "og:image", SEO_OG_IMAGE);
     upsertMeta("property", "og:image:alt", "Golden Labs logo");
     upsertMeta("property", "og:locale", "en_US");
     upsertMeta("property", "og:site_name", "Golden Labs");
@@ -55,7 +53,7 @@ export function SeoHead() {
     upsertMeta("name", "twitter:card", "summary_large_image");
     upsertMeta("name", "twitter:title", title);
     upsertMeta("name", "twitter:description", description);
-    upsertMeta("name", "twitter:image", OG_IMAGE);
+    upsertMeta("name", "twitter:image", SEO_OG_IMAGE);
 
     setCanonical(canonical);
   }, [pathname, title, description, canonical]);

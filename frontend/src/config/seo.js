@@ -1,6 +1,9 @@
 /** Production site URL — keep in sync with Vercel primary domain (no trailing slash). */
 export const SITE_ORIGIN = "https://goldenlabs.finance";
 
+/** Full URL for og:image / twitter:image (crawlers expect an absolute https URL). */
+export const SEO_OG_IMAGE = `${SITE_ORIGIN}/goldenlabslogo.png`;
+
 /**
  * Legacy / minor engines only; Google does not use meta keywords for ranking.
  * Still useful as an internal keyword list and for some aggregators.
