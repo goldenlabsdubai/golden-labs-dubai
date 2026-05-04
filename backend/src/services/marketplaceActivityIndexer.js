@@ -7,16 +7,11 @@ import * as MetaPg from "./metaPostgres.js";
 const ABI = [
   "event Sold(uint256 indexed tokenId, address seller, address buyer, uint256 price)",
   "event Listed(uint256 indexed tokenId, address seller, uint256 price)",
-  "event ListingCancelled(uint256 indexed tokenId)",
 ];
 
 const MAX_BLOCKS_PER_QUERY = 10;
 const POLL_INTERVAL_MS = Number(process.env.MARKETPLACE_INDEXER_POLL_INTERVAL_MS || 20000);
 const CHUNK_DELAY_MS = Number(process.env.MARKETPLACE_INDEXER_CHUNK_DELAY_MS || 1000);
-const BACKFILL_MAX_BLOCKS = Math.max(100, Math.min(Number(process.env.MARKETPLACE_ACTIVE_LISTINGS_BACKFILL_CHUNK || 2500), 50_000));
-
-/** Prevent concurrent rebuild jobs (e.g. parallel /listings). */
-let rebuildActiveListingsInFlight = null;
 
 async function getLastProcessedBlock() {
   if (!getPool()) return null;
@@ -63,13 +58,6 @@ function getStartBlock(latest) {
   return Math.max(0, latest - 1);
 }
 
-function getBackfillFromBlock(latest) {
-  const fromEnv = process.env.MARKETPLACE_INDEXER_FROM_BLOCK || process.env.BOT_STATS_FROM_BLOCK || "";
-  const parsed = Number(fromEnv);
-  if (Number.isFinite(parsed) && parsed >= 0) return Math.min(Math.floor(parsed), latest);
-  return 0;
-}
-
 function isRateLimitError(e) {
   const msg = (e?.message || "") + JSON.stringify(e?.value || []);
   return (
@@ -109,69 +97,6 @@ async function markProcessed(eventId, payload) {
     await MetaPg.markProcessedSalePg(eventId, payload);
   } catch (e) {
     console.warn("markProcessedSalePg:", e?.message);
-  }
-}
-
-async function queryFilterWithRetry(contract, filter, fromBlock, toBlock, retries = 3) {
-  for (let i = 0; i < retries; i++) {
-    try {
-      return await contract.queryFilter(filter, fromBlock, toBlock);
-    } catch (e) {
-      if (isRateLimitError(e) && i < retries - 1) {
-        await new Promise((r) => setTimeout(r, 2000 * (i + 1)));
-        continue;
-      }
-      throw e;
-    }
-  }
-  return [];
-}
-
-/**
- * Replay Listed / Sold / ListingCancelled from chain to rebuild `marketplace_active_listings`.
- * Uses eth_getLogs in chunks (not per-token eth_call). Safe to call when meta index is empty.
- */
-export async function rebuildMarketplaceActiveListingsFromLogs(provider, contract) {
-  if (!getPool()) return;
-  if (rebuildActiveListingsInFlight) {
-    await rebuildActiveListingsInFlight;
-    return;
-  }
-  rebuildActiveListingsInFlight = (async () => {
-    const latest = await provider.getBlockNumber();
-    let fromBlock = getBackfillFromBlock(latest);
-    const activeSet = new Set();
-    for (let start = fromBlock; start <= latest; start += BACKFILL_MAX_BLOCKS) {
-      const end = Math.min(start + BACKFILL_MAX_BLOCKS - 1, latest);
-      const [soldEvents, listedEvents, cancelledEvents] = await Promise.all([
-        queryFilterWithRetry(contract, contract.filters.Sold(), start, end),
-        queryFilterWithRetry(contract, contract.filters.Listed(), start, end),
-        queryFilterWithRetry(contract, contract.filters.ListingCancelled(), start, end),
-      ]);
-      const merged = [
-        ...soldEvents.map((e) => ({ e, t: "sold" })),
-        ...listedEvents.map((e) => ({ e, t: "listed" })),
-        ...cancelledEvents.map((e) => ({ e, t: "cancel" })),
-      ].sort((a, b) => {
-        const ba = Number(a.e.blockNumber ?? 0);
-        const bb = Number(b.e.blockNumber ?? 0);
-        if (ba !== bb) return ba - bb;
-        return Number(a.e.logIndex ?? 0) - Number(b.e.logIndex ?? 0);
-      });
-      for (const { e, t } of merged) {
-        const tid = e.args?.tokenId != null ? String(e.args.tokenId) : null;
-        if (!tid) continue;
-        if (t === "listed") activeSet.add(tid);
-        else activeSet.delete(tid);
-      }
-      if (end < latest) await new Promise((r) => setTimeout(r, CHUNK_DELAY_MS));
-    }
-    await MetaPg.setActiveListingTokenIdsPg(activeSet);
-  })();
-  try {
-    await rebuildActiveListingsInFlight;
-  } finally {
-    rebuildActiveListingsInFlight = null;
   }
 }
 
@@ -226,92 +151,81 @@ async function runMarketplaceActivityIndexerPoll(provider, contract) {
     lastBlock = getStartBlock(latest);
     await setLastProcessedBlock(lastBlock);
   }
-  if (latest <= lastBlock) {
-    if (getPool()) {
+  if (latest <= lastBlock) return;
+  const querySoldWithRetry = async (fromBlock, toBlock, retries = 3) => {
+    for (let i = 0; i < retries; i++) {
       try {
-        const cur = await MetaPg.getActiveListingTokenIdsPg();
-        if (!cur.length) {
-          await rebuildMarketplaceActiveListingsFromLogs(provider, contract);
-        }
+        return await contract.queryFilter(contract.filters.Sold(), fromBlock, toBlock);
       } catch (e) {
-        console.warn("Marketplace indexer: idle seed marketplace_active_listings:", e?.message || e);
+        if (isRateLimitError(e) && i < retries - 1) {
+          await new Promise((r) => setTimeout(r, 2000 * (i + 1)));
+          continue;
+        }
+        throw e;
       }
     }
-    return;
-  }
-
-  const activeIds = await MetaPg.getActiveListingTokenIdsPg().catch(() => []);
-  const activeSet = new Set(activeIds);
-
+    return [];
+  };
+  const queryListedWithRetry = async (fromBlock, toBlock, retries = 3) => {
+    for (let i = 0; i < retries; i++) {
+      try {
+        return await contract.queryFilter(contract.filters.Listed(), fromBlock, toBlock);
+      } catch (e) {
+        if (isRateLimitError(e) && i < retries - 1) {
+          await new Promise((r) => setTimeout(r, 2000 * (i + 1)));
+          continue;
+        }
+        throw e;
+      }
+    }
+    return [];
+  };
   let listingBlocks = await loadListingBlocksMap();
   let fromBlock = lastBlock + 1;
   const toBlock = latest;
   let processedUpTo = lastBlock;
   while (fromBlock <= toBlock) {
     const chunkTo = Math.min(fromBlock + MAX_BLOCKS_PER_QUERY - 1, toBlock);
-    const [soldEvents, listedEvents, cancelledEvents] = await Promise.all([
-      queryFilterWithRetry(contract, contract.filters.Sold(), fromBlock, chunkTo),
-      queryFilterWithRetry(contract, contract.filters.Listed(), fromBlock, chunkTo),
-      queryFilterWithRetry(contract, contract.filters.ListingCancelled(), fromBlock, chunkTo),
+    const [soldEvents, listedEvents] = await Promise.all([
+      querySoldWithRetry(fromBlock, chunkTo),
+      queryListedWithRetry(fromBlock, chunkTo),
     ]);
-    const merged = [
-      ...soldEvents.map((e) => ({ e, t: "sold" })),
-      ...listedEvents.map((e) => ({ e, t: "listed" })),
-      ...cancelledEvents.map((e) => ({ e, t: "cancel" })),
-    ].sort((a, b) => {
-      const ba = Number(a.e.blockNumber ?? 0);
-      const bb = Number(b.e.blockNumber ?? 0);
-      if (ba !== bb) return ba - bb;
-      return Number(a.e.logIndex ?? 0) - Number(b.e.logIndex ?? 0);
-    });
-
-    const listedNeedBlocks = new Set();
-    for (const row of merged) {
-      if (row.t === "listed") listedNeedBlocks.add(Number(row.e.blockNumber ?? 0));
+    for (const evt of soldEvents) {
+      const tokenId = evt.args?.tokenId;
+      const seller = evt.args?.seller ? String(evt.args.seller).toLowerCase() : "";
+      const buyer = evt.args?.buyer ? String(evt.args.buyer).toLowerCase() : "";
+      const txHash = String(evt.transactionHash || "").trim() || null;
+      const id = saleEventId(evt);
+      if (!buyer || tokenId == null) continue;
+      const alreadyProcessed = await isProcessed(id);
+      if (alreadyProcessed) continue;
+      const payload = {
+        tokenId: String(tokenId),
+        seller: seller || null,
+        buyer,
+        price: String(evt.args?.price ?? 0n),
+        txHash,
+        blockNumber: Number(evt.blockNumber ?? 0),
+      };
+      await User.recordPurchase(buyer, seller || null, String(tokenId), String(evt.args?.price ?? 0n), {
+        txHash,
+        eventId: id,
+        blockNumber: Number(evt.blockNumber ?? 0),
+      });
+      await markProcessed(id, payload);
     }
-    const blockTs = {};
-    for (const b of listedNeedBlocks) {
-      try {
-        const block = await provider.getBlock(b);
-        blockTs[b] = block?.timestamp != null ? Number(block.timestamp) * 1000 : 0;
-      } catch (_) {
-        blockTs[b] = 0;
+    if (listedEvents.length > 0) {
+      const uniqueBlocks = [...new Set(listedEvents.map((e) => e.blockNumber))];
+      const blockTs = {};
+      for (const b of uniqueBlocks) {
+        try {
+          const block = await provider.getBlock(b);
+          blockTs[b] = block?.timestamp != null ? Number(block.timestamp) * 1000 : 0;
+        } catch (_) {
+          blockTs[b] = 0;
+        }
       }
-    }
-
-    for (const { e: evt, t } of merged) {
-      if (t === "cancel") {
-        const tokenId = evt.args?.tokenId != null ? String(evt.args.tokenId) : null;
-        if (tokenId) activeSet.delete(tokenId);
-        continue;
-      }
-      if (t === "sold") {
-        const tokenId = evt.args?.tokenId != null ? String(evt.args.tokenId) : null;
-        if (tokenId) activeSet.delete(tokenId);
-        const seller = evt.args?.seller ? String(evt.args.seller).toLowerCase() : "";
-        const buyer = evt.args?.buyer ? String(evt.args.buyer).toLowerCase() : "";
-        const txHash = String(evt.transactionHash || "").trim() || null;
-        const id = saleEventId(evt);
-        if (!buyer || tokenId == null) continue;
-        const alreadyProcessed = await isProcessed(id);
-        if (alreadyProcessed) continue;
-        const payload = {
-          tokenId: String(tokenId),
-          seller: seller || null,
-          buyer,
-          price: String(evt.args?.price ?? 0n),
-          txHash,
-          blockNumber: Number(evt.blockNumber ?? 0),
-        };
-        await User.recordPurchase(buyer, seller || null, String(tokenId), String(evt.args?.price ?? 0n), {
-          txHash,
-          eventId: id,
-          blockNumber: Number(evt.blockNumber ?? 0),
-        });
-        await markProcessed(id, payload);
-        continue;
-      }
-      if (t === "listed") {
+      for (const evt of listedEvents) {
         const tokenId = evt.args?.tokenId != null ? String(evt.args.tokenId) : null;
         if (!tokenId) continue;
         const blockNumber = Number(evt.blockNumber ?? 0);
@@ -319,14 +233,9 @@ async function runMarketplaceActivityIndexerPoll(provider, contract) {
         if (existing && existing.blockNumber >= blockNumber) continue;
 
         const lid = listingDedupId(evt);
-        if (!lid) continue;
-        if (await isProcessed(lid)) {
-          activeSet.add(tokenId);
-          continue;
-        }
+        if (!lid || (await isProcessed(lid))) continue;
 
         listingBlocks[tokenId] = { blockNumber, timestamp: blockTs[blockNumber] ?? 0 };
-        activeSet.add(tokenId);
 
         const seller = evt.args?.seller ? String(evt.args.seller).toLowerCase() : "";
         const priceWei = evt.args?.price != null ? String(evt.args.price) : "";
@@ -339,16 +248,13 @@ async function runMarketplaceActivityIndexerPoll(provider, contract) {
         });
       }
     }
-
     processedUpTo = chunkTo;
     fromBlock = chunkTo + 1;
     if (fromBlock <= toBlock) await new Promise((r) => setTimeout(r, CHUNK_DELAY_MS));
   }
-
   if (Object.keys(listingBlocks).length > 0) {
     await setListingBlocksMap(listingBlocks);
   }
-  await MetaPg.setActiveListingTokenIdsPg(activeSet);
   await setLastProcessedBlock(processedUpTo);
 }
 

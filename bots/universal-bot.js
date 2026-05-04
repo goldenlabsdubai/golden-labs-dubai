@@ -31,8 +31,6 @@
  *   BOT_CHAIN_LISTENER_BOT_ID — optional override only (forces which id listens; normally omit and use admin Start/Stop).
  *   BOT_RELIST_RETRY_MIN_MS / BOT_RELIST_RETRY_MAX_MS — random backoff between relist retries (default 60s–5m)
  *   BOT_BOOTSTRAP_LISTING_SCAN — one-time full mint scan on startup to seed pending file (default false; heavy)
- *   BOT_RELIST_TRANSFER_LOOKBACK_BLOCKS — Transfer→wallet scan for relist (default MY_ASSETS_TRANSFER_LOOKBACK_BLOCKS or 6M blocks)
- *   BOT_RELIST_FULL_MINT_SCAN=true — legacy relist path: ownerOf 1..totalMinted (high RPC; default false)
  */
 import dotenv from "dotenv";
 import { ethers, Network } from "ethers";
@@ -95,20 +93,6 @@ const RELIST_SCAN_BATCH_SIZE = Number(process.env.BOT_RELIST_SCAN_BATCH_SIZE || 
 const RELIST_MAX_PER_RUN = Number(process.env.BOT_RELIST_MAX_PER_RUN || 3);
 /** Pause between each ownerOf during relist scan (0 = no gap). Reduces RPS bursts on low Chainstack tiers. */
 const RELIST_OWNER_RPC_GAP_MS = Math.max(0, Number(process.env.BOT_RELIST_OWNER_RPC_GAP_MS ?? 60));
-/** Blocks to look back for NFT Transfer events when finding bot-held token ids for relist (avoids 1..totalMinted ownerOf). */
-const RELIST_TRANSFER_LOOKBACK_BLOCKS = Math.max(
-  50_000,
-  Math.min(
-    Number(
-      process.env.BOT_RELIST_TRANSFER_LOOKBACK_BLOCKS ||
-        process.env.MY_ASSETS_TRANSFER_LOOKBACK_BLOCKS ||
-        6_000_000
-    ),
-    30_000_000
-  )
-);
-const RELIST_FULL_MINT_SCAN =
-  String(process.env.BOT_RELIST_FULL_MINT_SCAN ?? "false").toLowerCase() === "true";
 /**
  * Listed discovery: ethers `contract.on` uses eth_newFilter + eth_getFilterChanges every poll — brutal on Chainstack RPS.
  * Instead we poll getLogs on an interval (see pollListedEventsLoop).
@@ -219,9 +203,7 @@ const nftAbi = [
   "function approve(address, uint256) returns (bool)",
   "function getApproved(uint256 tokenId) view returns (address)",
   "function ownerOf(uint256 tokenId) view returns (address)",
-  "function balanceOf(address owner) view returns (uint256)",
   "function totalMinted() view returns (uint256)",
-  "event Transfer(address indexed from, address indexed to, uint256 indexed tokenId)",
 ];
 const usdtAbi = [
   "function approve(address, uint256) returns (bool)",
@@ -761,87 +743,6 @@ function txOverrides(kind = "default") {
     }
   }
 
-  /** @returns {Promise<boolean|null>} true/false if API ok; null if no URL or fetch failed */
-  async function checkAnyUserListingViaHttp() {
-    try {
-      const res = await fetchMarketplaceListingsResponse();
-      if (!res || !res.ok) return null;
-      const data = await res.json();
-      const raw = Array.isArray(data?.listings) ? data.listings : [];
-      for (const it of raw) {
-        const tier = String(it?.listingTier || "").toLowerCase();
-        if (tier && tier !== "user") continue;
-        const sellerLc = String(it?.seller ?? "").toLowerCase();
-        if (!sellerLc || sellerLc === marketLc || knownBotWallets.has(sellerLc)) continue;
-        let priceWei;
-        try {
-          priceWei = BigInt(String(it?.price ?? it?.priceWei ?? "0"));
-        } catch {
-          continue;
-        }
-        if (priceWei !== listPriceWeiBn) continue;
-        return true;
-      }
-      return false;
-    } catch {
-      return null;
-    }
-  }
-
-  /**
-   * Same rows as collectUserListingRowsFullScan but from GET /marketplace/listings (aligned with backend index).
-   * @returns {Promise<null|Array>} null = use chain fallback; array = use result (may be empty)
-   */
-  async function collectUserListingRowsFromApiFullScan() {
-    try {
-      const res = await fetchMarketplaceListingsResponse();
-      if (!res || !res.ok) return null;
-      const data = await res.json();
-      const raw = Array.isArray(data?.listings) ? data.listings : [];
-      const out = [];
-      for (const it of raw) {
-        const tier = String(it?.listingTier || "").toLowerCase();
-        if (tier && tier !== "user") continue;
-        const tidStr = String(it?.tokenId ?? "").trim();
-        if (!tidStr) continue;
-        const sellerLc = String(it?.seller ?? "").toLowerCase();
-        if (!sellerLc || sellerLc === self || sellerLc === marketLc || knownBotWallets.has(sellerLc)) continue;
-        let priceWei;
-        try {
-          priceWei = BigInt(String(it?.price ?? it?.priceWei ?? "0"));
-        } catch {
-          continue;
-        }
-        if (priceWei !== listPriceWeiBn) continue;
-        let listedAtMs = Number(it?.listedAt ?? it?.listedAtMs);
-        if (!Number.isFinite(listedAtMs) || listedAtMs <= 0) {
-          listedAtMs = Number(listingTimestamps[tidStr]);
-        }
-        if (!Number.isFinite(listedAtMs) || listedAtMs <= 0) {
-          let tidBig;
-          try {
-            tidBig = BigInt(tidStr);
-          } catch {
-            tidBig = null;
-          }
-          if (tidBig != null) {
-            await ensureUserListingTimestampFromChain(tidStr, tidBig);
-            listedAtMs = listingTimestamps[tidStr];
-          }
-        }
-        if (!Number.isFinite(listedAtMs) || listedAtMs <= 0) listedAtMs = Date.now();
-        out.push({
-          tokenId: BigInt(tidStr),
-          seller: it?.seller ?? sellerLc,
-          price: priceWei,
-          listedAtMs: Number(listedAtMs),
-        });
-      }
-      return out;
-    } catch {
-      return null;
-    }
-  }
   let cachedRunningBotIds = null;
   let cachedRunningBotIdsAt = 0;
   const RUNNING_BOT_IDS_TTL_MS = Math.min(15_000, Math.max(2500, CONTROL_REFRESH_MS));
@@ -958,11 +859,6 @@ function txOverrides(kind = "default") {
         cachedHasUserListings = n > 0;
         return cachedHasUserListings;
       }
-      const httpHit = await checkAnyUserListingViaHttp();
-      if (httpHit !== null) {
-        cachedHasUserListings = httpHit;
-        return httpHit;
-      }
       const totalMinted = await getTotalMintedSafe();
       if (!Number.isFinite(totalMinted) || totalMinted <= 0) {
         cachedHasUserListings = false;
@@ -1063,11 +959,8 @@ function txOverrides(kind = "default") {
     return out;
   }
 
-  /** Full mint scan — legacy when API unavailable or BOT_EVENT_PENDING_QUEUE=false without listings URL. */
+  /** Full mint scan — optional bootstrap / legacy when BOT_EVENT_PENDING_QUEUE=false. */
   async function collectUserListingRowsFullScan() {
-    const fromApi = await collectUserListingRowsFromApiFullScan();
-    if (fromApi !== null) return fromApi;
-
     const totalMinted = await getTotalMintedSafe();
     if (!Number.isFinite(totalMinted) || totalMinted <= 0) return [];
     const batchSize = Math.max(1, Math.min(ACTIVE_SCAN_BATCH_SIZE, 200));
@@ -1745,113 +1638,35 @@ function txOverrides(kind = "default") {
     }
   }
 
-  async function discoverTokenIdsReceivedByWallet(walletAddr) {
-    try {
-      const checksummed = ethers.getAddress(walletAddr);
-      const iface = ["event Transfer(address indexed from, address indexed to, uint256 indexed tokenId)"];
-      const c = new ethers.Contract(NFT_ADDR, iface, provider);
-      const latest = await withBotRpcRetry(() => provider.getBlockNumber(), { retries: 4, baseMs: 400 });
-      const fromBlock = Math.max(0, latest - RELIST_TRANSFER_LOOKBACK_BLOCKS);
-      const events = await withBotRpcRetry(
-        () => c.queryFilter(c.filters.Transfer(null, checksummed, null), fromBlock, latest),
-        { retries: 3, baseMs: 500 }
-      );
-      const ids = new Set();
-      for (const e of events) {
-        const tid = e.args?.tokenId;
-        if (tid == null) continue;
-        ids.add(typeof tid === "bigint" ? tid.toString() : String(tid));
-      }
-      return [...ids];
-    } catch (e) {
-      console.warn(`Bot ${botId}: relist Transfer discovery`, e?.shortMessage || e?.message || e);
-      return null;
-    }
-  }
-
-  async function relistHeldNftsIfAnyFullMintScan(source) {
-    const totalMinted = await getTotalMintedSafe();
-    if (!Number.isFinite(totalMinted) || totalMinted <= 0) return;
-
-    const scanBatch = Math.max(1, Math.min(RELIST_SCAN_BATCH_SIZE, 200));
-    const maxPerRun = Math.max(1, Math.min(RELIST_MAX_PER_RUN, 20));
-    let relisted = 0;
-
-    for (let start = 1; start <= totalMinted; start += scanBatch) {
-      const end = Math.min(totalMinted, start + scanBatch - 1);
-      const tokenIds = Array.from({ length: end - start + 1 }, (_, idx) => start + idx);
-      const owners = [];
-      for (const tid of tokenIds) {
-        try {
-          owners.push(String((await nft.ownerOf(tid)) || "").toLowerCase());
-        } catch {
-          owners.push("");
-        }
-        if (RELIST_OWNER_RPC_GAP_MS > 0) {
-          await delayMs(RELIST_OWNER_RPC_GAP_MS);
-        }
-      }
-      for (let i = 0; i < tokenIds.length; i++) {
-        if (owners[i] !== self) continue;
-        const didRelist = await relistTokenIfNeeded(tokenIds[i], source);
-        if (didRelist) relisted++;
-        if (relisted >= maxPerRun) return;
-      }
-    }
-  }
-
   async function relistHeldNftsIfAny(source) {
     try {
-      const balBn = await withBotRpcRetry(() => nft.balanceOf(wallet.address), { retries: 3, baseMs: 400 }).catch(
-        () => 0n
-      );
-      if (balBn === 0n) return;
+      const totalMinted = await getTotalMintedSafe();
+      if (!Number.isFinite(totalMinted) || totalMinted <= 0) return;
 
-      if (RELIST_FULL_MINT_SCAN) {
-        await relistHeldNftsIfAnyFullMintScan(source);
-        return;
-      }
-
-      const discovered = await discoverTokenIdsReceivedByWallet(wallet.address);
-      if (discovered === null) {
-        await relistHeldNftsIfAnyFullMintScan(source);
-        return;
-      }
-
-      const verifiedSet = new Set();
-      for (const tidStr of discovered) {
-        let tidNum;
-        try {
-          tidNum = Number(tidStr);
-        } catch {
-          continue;
-        }
-        if (!Number.isFinite(tidNum) || tidNum <= 0) continue;
-        try {
-          const owner = String((await nft.ownerOf(tidNum)) || "").toLowerCase();
-          if (owner === self) verifiedSet.add(tidNum);
-        } catch (_) {}
-        if (RELIST_OWNER_RPC_GAP_MS > 0) {
-          await delayMs(RELIST_OWNER_RPC_GAP_MS);
-        }
-      }
-
-      const balN = Number(balBn);
-      if (verifiedSet.size < balN && balN > 0) {
-        console.warn(
-          `Bot ${botId}: relist Transfer discovery found ${verifiedSet.size} held id(s) but balanceOf=${balN} — full mint scan fallback`
-        );
-        await relistHeldNftsIfAnyFullMintScan(source);
-        return;
-      }
-
-      const verified = [...verifiedSet].sort((a, b) => a - b);
+      const scanBatch = Math.max(1, Math.min(RELIST_SCAN_BATCH_SIZE, 200));
       const maxPerRun = Math.max(1, Math.min(RELIST_MAX_PER_RUN, 20));
       let relisted = 0;
-      for (const tokenId of verified) {
-        const didRelist = await relistTokenIfNeeded(tokenId, source);
-        if (didRelist) relisted++;
-        if (relisted >= maxPerRun) return;
+
+      for (let start = 1; start <= totalMinted; start += scanBatch) {
+        const end = Math.min(totalMinted, start + scanBatch - 1);
+        const tokenIds = Array.from({ length: end - start + 1 }, (_, idx) => start + idx);
+        const owners = [];
+        for (const tid of tokenIds) {
+          try {
+            owners.push(String(await nft.ownerOf(tid) || "").toLowerCase());
+          } catch {
+            owners.push("");
+          }
+          if (RELIST_OWNER_RPC_GAP_MS > 0) {
+            await delayMs(RELIST_OWNER_RPC_GAP_MS);
+          }
+        }
+        for (let i = 0; i < tokenIds.length; i++) {
+          if (owners[i] !== self) continue;
+          const didRelist = await relistTokenIfNeeded(tokenIds[i], source);
+          if (didRelist) relisted++;
+          if (relisted >= maxPerRun) return;
+        }
       }
     } catch (e) {
       console.warn(`Bot ${botId}: relist worker error`, e?.message || e);

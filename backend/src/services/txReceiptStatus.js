@@ -1,11 +1,12 @@
 import { ethers } from "ethers";
+import { createPinnedJsonRpcProvider } from "../config/ethersRpc.js";
 
 let providerCache = null;
 
 function getProvider() {
   const rpc = (process.env.RPC_URL || "").trim();
   if (!rpc) return null;
-  if (!providerCache) providerCache = new ethers.JsonRpcProvider(rpc);
+  if (!providerCache) providerCache = createPinnedJsonRpcProvider(rpc);
   return providerCache;
 }
 
