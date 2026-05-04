@@ -211,6 +211,9 @@ router.put("/platform-maintenance", async (req, res) => {
     const prevRaw = await AdminPg.getAdminSettingsByIdPg(PLATFORM_MAINTENANCE_SETTINGS_ID);
     const prev = normalizeMaintenanceFromDb(prevRaw || {});
     const payload = normalizeMaintenancePayload(req.body);
+    if (!Object.prototype.hasOwnProperty.call(req.body || {}, "imageUrl")) {
+      payload.imageUrl = prev.imageUrl || "";
+    }
     if (payload.enabled) {
       const s = payload.startsAt ? Date.parse(payload.startsAt) : NaN;
       const e = payload.endsAt ? Date.parse(payload.endsAt) : NaN;

@@ -13,6 +13,51 @@ const META_KEY = "telegramDbNotifier";
 /** Snapshot of active listing tokenIds to diff new listings (aligned with /api/marketplace/listings). */
 const META_LISTINGS_API = "telegramListingsApiPoller";
 
+/** Default 3h — poller skips subscription/mint/buy/user_joined/listed when DB/API time is older (stops “today” spam after cursor/meta bugs). Set TELEGRAM_POLLER_MAX_EVENT_AGE_MS=0 to disable. */
+const DEFAULT_POLLER_MAX_EVENT_AGE_MS = 3 * 60 * 60 * 1000;
+
+function pollerMaxEventAgeMs() {
+  const raw = (process.env.TELEGRAM_POLLER_MAX_EVENT_AGE_MS ?? "").trim();
+  if (raw === "") return DEFAULT_POLLER_MAX_EVENT_AGE_MS;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return DEFAULT_POLLER_MAX_EVENT_AGE_MS;
+  if (n <= 0) return Infinity;
+  return n;
+}
+
+/**
+ * @param {Date|string|number|null|undefined} v
+ * @returns {number|null} epoch ms
+ */
+function eventTimeMs(v) {
+  if (v == null) return null;
+  if (v instanceof Date) {
+    const t = v.getTime();
+    return Number.isNaN(t) ? null : t;
+  }
+  if (typeof v === "number" && Number.isFinite(v)) {
+    return v > 1e12 ? v : v * 1000;
+  }
+  const d = new Date(String(v));
+  const t = d.getTime();
+  return Number.isNaN(t) ? null : t;
+}
+
+/** @param {Date|string|number|null|undefined} timeSource */
+function isPollerEventFresh(timeSource) {
+  const maxAge = pollerMaxEventAgeMs();
+  if (maxAge === Infinity) return true;
+  const t = eventTimeMs(timeSource);
+  if (t == null) return false;
+  return Date.now() - t <= maxAge;
+}
+
+function debugPollerSkip(label, detail) {
+  if ((process.env.TELEGRAM_DEBUG || "").trim() === "1") {
+    console.log(`[telegram] poller skip (stale or no time): ${label}${detail ? ` — ${detail}` : ""}`);
+  }
+}
+
 function toIso(v) {
   if (v == null) return null;
   if (v instanceof Date) return v.toISOString();
@@ -53,93 +98,112 @@ export async function runTelegramActivityFromDbNotifierOnce() {
   const dbNotifierOn = (process.env.TELEGRAM_DB_NOTIFIER || "1").trim() !== "0";
 
   if (getPool() && dbNotifierOn) {
-  const state = await loadOrBootstrapState();
-  let lastUaId = Number(state.lastUserActivityId) || 0;
-  let lastUserCreatedAt = state.lastUserCreatedAt;
-  let lastListedAt = state.lastListedNotifiedAt;
+    const state = await loadOrBootstrapState();
+    let lastUaId = Number(state.lastUserActivityId) || 0;
+    let lastUserCreatedAt = state.lastUserCreatedAt;
+    let lastListedAt = state.lastListedNotifiedAt;
 
-  const { rows: uaRows } = await query(
-    `SELECT id, wallet, type, token_id, price, tx_hash FROM user_activities WHERE id > $1 ORDER BY id ASC LIMIT 100`,
-    [lastUaId]
-  );
+    const { rows: uaRows } = await query(
+      `SELECT id, wallet, type, token_id, price, tx_hash, created_at FROM user_activities WHERE id > $1 ORDER BY id ASC LIMIT 100`,
+      [lastUaId]
+    );
 
-  for (const r of uaRows) {
-    lastUaId = r.id;
-    const wallet = String(r.wallet || "").toLowerCase();
-    const type = String(r.type || "").toLowerCase();
-    if (!wallet) continue;
+    for (const r of uaRows) {
+      lastUaId = r.id;
+      const wallet = String(r.wallet || "").toLowerCase();
+      const type = String(r.type || "").toLowerCase();
+      if (!wallet) continue;
 
-    if (isConfiguredBotWallet(wallet) && (type === "subscription" || type === "mint")) continue;
+      if (isConfiguredBotWallet(wallet) && (type === "subscription" || type === "mint")) continue;
 
-    if (type === "subscription") {
-      await notifyActivity("subscription", { address: wallet, ...(r.tx_hash ? { txHash: r.tx_hash } : {}) });
-    } else if (type === "mint") {
-      await notifyActivity("mint", {
-        address: wallet,
-        ...(r.token_id != null && r.token_id !== "" ? { tokenId: String(r.token_id) } : {}),
-        ...(r.tx_hash ? { txHash: r.tx_hash } : {}),
-      });
-    } else if (type === "buy") {
-      const tx = r.tx_hash ? String(r.tx_hash).trim() : "";
-      let seller = "";
-      let priceWei = r.price != null ? String(r.price) : "0";
-      if (tx) {
-        const pr = await query(`SELECT seller, price FROM nft_purchases WHERE tx_hash = $1 LIMIT 1`, [tx]);
-        if (pr.rows[0]) {
-          seller = String(pr.rows[0].seller || "").toLowerCase();
-          if (pr.rows[0].price != null) priceWei = String(pr.rows[0].price);
+      const freshUa = isPollerEventFresh(r.created_at);
+      if (!freshUa) {
+        debugPollerSkip(`user_activities id=${r.id} type=${type}`, String(r.created_at ?? ""));
+      }
+
+      if (type === "subscription") {
+        if (freshUa) {
+          await notifyActivity("subscription", { address: wallet, ...(r.tx_hash ? { txHash: r.tx_hash } : {}) });
+        }
+      } else if (type === "mint") {
+        if (freshUa) {
+          await notifyActivity("mint", {
+            address: wallet,
+            ...(r.token_id != null && r.token_id !== "" ? { tokenId: String(r.token_id) } : {}),
+            ...(r.tx_hash ? { txHash: r.tx_hash } : {}),
+          });
+        }
+      } else if (type === "buy") {
+        const tx = r.tx_hash ? String(r.tx_hash).trim() : "";
+        let seller = "";
+        let priceWei = r.price != null ? String(r.price) : "0";
+        if (tx) {
+          const pr = await query(`SELECT seller, price FROM nft_purchases WHERE tx_hash = $1 LIMIT 1`, [tx]);
+          if (pr.rows[0]) {
+            seller = String(pr.rows[0].seller || "").toLowerCase();
+            if (pr.rows[0].price != null) priceWei = String(pr.rows[0].price);
+          }
+        }
+        const buyerBot = isConfiguredBotWallet(wallet);
+        const sellerBot = Boolean(seller) && isConfiguredBotWallet(seller);
+        if (!(buyerBot && sellerBot)) {
+          if (freshUa) {
+            await notifyActivity("bought", {
+              buyer: wallet,
+              seller: seller || "",
+              tokenId: String(r.token_id ?? ""),
+              priceWei,
+              ...(tx ? { txHash: tx } : {}),
+            });
+          }
         }
       }
-      const buyerBot = isConfiguredBotWallet(wallet);
-      const sellerBot = Boolean(seller) && isConfiguredBotWallet(seller);
-      if (!(buyerBot && sellerBot)) {
-        await notifyActivity("bought", {
-          buyer: wallet,
-          seller: seller || "",
-          tokenId: String(r.token_id ?? ""),
-          priceWei,
-          ...(tx ? { txHash: tx } : {}),
-        });
+    }
+
+    const { rows: newUsers } = await query(
+      `SELECT wallet, created_at FROM users WHERE created_at > $1::timestamptz ORDER BY created_at ASC LIMIT 50`,
+      [lastUserCreatedAt]
+    );
+    for (const u of newUsers) {
+      const w = String(u.wallet || "").toLowerCase();
+      const ca = toIso(u.created_at);
+      if (ca) lastUserCreatedAt = ca;
+      if (!w.startsWith("0x")) continue;
+      if (isConfiguredBotWallet(w)) continue;
+      if (isPollerEventFresh(u.created_at)) {
+        await notifyActivity("user_joined", { address: w });
+      } else {
+        debugPollerSkip("user_joined", ca || "");
       }
     }
-  }
 
-  const { rows: newUsers } = await query(
-    `SELECT wallet, created_at FROM users WHERE created_at > $1::timestamptz ORDER BY created_at ASC LIMIT 50`,
-    [lastUserCreatedAt]
-  );
-  for (const u of newUsers) {
-    const w = String(u.wallet || "").toLowerCase();
-    const ca = toIso(u.created_at);
-    if (ca) lastUserCreatedAt = ca;
-    if (!w.startsWith("0x")) continue;
-    if (isConfiguredBotWallet(w)) continue;
-    await notifyActivity("user_joined", { address: w });
-  }
-
-  const { rows: listedRows } = await query(
-    `SELECT payload, created_at FROM marketplace_processed_sales
-     WHERE COALESCE(payload->>'type','') = 'listed' AND created_at > $1::timestamptz
-     ORDER BY created_at ASC LIMIT 50`,
-    [lastListedAt]
-  );
-  for (const row of listedRows) {
-    const ca = toIso(row.created_at);
-    if (ca) lastListedAt = ca;
-    const p = row.payload;
-    const seller = p?.seller ? String(p.seller).toLowerCase() : "";
-    const tokenId = p?.tokenId != null ? String(p.tokenId) : "";
-    const priceWei = p?.price != null ? String(p.price) : "";
-    if (seller && tokenId) {
-      await notifyActivity("listed", { seller, tokenId, priceWei });
+    const { rows: listedRows } = await query(
+      `SELECT payload, created_at FROM marketplace_processed_sales
+       WHERE COALESCE(payload->>'type','') = 'listed' AND created_at > $1::timestamptz
+       ORDER BY created_at ASC LIMIT 50`,
+      [lastListedAt]
+    );
+    for (const row of listedRows) {
+      const ca = toIso(row.created_at);
+      if (ca) lastListedAt = ca;
+      const p = row.payload;
+      const seller = p?.seller ? String(p.seller).toLowerCase() : "";
+      const tokenId = p?.tokenId != null ? String(p.tokenId) : "";
+      const priceWei = p?.price != null ? String(p.price) : "";
+      if (seller && tokenId) {
+        if (isPollerEventFresh(row.created_at)) {
+          await notifyActivity("listed", { seller, tokenId, priceWei });
+        } else {
+          debugPollerSkip("listed (marketplace_processed_sales)", ca || "");
+        }
+      }
     }
-  }
 
-  await setMetaPg(META_KEY, {
-    lastUserActivityId: lastUaId,
-    lastUserCreatedAt,
-    lastListedNotifiedAt: lastListedAt,
-  });
+    await setMetaPg(META_KEY, {
+      lastUserActivityId: lastUaId,
+      lastUserCreatedAt,
+      lastListedNotifiedAt: lastListedAt,
+    });
   }
 
   if (getPool()) {
@@ -191,6 +255,15 @@ async function runListingsFromMarketplaceApiOnce() {
     return;
   }
 
+  if (prev.size === 0 && listings.length > 0) {
+    const nextKnown = Object.fromEntries(listings.map((l) => [String(l.tokenId), true]));
+    await setMetaPg(META_LISTINGS_API, { v: 1, bootstrapped: true, knownTokenIds: nextKnown });
+    console.warn(
+      "[telegram] listings API poller: repaired empty knownTokenIds (would have alerted every listing); snapshot re-seeded, no Telegram spam"
+    );
+    return;
+  }
+
   const nextKnown = {};
   for (const l of listings) {
     const tid = l?.tokenId != null ? String(l.tokenId) : "";
@@ -203,6 +276,15 @@ async function runListingsFromMarketplaceApiOnce() {
     const seller = String(l.seller || "").trim().toLowerCase();
     if (!seller.startsWith("0x")) continue;
     const priceWei = l.price != null ? String(l.price) : "0";
+    const listedAtMs = Number(l.listedAt);
+    if (!Number.isFinite(listedAtMs) || listedAtMs <= 0) {
+      debugPollerSkip(`listed API token ${tid}`, "no listedAt from API");
+      continue;
+    }
+    if (!isPollerEventFresh(listedAtMs)) {
+      debugPollerSkip(`listed API token ${tid}`, `listedAt=${listedAtMs}`);
+      continue;
+    }
     await notifyActivity("listed", { seller, tokenId: tid, priceWei });
   }
 
@@ -226,6 +308,15 @@ export function startTelegramActivityFromDbNotifier() {
   }
 
   const ms = Math.max(5000, Math.min(Number(process.env.TELEGRAM_DB_NOTIFIER_MS) || 15000, 120000));
+
+  const maxAge = pollerMaxEventAgeMs();
+  if (maxAge === Infinity) {
+    console.log("[telegram] Poller stale guard off (TELEGRAM_POLLER_MAX_EVENT_AGE_MS=0)");
+  } else {
+    console.log(
+      `[telegram] Poller stale guard: events older than ${Math.round(maxAge / 1000)}s skipped (TELEGRAM_POLLER_MAX_EVENT_AGE_MS)`
+    );
+  }
 
   runTelegramActivityFromDbNotifierOnce().catch((e) => console.warn("[telegram] db notifier:", e?.message || e));
   setInterval(() => {
