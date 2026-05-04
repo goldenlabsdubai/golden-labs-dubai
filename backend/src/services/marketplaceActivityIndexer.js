@@ -226,7 +226,19 @@ async function runMarketplaceActivityIndexerPoll(provider, contract) {
     lastBlock = getStartBlock(latest);
     await setLastProcessedBlock(lastBlock);
   }
-  if (latest <= lastBlock) return;
+  if (latest <= lastBlock) {
+    if (getPool()) {
+      try {
+        const cur = await MetaPg.getActiveListingTokenIdsPg();
+        if (!cur.length) {
+          await rebuildMarketplaceActiveListingsFromLogs(provider, contract);
+        }
+      } catch (e) {
+        console.warn("Marketplace indexer: idle seed marketplace_active_listings:", e?.message || e);
+      }
+    }
+    return;
+  }
 
   const activeIds = await MetaPg.getActiveListingTokenIdsPg().catch(() => []);
   const activeSet = new Set(activeIds);
