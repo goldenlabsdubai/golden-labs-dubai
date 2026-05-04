@@ -33,6 +33,21 @@ function avatarToAbsoluteUrl(avatar) {
   return `${baseUrl}${trimmed.startsWith("/") ? "" : "/"}${trimmed}`;
 }
 
+/** Match GET /api/referral/stats: lifetime referral total = sum(L1..L10), not raw referral_earnings_total (column can drift). */
+function sumReferralEarningsLevels(user) {
+  if (!user) return "0";
+  let s = 0n;
+  for (let lvl = 1; lvl <= 10; lvl++) {
+    const v = user[`referralEarningsL${lvl}`] ?? "0";
+    try {
+      s += BigInt(String(v).replace(/\..*$/, "") || "0");
+    } catch {
+      /* ignore bad row */
+    }
+  }
+  return s.toString();
+}
+
 /** Same shape as GET /me – used for profile response so frontend has full user from backend/Firestore. */
 function toMeResponse(user) {
   if (!user) return null;
@@ -250,6 +265,10 @@ router.get("/me", async (req, res) => {
       const referrerUser = await User.getUserByWallet(user.referrer);
       userForResponse = { ...user, referrerUsername: referrerUser?.username ?? null };
     }
+    userForResponse = {
+      ...userForResponse,
+      referralEarningsTotal: sumReferralEarningsLevels(userForResponse),
+    };
     const response = toMeResponse(userForResponse);
     if (response) {
       response.isAdmin = await isAdminWallet(req.wallet || user.wallet);
