@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { ethers } from "ethers";
+import { createPinnedJsonRpcProvider } from "../config/ethersRpc.js";
 import * as User from "../services/user.js";
 
 const router = Router();
@@ -54,16 +55,19 @@ router.get("/stats", async (req, res) => {
     const walletUser = wallet ? await User.getUserByWallet(wallet) : null;
     const refUser = walletUser || user;
 
-    let claimable = "0";
+    /** On-chain claimable USDT (6 decimals). null = RPC/read failed — do not treat as zero (see Dashboard copy). */
+    let claimableWei = null;
     const contractAddress = process.env.REFERRAL_CONTRACT_ADDRESS || "";
     const rpcUrl = process.env.RPC_URL || "";
     if (wallet && contractAddress && rpcUrl) {
       try {
-        const provider = new ethers.JsonRpcProvider(rpcUrl);
+        const provider = createPinnedJsonRpcProvider(rpcUrl);
         const contract = new ethers.Contract(contractAddress, ["function referralEarnings(address) view returns (uint256)"], provider);
         const amount = await contract.referralEarnings(wallet);
-        claimable = amount.toString();
-      } catch (_) {}
+        claimableWei = amount.toString();
+      } catch (e) {
+        console.warn("[referral/stats] referralEarnings read failed:", e?.message || e);
+      }
     }
 
     // Per-level and lifetime earnings for the dashboard come only from PostgreSQL (referral indexer
@@ -90,7 +94,7 @@ router.get("/stats", async (req, res) => {
       totalReferrals: refUser.totalReferrals ?? 0,
       ...earningsOut,
       referralEarningsTotal: sumL.toString(),
-      claimableOnChain: claimable,
+      claimableOnChain: claimableWei,
       referralWithdrawChunkWei: REFERRAL_WITHDRAW_CHUNK_WEI,
     });
   } catch (e) {
