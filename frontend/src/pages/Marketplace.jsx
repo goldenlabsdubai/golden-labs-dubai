@@ -9,9 +9,10 @@ import { useAuth } from "../hooks/useAuth";
 import { useWalletConnect } from "../hooks/useWalletConnect";
 import { API, getAvatarUrl, MARKETPLACE_AND_RESERVE_POOL_ADDRESS } from "../config";
 import { fetchMyAssetsWithRetry } from "../utils/fetchMyAssets";
-import { applyWalletTxError } from "../utils/transactionError";
+import { applyWalletTxError, tryOpenInsufficientUsdtModal } from "../utils/transactionError";
 import { resolveSellerReferrerRoot } from "../utils/marketplaceReferrer";
 import { canAccessTradingNav } from "../utils/tradingAccess";
+import { marketplaceListPriceUsdtLabel } from "../utils/marketplaceListPriceLabel";
 import {
   safeGasLimit,
   DEFAULT_APPROVE_GAS,
@@ -28,6 +29,7 @@ const NFT_ABI = [
   { name: "approve", type: "function", stateMutability: "nonpayable", inputs: [{ name: "to", type: "address" }, { name: "tokenId", type: "uint256" }], outputs: [] },
 ];
 const MARKETPLACE_ABI = [
+  { name: "listPrice", type: "function", stateMutability: "view", inputs: [], outputs: [{ type: "uint256" }] },
   { name: "list", type: "function", stateMutability: "nonpayable", inputs: [{ name: "tokenId", type: "uint256" }, { name: "price", type: "uint256" }], outputs: [] },
   { name: "buy", type: "function", stateMutability: "nonpayable", inputs: [{ name: "tokenId", type: "uint256" }, { name: "referrer", type: "address" }], outputs: [] },
   { name: "cancelListing", type: "function", stateMutability: "nonpayable", inputs: [{ name: "tokenId", type: "uint256" }], outputs: [] },
@@ -85,6 +87,15 @@ export default function Marketplace() {
   const usdtAddressNormalized = usdtAddress?.startsWith("0x") ? usdtAddress : usdtAddress ? `0x${usdtAddress}` : "";
   const referralAddress = (import.meta.env.VITE_REFERRAL_CONTRACT || "").trim();
   const referralAddressNormalized = referralAddress?.startsWith("0x") ? referralAddress : referralAddress ? `0x${referralAddress}` : "";
+  const { data: marketplaceListPriceWei } = useReadContract({
+    address: marketplaceAddressNormalized || undefined,
+    abi: MARKETPLACE_ABI,
+    functionName: "listPrice",
+    query: { enabled: Boolean(marketplaceAddressNormalized) },
+  });
+  const chainListUsdt = marketplaceListPriceUsdtLabel(marketplaceListPriceWei);
+  const chainListWeiStr = marketplaceListPriceWei != null ? String(marketplaceListPriceWei) : null;
+
   const { data: usdtBalanceRaw, refetch: refetchUsdtBalance } = useReadContract({
     address: usdtAddressNormalized || undefined,
     abi: USDT_ABI,
@@ -272,6 +283,9 @@ export default function Marketplace() {
       return;
     }
     setError("");
+    if (tryOpenInsufficientUsdtModal(usdtBalanceRaw, priceWei, { setInsufficientBalanceType, refetchUsdt: refetchUsdtBalance })) {
+      return;
+    }
     setLoadingBuy(tokenId);
     setBuyStep("approve");
     try {
@@ -631,7 +645,10 @@ export default function Marketplace() {
               <h2 className="marketplace-page__owned-title">Your Assets</h2>
               <p className="marketplace-page__owned-desc">List your Assets for sale from here.</p>
               <div className="profile-hub__grid marketplace-page__grid marketplace-page__grid--grid-3 marketplace-page__owned-grid">
-                {ownedNotListed.map((nft) => (
+                {ownedNotListed.map((nft) => {
+                  const listUsdt = chainListUsdt ?? nft.listPriceUsdt;
+                  const listWei = chainListWeiStr ?? nft.listPriceWei;
+                  return (
                   <div key={nft.tokenId} className="profile-hub__nft-card">
                     <div className="profile-hub__nft-card-image-wrap">
                       <NFTMedia tokenURI={nft.tokenURI} tokenId={nft.tokenId} className="profile-hub__nft-card-image" />
@@ -640,7 +657,7 @@ export default function Marketplace() {
                       <div className="profile-hub__nft-card-row">
                         <span className="profile-hub__nft-id">GLFA #{nft.tokenId}</span>
                         <span className="profile-hub__nft-price">
-                          <span className="profile-hub__nft-price-label">{nft.listPriceUsdt} USDT <img src="/USDT_BEP20.png" alt="" className="usdt-logo-inline" aria-hidden="true" /></span>
+                          <span className="profile-hub__nft-price-label">{listUsdt} USDT <img src="/USDT_BEP20.png" alt="" className="usdt-logo-inline" aria-hidden="true" /></span>
                         </span>
                       </div>
                       <p className="profile-hub__nft-owned-by">Not listed</p>
@@ -648,15 +665,16 @@ export default function Marketplace() {
                         <button
                           type="button"
                           className="profile-hub__nft-btn"
-                          onClick={() => handleList(nft.tokenId, nft.listPriceWei)}
-                          disabled={loadingList != null}
+                          onClick={() => handleList(nft.tokenId, listWei)}
+                          disabled={loadingList != null || listWei == null || String(listWei) === ""}
                         >
-                          {loadingList === nft.tokenId ? (listStep === "approve" ? "1/2 Approving…" : "2/2 Listing…") : `List for $${nft.listPriceUsdt}`}
+                          {loadingList === nft.tokenId ? (listStep === "approve" ? "1/2 Approving…" : "2/2 Listing…") : `List for $${listUsdt}`}
                         </button>
                       </div>
                     </div>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             </section>
           )}

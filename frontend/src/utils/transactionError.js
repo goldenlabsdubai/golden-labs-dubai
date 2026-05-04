@@ -40,52 +40,109 @@ export function getTransactionErrorMessage(error, fallback = "Something went wro
   return error?.message || error?.shortMessage || fallback;
 }
 
-/** Flatten viem/wagmi error chain (message, shortMessage, details, cause). */
+/** Deep text from viem/wagmi/BaseError chains (message, shortMessage, details, metaMessages, cause, data). */
 function normalizeMessage(error) {
   const parts = [];
-  let cur = error;
-  let depth = 0;
-  while (cur != null && depth < 10) {
-    if (typeof cur === "string") {
-      parts.push(cur);
-      break;
-    }
-    parts.push(String(cur.message || ""));
-    parts.push(String(cur.shortMessage || ""));
-    parts.push(String(cur.details || ""));
-    cur = cur.cause;
-    depth++;
+  const seen = new Set();
+  function add(v) {
+    if (v == null) return;
+    const s = String(v).trim();
+    if (s) parts.push(s);
   }
-  return parts.join(" ").toLowerCase();
+  function walk(err, depth) {
+    if (err == null || depth > 14) return;
+    if (typeof err === "string") {
+      add(err);
+      return;
+    }
+    if (typeof err !== "object") return;
+    if (seen.has(err)) return;
+    seen.add(err);
+    add(err.message);
+    add(err.shortMessage);
+    add(err.details);
+    add(err.reason);
+    if (Array.isArray(err.metaMessages)) {
+      for (const m of err.metaMessages) add(m);
+    }
+    if (err.data != null) {
+      if (typeof err.data === "string") add(err.data);
+      else {
+        try {
+          add(JSON.stringify(err.data));
+        } catch (_) {
+          add(String(err.data));
+        }
+      }
+    }
+    walk(err.cause, depth + 1);
+    walk(err.error, depth + 1);
+  }
+  walk(error, 0);
+  return parts.join(" \n ").toLowerCase();
+}
+
+/**
+ * Compare on-chain USDT balance to amount needed (6-decimal wei). Opens insufficient-USDT modal when balance is strictly lower.
+ * @returns {boolean} true if modal was opened (caller should abort the tx flow)
+ */
+export function tryOpenInsufficientUsdtModal(usdtBalanceRaw, needWei, { setInsufficientBalanceType, refetchUsdt }) {
+  if (usdtBalanceRaw == null || needWei == null || !setInsufficientBalanceType) return false;
+  try {
+    const bal = BigInt(usdtBalanceRaw);
+    const need = BigInt(needWei);
+    if (bal < need) {
+      setInsufficientBalanceType("usdt");
+      refetchUsdt?.();
+      return true;
+    }
+  } catch (_) {
+    /* ignore */
+  }
+  return false;
 }
 
 export function detectInsufficientBalanceType(error) {
   const msg = normalizeMessage(error);
 
-  // Gas/native token shortage should take priority over generic "insufficient".
+  // ERC20 / USDT shortage — must run before generic "insufficient funds" (often used for native gas too).
+  const tokenShortage =
+    msg.includes("insufficient usdt") ||
+    msg.includes("transfer amount exceeds balance") ||
+    msg.includes("transfer amount exceeds the balance") ||
+    msg.includes("erc20: transfer amount exceeds balance") ||
+    msg.includes("erc20: insufficient balance") ||
+    msg.includes("bep20: transfer amount exceeds balance") ||
+    msg.includes("bep20: insufficient balance") ||
+    msg.includes("bep20: burn amount exceeds balance") ||
+    msg.includes("erc20insufficientbalance") ||
+    msg.includes("insufficient token balance") ||
+    (msg.includes("insufficient") && msg.includes("usdt")) ||
+    (msg.includes("revert") && msg.includes("transfer") && msg.includes("exceed")) ||
+    (msg.includes("execution reverted") &&
+      msg.includes("exceed") &&
+      (msg.includes("balance") || msg.includes("transfer")) &&
+      (msg.includes("bep20") || msg.includes("erc20") || msg.includes("transfer amount") || msg.includes("safetransfer")));
+
+  if (tokenShortage) return "usdt";
+
+  // Native token (BNB) / gas
   if (
     msg.includes("insufficient funds for gas") ||
     msg.includes("gas * gas fee + value") ||
     msg.includes("gas * price + value") ||
     (msg.includes("total cost") && msg.includes("exceeds the balance")) ||
     msg.includes("intrinsic gas too low") ||
-    msg.includes("insufficient balance for transfer") ||
     msg.includes("insufficient funds for intrinsic transaction cost") ||
-    (msg.includes("insufficient funds") && !msg.includes("transfer amount exceeds"))
+    msg.includes("have insufficient funds") ||
+    msg.includes("insufficient funds for this transaction") ||
+    msg.includes("need more funds") ||
+    msg.includes("max fee per gas less than block base fee") ||
+    (msg.includes("fee cap") && msg.includes("less than")) ||
+    (msg.includes("insufficient funds") && !msg.includes("transfer amount exceeds")) ||
+    (msg.includes("insufficient balance for transfer") && !msg.includes("transfer amount exceeds"))
   ) {
     return "bnb";
-  }
-
-  if (
-    msg.includes("insufficient usdt") ||
-    msg.includes("transfer amount exceeds balance") ||
-    msg.includes("erc20: insufficient balance") ||
-    msg.includes("bep20: transfer amount exceeds balance") ||
-    msg.includes("bep20: insufficient balance") ||
-    msg.includes("insufficient token balance") ||
-    (msg.includes("insufficient") && msg.includes("usdt"))
-  ) {
-    return "usdt";
   }
 
   return null;

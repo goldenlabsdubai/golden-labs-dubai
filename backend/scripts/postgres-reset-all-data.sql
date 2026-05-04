@@ -33,6 +33,7 @@ UPDATE admin_settings SET addresses = '{}'::jsonb, updated_at = NOW(), updated_b
 UPDATE meta SET data = '{"lastProcessedBlock": null}'::jsonb, updated_at = NOW() WHERE key = 'referralIndexer';
 UPDATE meta SET data = '{"lastProcessedBlock": null}'::jsonb, updated_at = NOW() WHERE key = 'marketplaceActivityIndexer';
 UPDATE meta SET data = '{"byTokenId": {}}'::jsonb, updated_at = NOW() WHERE key = 'marketplace_listing_blocks';
+UPDATE meta SET data = '{"tokenIds": []}'::jsonb, updated_at = NOW() WHERE key = 'marketplace_active_listings';
 
 COMMIT;
 

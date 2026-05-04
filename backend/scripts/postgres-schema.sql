@@ -130,5 +130,6 @@ CREATE TABLE IF NOT EXISTS meta (
 INSERT INTO meta (key, data) VALUES
   ('marketplaceActivityIndexer', '{"lastProcessedBlock": null}'),
   ('referralIndexer', '{"lastProcessedBlock": null}'),
-  ('marketplace_listing_blocks', '{"byTokenId": {}}')
+  ('marketplace_listing_blocks', '{"byTokenId": {}}'),
+  ('marketplace_active_listings', '{"tokenIds": []}')
 ON CONFLICT (key) DO NOTHING;

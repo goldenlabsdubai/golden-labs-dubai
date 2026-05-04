@@ -7,7 +7,7 @@ import { formatEther, formatUnits, parseUnits } from "viem";
 import { useAuth } from "../hooks/useAuth";
 import { useWalletConnect } from "../hooks/useWalletConnect";
 import { API, ASSET_IMAGE } from "../config";
-import { applyWalletTxError } from "../utils/transactionError";
+import { applyWalletTxError, tryOpenInsufficientUsdtModal } from "../utils/transactionError";
 import {
   safeGasLimit,
   DEFAULT_APPROVE_GAS,
@@ -148,6 +148,11 @@ export default function Subscription() {
         (config.priceWei !== undefined && config.priceWei !== "" ? BigInt(String(config.priceWei)) : undefined);
       if (amount == null) {
         setError("Subscription price could not be loaded. Refresh the page or check your network.");
+        setLoading(false);
+        setPayStep(null);
+        return;
+      }
+      if (tryOpenInsufficientUsdtModal(usdtBalanceRaw, amount, { setInsufficientBalanceType, refetchUsdt: refetchUsdtBalance })) {
         setLoading(false);
         setPayStep(null);
         return;

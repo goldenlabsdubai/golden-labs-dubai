@@ -7,7 +7,7 @@ import { formatEther, formatUnits } from "viem";
 import { useAuth } from "../hooks/useAuth";
 import { useWalletConnect } from "../hooks/useWalletConnect";
 import { API, ASSET_IMAGE, EXPLORER_BY_CHAIN } from "../config";
-import { applyWalletTxError } from "../utils/transactionError";
+import { applyWalletTxError, tryOpenInsufficientUsdtModal } from "../utils/transactionError";
 import InsufficientBalanceModal from "../components/InsufficientBalanceModal";
 import { NavbarBrandLink } from "../components/NavbarBrandLink";
 import { canAccessTradingNav } from "../utils/tradingAccess";
@@ -178,6 +178,10 @@ export default function Mint() {
             : null;
       if (mintPriceWei == null) {
         setError("Mint price could not be read from the NFT contract. Check your wallet network and try again.");
+        setLoading(false);
+        return;
+      }
+      if (tryOpenInsufficientUsdtModal(usdtBalanceRaw, mintPriceWei, { setInsufficientBalanceType, refetchUsdt: refetchUsdtBalance })) {
         setLoading(false);
         return;
       }
