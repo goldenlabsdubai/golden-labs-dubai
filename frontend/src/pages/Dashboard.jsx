@@ -115,8 +115,14 @@ export default function Dashboard() {
       : referralStats?.referralWithdrawChunkWei != null
         ? BigInt(referralStats.referralWithdrawChunkWei)
         : 10n * 10n ** 6n;
-  const claimableReferralWei = BigInt(referralStats?.claimableOnChain ?? "0");
-  const canWithdrawReferral = referralStats?.claimableOnChain != null && claimableReferralWei >= referralWithdrawChunkWei;
+  const claimableOnChainRaw = referralStats?.claimableOnChain;
+  const claimableReferralWei =
+    claimableOnChainRaw != null && String(claimableOnChainRaw).trim() !== ""
+      ? BigInt(String(claimableOnChainRaw).replace(/\..*$/, ""))
+      : 0n;
+  const claimableOnChainKnown = claimableOnChainRaw != null && String(claimableOnChainRaw).trim() !== "";
+  const canWithdrawReferral =
+    claimableOnChainKnown && claimableReferralWei >= referralWithdrawChunkWei;
   const referralWithdrawShortfallWei = canWithdrawReferral ? 0n : referralWithdrawChunkWei > claimableReferralWei ? referralWithdrawChunkWei - claimableReferralWei : 0n;
   const { data: usdtBalanceRaw, refetch: refetchUsdtBalance } = useReadContract({
     address: usdtAddressNormalized || undefined,
@@ -141,7 +147,7 @@ export default function Dashboard() {
     }
   })();
   const totalReferralIncomeUsdtFormatted = (() => {
-    const w = user?.referralEarningsTotal;
+    const w = referralStats?.referralEarningsTotal ?? user?.referralEarningsTotal;
     if (w == null || w === "") return null;
     try {
       const intStr = String(w).replace(/\..*$/, "") || "0";
@@ -381,8 +387,8 @@ export default function Dashboard() {
     }
     if (!canWithdrawReferral) {
       setError(
-        referralStats?.claimableOnChain == null
-          ? "Loading claimable balance…"
+        !claimableOnChainKnown
+          ? "Claimable balance could not be loaded. Refresh the page or try again in a moment."
           : `You need at least ${(Number(referralWithdrawChunkWei) / 1e6).toFixed(2)} USDT claimable to withdraw. Each transaction withdraws exactly that amount.`,
       );
       return;
@@ -962,7 +968,14 @@ export default function Dashboard() {
                       </div>
                       <div className="profile-hub__referral-stat">
                         <span className="profile-hub__referral-stat-label">Available to claim</span>
-                        <span className="profile-hub__referral-stat-value">${referralStats?.claimableOnChain != null ? formatUsdt(referralStats.claimableOnChain) : "0.00"} USDT <img src="/USDT_BEP20.png" alt="" className="usdt-logo-inline" aria-hidden="true" /></span>
+                        <span className="profile-hub__referral-stat-value">
+                          {referralStats == null
+                            ? "…"
+                            : !claimableOnChainKnown
+                              ? "Could not load (RPC)"
+                              : `$${formatUsdt(referralStats.claimableOnChain)} USDT`}{" "}
+                          <img src="/USDT_BEP20.png" alt="" className="usdt-logo-inline" aria-hidden="true" />
+                        </span>
                       </div>
                       <div className="profile-hub__referral-stat">
                         <span className="profile-hub__referral-stat-label">Total referrals</span>
@@ -1009,9 +1022,11 @@ export default function Dashboard() {
                           ? "Resubscribe to withdraw your referral earnings."
                           : address && user?.wallet && (address || "").toLowerCase() !== (user.wallet || "").toLowerCase()
                             ? "Connect the wallet that has the earnings to withdraw."
-                            : !canWithdrawReferral && referralStats?.claimableOnChain != null && claimableReferralWei > 0n
+                            : referralStats != null && !claimableOnChainKnown
+                              ? "On-chain claimable balance failed to load (RPC). Refresh the page; earnings above come from your indexed history."
+                            : !canWithdrawReferral && claimableOnChainKnown && claimableReferralWei > 0n
                               ? `Withdraw unlocks at ${(Number(referralWithdrawChunkWei) / 1e6).toFixed(2)} USDT claimable. You need ${(Number(referralWithdrawShortfallWei) / 1e6).toFixed(2)} USDT more. Each successful withdrawal sends exactly ${(Number(referralWithdrawChunkWei) / 1e6).toFixed(2)} USDT (not more, not less).`
-                              : !canWithdrawReferral && referralStats?.claimableOnChain != null && claimableReferralWei === 0n
+                              : !canWithdrawReferral && claimableOnChainKnown && claimableReferralWei === 0n
                                 ? "Referral rewards accrue when your qualified referrals trade. Once claimable balance reaches the minimum, you can withdraw that fixed amount per transaction."
                                 : `Each withdrawal sends exactly ${(Number(referralWithdrawChunkWei) / 1e6).toFixed(2)} USDT from your claimable balance. Repeat while your balance stays at or above that amount. Requires active subscription.`}
                       </p>
