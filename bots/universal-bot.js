@@ -842,6 +842,7 @@ function txOverrides(kind = "default") {
       return null;
     }
   }
+  let cachedRunningBotIds = null;
   let cachedRunningBotIdsAt = 0;
   const RUNNING_BOT_IDS_TTL_MS = Math.min(15_000, Math.max(2500, CONTROL_REFRESH_MS));
 
