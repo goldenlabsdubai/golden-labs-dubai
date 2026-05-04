@@ -47,9 +47,9 @@ function getSupportReply(userText) {
 
   // Fees – before marketplace (fees, creator fee, creator)
   if (t.includes("creator") && (t.includes("fee") || t.includes("cut") || t.length < 20))
-    return "A 1% creator fee applies on each marketplace sale — the rest goes to the seller, referral payouts when applicable, and the reserve. List and buy at a fixed 30 USDT per NFT.";
+    return "A 1% creator fee applies on each marketplace sale — the rest goes to the seller, referral payouts when applicable, and the reserve. List and buy at the fixed price shown on the Marketplace.";
   if (t.includes("fee") || t.includes("fees"))
-    return "Subscribe ~10 USDT, Mint 10 USDT. Marketplace: list and buy at 30 USDT; a small creator fee applies on sales. Referral earnings go to referrers. Gas is paid in BNB.";
+    return "Subscribe ~10 USDT, Mint 10 USDT. Marketplace list/buy uses the fixed price shown on the Marketplace; a small creator fee applies on sales. Referral earnings go to referrers. Gas is paid in BNB.";
 
   // Owner / who runs / team
   if (t.includes("owner") || t.includes("who run") || t.includes("who owns") || t.includes("who made") || t.includes("who create"))
@@ -57,7 +57,7 @@ function getSupportReply(userText) {
 
   // Profits / earnings
   if (t.includes("profit") || (t.includes("earn") && !t.includes("referral")))
-    return "You can profit by selling your NFT on the marketplace (30 USDT per sale) and from referrals — up to 10 levels when your network trades (fixed 2 USDT level-income pool per trade split by level rules). Withdraw from Dashboard → Referral earnings.";
+    return "You can profit by selling your NFT on the marketplace (at the current fixed list price) and from referrals — up to 10 levels when your network trades (fixed 2 USDT level-income pool per trade split by level rules). Withdraw from Dashboard → Referral earnings.";
 
   // Loss / risk
   if (t.includes("loss") || t.includes("lose") || t.includes("risk"))
@@ -89,7 +89,7 @@ function getSupportReply(userText) {
 
   // Marketplace
   if (t.includes("marketplace") || t.includes("buy") || t.includes("list") || t.includes("sell"))
-    return "Head to the Marketplace to browse and buy NFTs — each sale is 30 USDT. To list yours: approve the marketplace for your NFT, then list at the fixed price (30 USDT).";
+    return "Head to the Marketplace to browse and buy NFTs — each sale uses the fixed list/buy price shown there. To list yours: approve the marketplace for your NFT, then list at that fixed price.";
 
   if (t.includes("delist") || t.includes("cancel listing"))
     return "You can cancel your listing anytime from the Marketplace or Dashboard. Your NFT will go back to your wallet straight away.";
@@ -102,11 +102,11 @@ function getSupportReply(userText) {
 
   // Listing not selling / why not selling (no bot mention)
   if (t.includes("why not sell") || t.includes("not selling") || t.includes("listing not sold") || t.includes("cant sell"))
-    return "List and buy at 30 USDT. Listings can take time to sell depending on demand. Make sure your NFT is approved for the marketplace.";
+    return "List and buy at the fixed price shown on the Marketplace. Listings can take time to sell depending on demand. Make sure your NFT is approved for the marketplace.";
 
   // Pricing
   if (t.includes("price") || t.includes("cost") || t.includes("how much") || t.includes("usdt"))
-    return "Quick rundown: Subscribe ~10 USDT, Mint 10 USDT, Marketplace list/buy is 30 USDT. You'll also need a bit of BNB for gas.";
+    return "Quick rundown: Subscribe ~10 USDT, Mint 10 USDT, Marketplace list/buy is a fixed price (see Marketplace). You'll also need a bit of BNB for gas.";
 
   if (t.includes("bnb") || t.includes("gas"))
     return "We're on BSC Mainnet — gas is paid in BNB. Marketplace payments are in USDT, not BNB.";
@@ -138,7 +138,7 @@ function getSupportReply(userText) {
     if (/^(owner|creator|team)$/i.test(short))
       return "For team or official inquiries, reach out through our official channels. I'm here to help with platform use. What do you need?";
     if (/^(fee|fees)$/i.test(short))
-      return "Subscribe ~10 USDT, Mint 10 USDT. Marketplace: 30 USDT list/buy; a small creator fee on sales. Gas in BNB.";
+      return "Subscribe ~10 USDT, Mint 10 USDT. Marketplace list/buy is a fixed price (see Marketplace); a small creator fee on sales. Gas in BNB.";
     if (/^(profit|profits)$/i.test(short))
       return "Sell your NFT on the marketplace or earn from referrals when people you refer subscribe, mint, or buy. Withdraw from Dashboard.";
   }

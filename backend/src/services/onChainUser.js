@@ -43,24 +43,23 @@ const SUBSCRIPTION_PRICE_ABI = ["function subscriptionPrice() view returns (uint
 
 /**
  * Reads SubscriptionContract.subscriptionPrice() (USDT, 6 decimals).
+ * Throws if address missing, RPC fails, or price is zero — no placeholder values.
  */
 export async function getSubscriptionPriceFromChain() {
   const subAddr = getSubscriptionAddress();
   if (!subAddr) {
-    return { priceWei: null, price: "", priceFormatted: "", subscriptionKnown: false };
+    throw new Error("SUBSCRIPTION_CONTRACT_ADDRESS is not configured");
   }
-  try {
-    const provider = getProvider();
-    const sub = new ethers.Contract(subAddr, SUBSCRIPTION_PRICE_ABI, provider);
-    const wei = await sub.subscriptionPrice();
-    const priceWei = wei.toString();
-    const price = String(Number(ethers.formatUnits(wei, 6)));
-    const priceFormatted = `$${price} USDT`;
-    return { priceWei, price, priceFormatted, subscriptionKnown: true };
-  } catch (e) {
-    console.warn("onChainUser getSubscriptionPriceFromChain:", e?.message || e);
-    return { priceWei: null, price: "", priceFormatted: "", subscriptionKnown: false };
+  const provider = getProvider();
+  const sub = new ethers.Contract(subAddr, SUBSCRIPTION_PRICE_ABI, provider);
+  const wei = await sub.subscriptionPrice();
+  const priceWei = wei.toString();
+  if (priceWei === "0") {
+    throw new Error("subscriptionPrice is zero on-chain");
   }
+  const price = String(Number(ethers.formatUnits(wei, 6)));
+  const priceFormatted = `$${price} USDT`;
+  return { priceWei, price, priceFormatted, subscriptionKnown: true };
 }
 
 /**

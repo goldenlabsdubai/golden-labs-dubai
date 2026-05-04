@@ -9,20 +9,18 @@ router.get("/config", async (_, res) => {
     const contractAddress = (process.env.SUBSCRIPTION_CONTRACT_ADDRESS || "").trim();
     const fromChain = await getSubscriptionPriceFromChain();
     res.json({
-      price: fromChain.price || "",
-      priceFormatted: fromChain.priceFormatted || "",
-      priceWei: fromChain.priceWei || "",
+      price: fromChain.price,
+      priceFormatted: fromChain.priceFormatted,
+      priceWei: fromChain.priceWei,
       contractAddress,
-      subscriptionKnown: fromChain.subscriptionKnown,
+      subscriptionKnown: true,
     });
   } catch (e) {
-    res.json({
-      price: "",
-      priceFormatted: "",
-      priceWei: "",
+    console.warn("subscription /config:", e?.message || e);
+    res.status(503).json({
+      error: e?.message || "Failed to read subscription price from chain",
       contractAddress: (process.env.SUBSCRIPTION_CONTRACT_ADDRESS || "").trim(),
       subscriptionKnown: false,
-      error: e.message,
     });
   }
 });
@@ -46,8 +44,13 @@ router.post("/confirm", async (req, res) => {
     }
     await User.updateUser(user.id, { state: "SUBSCRIBED", lastActivity: new Date() });
     const txHash = (req.body && req.body.txHash) ? String(req.body.txHash).trim() : null;
-    const subPrice = await getSubscriptionPriceFromChain();
-    const priceWeiLog = subPrice.priceWei || "0";
+    let priceWeiLog;
+    try {
+      const subPrice = await getSubscriptionPriceFromChain();
+      priceWeiLog = subPrice.priceWei;
+    } catch (e) {
+      return res.status(503).json({ error: e?.message || "Could not read subscription price from chain for activity log" });
+    }
     await User.logActivity(wallet, "subscription", { price: priceWeiLog, ...(txHash ? { txHash } : {}) });
     const updated = await User.getUser(req);
     res.json({

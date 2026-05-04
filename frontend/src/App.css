@@ -3576,8 +3576,12 @@ a.profile-hub__refresh {
 }
 
 .ref-tree__generation.ref-tree__tier-section {
-  align-items: start;
-  border-bottom: 1px solid rgba(212, 175, 55, 0.07);
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0;
+  border-bottom: none;
+  padding-bottom: 0.35rem;
 }
 
 .ref-tree__generation--on .ref-tree__dot {
@@ -3589,6 +3593,45 @@ a.profile-hub__refresh {
   display: flex;
   flex-direction: column;
   gap: 0.35rem;
+  width: 100%;
+}
+
+.ref-tree__tier-head {
+  width: 100%;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0;
+  padding: 0.15rem 0 0.35rem;
+  margin-bottom: 0.25rem;
+  position: relative;
+  z-index: 1;
+  background: transparent;
+  border-bottom: none;
+  box-shadow: none;
+}
+
+/* Glass panel: left tier label + stats; translucent so chart lines stay visible behind */
+.ref-tree__tier-head-fill {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.35rem;
+  width: fit-content;
+  max-width: min(100%, 22rem);
+  padding: 0.45rem 0.65rem;
+  margin-bottom: 0.1rem;
+  position: relative;
+  z-index: 2;
+  border-radius: 12px;
+  background: rgba(10, 10, 14, 0.42);
+  border: 1px solid rgba(212, 175, 55, 0.2);
+  backdrop-filter: blur(14px) saturate(150%);
+  -webkit-backdrop-filter: blur(14px) saturate(150%);
+  box-shadow:
+    0 8px 28px rgba(0, 0, 0, 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.07);
 }
 
 .ref-tree__gen-connector {
@@ -3855,6 +3898,35 @@ a.profile-hub__refresh {
   font-weight: 600;
   color: var(--muted);
   letter-spacing: 0.06em;
+}
+
+.ref-tree__level-tag--header {
+  writing-mode: horizontal-tb;
+  text-orientation: mixed;
+  transform: none;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: flex-start;
+  align-self: flex-start;
+  gap: 0.45rem;
+  padding: 0;
+}
+
+.ref-tree__level-tag--header .ref-tree__level-tag-rate::before {
+  content: "·";
+  margin-right: 0.45rem;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.ref-tree__gen-meta--in-head {
+  padding-bottom: 0;
+  align-self: flex-start;
+}
+
+.ref-tree__gen-meta--in-head::after {
+  display: none;
 }
 
 .ref-tree__gen-meta {

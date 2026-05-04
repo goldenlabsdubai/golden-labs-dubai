@@ -25,9 +25,37 @@ function sortByListedTimeOldestFirst(a, b) {
   return String(a.seller || "").localeCompare(String(b.seller || ""));
 }
 
-/** Fixed list/buy price — must match MarketplaceAndReservePoolContract (30 USDT, 6 decimals). */
-const MARKETPLACE_LIST_PRICE_USDT = 30;
-const MARKETPLACE_LIST_PRICE_WEI = "30000000";
+function formatListPriceUsdtFromWei6(weiStr) {
+  const s = String(weiStr ?? "0").trim();
+  if (!/^\d+$/.test(s)) return "0";
+  const bi = BigInt(s);
+  const whole = bi / 1000000n;
+  const frac = bi % 1000000n;
+  if (frac === 0n) return whole.toString();
+  const fracPart = String(frac).padStart(6, "0").replace(/0+$/, "");
+  return `${whole}.${fracPart}`;
+}
+
+let cachedMarketplaceListPrice = null;
+let cachedMarketplaceListPriceAt = 0;
+const LIST_PRICE_CACHE_MS = 15000;
+
+async function getConfiguredMarketplaceListPrice(marketContract) {
+  const now = Date.now();
+  if (cachedMarketplaceListPrice && now - cachedMarketplaceListPriceAt < LIST_PRICE_CACHE_MS) {
+    return cachedMarketplaceListPrice;
+  }
+  const wei = await marketContract.listPrice();
+  if (wei == null) throw new Error("marketplace listPrice returned null");
+  const weiStr = String(wei);
+  if (weiStr === "0") throw new Error("marketplace listPrice is zero");
+  cachedMarketplaceListPrice = {
+    listPriceWei: weiStr,
+    listPriceUsdt: formatListPriceUsdtFromWei6(weiStr),
+  };
+  cachedMarketplaceListPriceAt = now;
+  return cachedMarketplaceListPrice;
+}
 
 const getProvider = () => {
   const rpc = process.env.RPC_URL || "http://127.0.0.1:8545";
@@ -38,6 +66,7 @@ const MARKETPLACE_ABI = [
   "event Listed(uint256 indexed tokenId, address seller, uint256 price)",
   "event Sold(uint256 indexed tokenId, address seller, address buyer, uint256 price)",
   "event ListingCancelled(uint256 indexed tokenId)",
+  "function listPrice() view returns (uint256)",
   "function listings(uint256) view returns (address, uint256, uint256, bool)",
   "function listingListedAt(uint256) view returns (uint64)",
   "function saleCount(uint256) view returns (uint256)",
@@ -500,6 +529,7 @@ router.get("/my-assets", async (req, res) => {
 
     const nftContract = new ethers.Contract(nftAddr, NFT_VIEW_ABI, provider);
     const marketContract = new ethers.Contract(marketAddr, MARKETPLACE_ABI, provider);
+    const { listPriceWei, listPriceUsdt } = await getConfiguredMarketplaceListPrice(marketContract);
 
     const BATCH = 25;
     const assets = [];
@@ -550,8 +580,6 @@ router.get("/my-assets", async (req, res) => {
             return null;
           }
           const uri = ensureMetadataUri(tokenURI, tokenId);
-          const listPriceUsdt = MARKETPLACE_LIST_PRICE_USDT;
-          const listPriceWei = MARKETPLACE_LIST_PRICE_WEI;
           return {
             tokenId: String(tokenId),
             saleCount: saleCount == null ? undefined : saleCount,
@@ -587,6 +615,7 @@ router.get("/my-nfts", async (req, res) => {
     const provider = getProvider();
     const nftContract = new ethers.Contract(nftAddr, NFT_VIEW_ABI, provider);
     const marketContract = new ethers.Contract(marketAddr, MARKETPLACE_ABI, provider);
+    const { listPriceWei, listPriceUsdt } = await getConfiguredMarketplaceListPrice(marketContract);
     let totalMinted = 0;
     try { totalMinted = Number(await nftContract.totalMinted()); } catch (_) { return res.json({ nfts: [] }); }
     if (!Number.isFinite(totalMinted) || totalMinted === 0) return res.json({ nfts: [] });
@@ -623,8 +652,6 @@ router.get("/my-nfts", async (req, res) => {
             const isListedByMe = listing.active && listing.seller === wallet;
             if (!inWallet && !isListedByMe) return null;
             const uri = ensureMetadataUri(tokenURI, tokenId);
-            const listPriceUsdt = MARKETPLACE_LIST_PRICE_USDT;
-            const listPriceWei = MARKETPLACE_LIST_PRICE_WEI;
             return {
               tokenId: String(tokenId),
               saleCount: saleCount == null ? undefined : saleCount,

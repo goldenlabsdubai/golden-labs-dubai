@@ -37,8 +37,6 @@ import { ethers, Network } from "ethers";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import { LIST_PRICE_WEI } from "./config.js";
-
 /** Same folder as universal-bot.js — works under PM2 when cwd is not the bots directory. */
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -190,15 +188,6 @@ function resolveBotId() {
   return String(id);
 }
 
-function pendingPriceMatchesRecord(meta) {
-  try {
-    if (!meta?.priceWei) return true;
-    return BigInt(String(meta.priceWei)) === LIST_PRICE_WEI;
-  } catch {
-    return false;
-  }
-}
-
 const marketplaceAbi = [
   "function listings(uint256) view returns (address seller, uint256 tokenId, uint256 price, bool active)",
   "function listingListedAt(uint256) view returns (uint64)",
@@ -312,6 +301,36 @@ async function main() {
   const marketplace = new ethers.Contract(MARKETPLACE_ADDR, marketplaceAbi, wallet);
   /** Read-only contract for view calls (no wallet sender on eth_call). */
   const marketplaceRead = new ethers.Contract(MARKETPLACE_ADDR, marketplaceAbi, provider);
+  let listPriceWeiBn;
+  try {
+    let lastE;
+    for (let attempt = 0; attempt <= 6; attempt++) {
+      try {
+        const lp = await marketplaceRead.listPrice();
+        listPriceWeiBn = BigInt(lp.toString());
+        if (listPriceWeiBn === 0n) throw new Error("marketplace listPrice is zero");
+        break;
+      } catch (e) {
+        lastE = e;
+        if (attempt === 6) throw lastE;
+        await new Promise((r) => setTimeout(r, Math.min(15_000, 500 * 2 ** attempt)));
+      }
+    }
+  } catch (e) {
+    console.error(`Bot ${botId}: cannot read marketplace listPrice — ${summarizeEthersError(e)}`);
+    process.exit(1);
+  }
+  console.log(`Bot ${botId}: marketplace listPrice=${listPriceWeiBn.toString()} wei (from chain)`);
+
+  function pendingPriceMatchesRecord(meta) {
+    try {
+      if (!meta?.priceWei) return true;
+      return BigInt(String(meta.priceWei)) === listPriceWeiBn;
+    } catch {
+      return false;
+    }
+  }
+
   const nft = new ethers.Contract(NFT_ADDR, nftAbi, wallet);
   const usdt = new ethers.Contract(USDT_ADDR, usdtAbi, wallet);
   let queue = Promise.resolve();
@@ -626,7 +645,7 @@ function txOverrides(kind = "default") {
   async function simulateListCall(tokenId) {
     if (!BOT_STATIC_SIMULATE || BOT_SKIP_LIST_STATIC_SIMULATE) return true;
     try {
-      await marketplace.list.staticCall(tokenId, LIST_PRICE_WEI);
+      await marketplace.list.staticCall(tokenId, listPriceWeiBn);
       return true;
     } catch (e) {
       const s = summarizeEthersError(e);
@@ -808,7 +827,7 @@ function txOverrides(kind = "default") {
   function upsertPendingForUserListing(tokenIdStr, sellerLc, priceBn, listedAtMs) {
     if (!USE_EVENT_PENDING_QUEUE || !runsChainPoll) return;
     if (!sellerLc || sellerLc === marketLc || knownBotWallets.has(sellerLc)) return;
-    if (priceBn !== LIST_PRICE_WEI) return;
+    if (priceBn !== listPriceWeiBn) return;
     pendingUserListings[tokenIdStr] = {
       seller: sellerLc,
       priceWei: priceBn.toString(),
@@ -916,7 +935,7 @@ function txOverrides(kind = "default") {
           continue;
         }
         const price = l?.price ?? l?.[2] ?? 0n;
-        if (BigInt(price.toString()) !== LIST_PRICE_WEI) {
+        if (BigInt(price.toString()) !== listPriceWeiBn) {
           prunePendingKey(tidStr);
           continue;
         }
@@ -960,7 +979,7 @@ function txOverrides(kind = "default") {
             if (marketLc && seller === marketLc) return null;
             if (knownBotWallets.has(seller)) return null;
             const price = l?.price ?? l?.[2] ?? 0n;
-            if (BigInt(price.toString()) !== LIST_PRICE_WEI) return null;
+            if (BigInt(price.toString()) !== listPriceWeiBn) return null;
             let listedAtMs = null;
             try {
               const sec = await marketplace.listingListedAt(tokenId);
@@ -1174,7 +1193,7 @@ function txOverrides(kind = "default") {
         } catch {
           continue;
         }
-        if (priceWei !== LIST_PRICE_WEI) continue;
+        if (priceWei !== listPriceWeiBn) continue;
 
         const prev = pendingUserListings[tidStr] || {};
         let listedAtMs = Number(it?.listedAtMs);
@@ -1246,7 +1265,7 @@ function txOverrides(kind = "default") {
         } catch {
           continue;
         }
-        if (priceWei !== LIST_PRICE_WEI) continue;
+        if (priceWei !== listPriceWeiBn) continue;
 
         const prev = pendingUserListings[tidStr] || {};
         let listedAtMs = Number(it?.listedAt ?? it?.listedAtMs);
@@ -1390,7 +1409,7 @@ function txOverrides(kind = "default") {
     if (sellerAddr === self) return; // never buy own listing
     // Buyback targets member listings only — not dynamic mint (seller = marketplace contract).
     if (marketLc && sellerAddr === marketLc) return;
-    if (priceBn !== LIST_PRICE_WEI) return;
+    if (priceBn !== listPriceWeiBn) return;
 
     const eligible = await ensureBotTraderEligibility();
     if (!eligible) return; // skip without logging every time; already logged at startup
@@ -1525,7 +1544,7 @@ function txOverrides(kind = "default") {
             }
             continue;
           }
-          const listTx = await marketplace.list(tokenId, LIST_PRICE_WEI, txOverrides("list"));
+          const listTx = await marketplace.list(tokenId, listPriceWeiBn, txOverrides("list"));
           await listTx.wait();
           relistOk = true;
           console.log(`Bot ${botId}: relisted token ${tokenIdStr} at $30 (attempt ${attempt})`);
@@ -1597,7 +1616,7 @@ function txOverrides(kind = "default") {
       }
       if (!(await simulateListCall(tokenId))) return false;
 
-      const listTx = await marketplace.list(tokenId, LIST_PRICE_WEI, txOverrides("list"));
+      const listTx = await marketplace.list(tokenId, listPriceWeiBn, txOverrides("list"));
       await listTx.wait();
       console.log(`Bot ${botId}: relisted held token ${tokenIdStr} (${source})`);
       return true;
@@ -1783,9 +1802,9 @@ function txOverrides(kind = "default") {
   try {
     const onChainLp = await marketplaceRead.listPrice();
     const onChainBn = BigInt(onChainLp.toString());
-    if (onChainBn !== LIST_PRICE_WEI) {
+    if (onChainBn !== listPriceWeiBn) {
       console.warn(
-        `Bot ${botId}: marketplace listPrice=${onChainBn.toString()} bot expects LIST_PRICE_WEI=${LIST_PRICE_WEI.toString()} (config.js); list() reverts with "Invalid price" if mismatched`
+        `Bot ${botId}: marketplace listPrice changed on-chain (${onChainBn.toString()}) vs startup (${listPriceWeiBn.toString()}); restart bot after admin updates listPrice`
       );
     }
   } catch (e) {

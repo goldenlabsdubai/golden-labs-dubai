@@ -45,6 +45,7 @@ export default function Subscription() {
     priceWei: "",
     contractAddress: subContractAddressNormalized || import.meta.env.VITE_SUBSCRIPTION_CONTRACT || "",
   });
+  const [configLoadError, setConfigLoadError] = useState("");
   const [addressMenuOpen, setAddressMenuOpen] = useState(false);
   const publicClient = usePublicClient();
   const { writeContractAsync } = useWriteContract();
@@ -101,8 +102,14 @@ export default function Subscription() {
 
   useEffect(() => {
     const loadConfig = async () => {
+      if (!token) return;
+      setConfigLoadError("");
       const r = await fetch(`${API}/subscription/config`, { headers: { Authorization: `Bearer ${token}` } });
       const c = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        setConfigLoadError(typeof c.error === "string" ? c.error : `Subscription config unavailable (${r.status})`);
+        return;
+      }
       const addr = c.contractAddress || subContractAddressNormalized || import.meta.env.VITE_SUBSCRIPTION_CONTRACT || "";
       setConfig((prev) => ({
         ...prev,
@@ -303,6 +310,7 @@ export default function Subscription() {
             <span className="subscription-modern__two-steps-item">1) Approve USDT</span>
             <span className="subscription-modern__two-steps-item">2) Pay (Subscribe)</span>
           </div>
+          {configLoadError && <p className="profile-modern__error subscription-modern__error">{configLoadError}</p>}
           {error && <p className="profile-modern__error subscription-modern__error">{error}</p>}
           <button
             type="button"

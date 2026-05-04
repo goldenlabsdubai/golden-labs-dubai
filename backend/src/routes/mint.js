@@ -13,48 +13,59 @@ router.get("/config", async (_, res) => {
   const contractAddress = process.env.NFT_CONTRACT_ADDRESS || "";
   const rpcUrl = process.env.RPC_URL;
 
-  let totalSupply = null;
-  let maxSupply = null;
-  let mintPriceWei = "30000000";
-  if (contractAddress && rpcUrl) {
-    try {
-      const provider = new ethers.JsonRpcProvider(rpcUrl);
-      const nft = new ethers.Contract(
-        contractAddress,
-        [
-          "function totalMinted() view returns (uint256)",
-          "function MAX_SUPPLY() view returns (uint256)",
-          "function mintPrice() view returns (uint256)",
-        ],
-        provider
-      );
-      const [totalMintedRaw, maxSupplyRaw, mintPriceRaw] = await Promise.all([
-        nft.totalMinted(),
-        nft.MAX_SUPPLY(),
-        nft.mintPrice(),
-      ]);
-      totalSupply = Number(totalMintedRaw);
-      maxSupply = Number(maxSupplyRaw);
-      mintPriceWei = mintPriceRaw.toString();
-    } catch (_) {
-      // leave null if chain unreachable or contract not deployed
-    }
+  if (!contractAddress || !rpcUrl) {
+    return res.status(503).json({
+      error: "NFT_CONTRACT_ADDRESS and RPC_URL are required to read mint price from chain",
+      mintPriceKnown: false,
+    });
   }
-  const mintPriceUsdt = (Number(mintPriceWei) / 1e6).toFixed(2);
 
-  res.json({
-    price: mintPriceUsdt,
-    priceWei: mintPriceWei,
-    priceFormatted: `$${mintPriceUsdt} USDT`,
-    rule: "1 Wallet = 1 NFT (lifetime)",
-    contractAddress,
-    metadataUri: metadataUri || undefined,
-    metadataBasePath: metadataBasePath || undefined,
-    nftName,
-    nftSymbol,
-    totalSupply,
-    maxSupply,
-  });
+  try {
+    const provider = new ethers.JsonRpcProvider(rpcUrl);
+    const nft = new ethers.Contract(
+      contractAddress,
+      [
+        "function totalMinted() view returns (uint256)",
+        "function MAX_SUPPLY() view returns (uint256)",
+        "function mintPrice() view returns (uint256)",
+      ],
+      provider
+    );
+    const [totalMintedRaw, maxSupplyRaw, mintPriceRaw] = await Promise.all([
+      nft.totalMinted(),
+      nft.MAX_SUPPLY(),
+      nft.mintPrice(),
+    ]);
+    const totalSupply = Number(totalMintedRaw);
+    const maxSupply = Number(maxSupplyRaw);
+    const mintPriceWei = mintPriceRaw.toString();
+    if (mintPriceWei === "0") {
+      return res.status(503).json({ error: "NFT mintPrice is zero on-chain", mintPriceKnown: false });
+    }
+    const mintPriceUsdt = (Number(mintPriceWei) / 1e6).toFixed(6).replace(/\.?0+$/, "");
+
+    res.json({
+      price: mintPriceUsdt,
+      priceWei: mintPriceWei,
+      priceFormatted: `$${mintPriceUsdt} USDT`,
+      mintPriceKnown: true,
+      rule: "1 Wallet = 1 NFT (lifetime)",
+      contractAddress,
+      metadataUri: metadataUri || undefined,
+      metadataBasePath: metadataBasePath || undefined,
+      nftName,
+      nftSymbol,
+      totalSupply,
+      maxSupply,
+    });
+  } catch (e) {
+    console.warn("mint /config:", e?.message || e);
+    res.status(503).json({
+      error: e?.message || "Failed to read mint price from chain",
+      mintPriceKnown: false,
+      contractAddress,
+    });
+  }
 });
 
 router.post("/confirm", async (req, res) => {
@@ -70,15 +81,21 @@ router.post("/confirm", async (req, res) => {
     const { tokenId } = req.body || {};
     if (tokenId != null && tokenId !== "") await User.addOwnedTokenId(wallet, String(tokenId));
     const txHash = (req.body && req.body.txHash) ? String(req.body.txHash).trim() : null;
-    let mintPriceWei = "30000000";
     const contractAddress = process.env.NFT_CONTRACT_ADDRESS || "";
     const rpcUrl = process.env.RPC_URL || "";
-    if (contractAddress && rpcUrl) {
-      try {
-        const provider = new ethers.JsonRpcProvider(rpcUrl);
-        const nft = new ethers.Contract(contractAddress, ["function mintPrice() view returns (uint256)"], provider);
-        mintPriceWei = (await nft.mintPrice()).toString();
-      } catch (_) {}
+    if (!contractAddress || !rpcUrl) {
+      return res.status(503).json({ error: "NFT_CONTRACT_ADDRESS and RPC_URL required to log mint price" });
+    }
+    let mintPriceWei;
+    try {
+      const provider = new ethers.JsonRpcProvider(rpcUrl);
+      const nft = new ethers.Contract(contractAddress, ["function mintPrice() view returns (uint256)"], provider);
+      mintPriceWei = (await nft.mintPrice()).toString();
+      if (mintPriceWei === "0") {
+        return res.status(503).json({ error: "NFT mintPrice is zero on-chain" });
+      }
+    } catch (e) {
+      return res.status(503).json({ error: e?.message || "Failed to read mintPrice from chain" });
     }
     await User.logActivity(wallet, "mint", { tokenId: tokenId != null ? String(tokenId) : null, price: mintPriceWei, ...(txHash ? { txHash } : {}) });
     await User.updateUser(user.id, { state: "MINTED", lastActivity: new Date() });

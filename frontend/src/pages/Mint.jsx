@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { AppRouteLink } from "../components/AppRouteLink";
 import { assignAppPath } from "../utils/appNavigation";
 import { useAccount, useBalance, useDisconnect, useReadContract, useWriteContract, usePublicClient } from "wagmi";
-import { formatEther, formatUnits, parseUnits } from "viem";
+import { formatEther, formatUnits } from "viem";
 import { useAuth } from "../hooks/useAuth";
 import { useWalletConnect } from "../hooks/useWalletConnect";
 import { API, ASSET_IMAGE, EXPLORER_BY_CHAIN } from "../config";
@@ -33,8 +33,9 @@ export default function Mint() {
   const [error, setError] = useState("");
   const [insufficientBalanceType, setInsufficientBalanceType] = useState(null);
   const [config, setConfig] = useState({
-    priceFormatted: "30 USDT",
-    priceWei: "30000000",
+    priceFormatted: "",
+    priceWei: "",
+    price: "",
     rule: "1 Wallet = 1 Asset (lifetime)",
     contractAddress: "",
     metadataUri: "",
@@ -45,6 +46,7 @@ export default function Mint() {
     maxSupply: null,
   });
   const [addressMenuOpen, setAddressMenuOpen] = useState(false);
+  const [configLoadError, setConfigLoadError] = useState("");
   const [portalReady, setPortalReady] = useState(false);
   const menuRef = useRef(null);
   const publicClient = usePublicClient();
@@ -83,10 +85,28 @@ export default function Mint() {
 
   useEffect(() => setPortalReady(true), []);
   useEffect(() => {
+    if (!token) {
+      setConfigLoadError("");
+      return;
+    }
+    let cancelled = false;
+    setConfigLoadError("");
     fetch(`${API}/mint/config`, { headers: { Authorization: `Bearer ${token}` } })
-      .then((r) => r.json())
-      .then((c) => setConfig((prev) => ({ ...prev, ...c })))
-      .catch(() => {});
+      .then(async (r) => {
+        const c = await r.json().catch(() => ({}));
+        if (cancelled) return;
+        if (!r.ok) {
+          setConfigLoadError(typeof c.error === "string" ? c.error : `Mint config unavailable (${r.status})`);
+          return;
+        }
+        setConfig((prev) => ({ ...prev, ...c }));
+      })
+      .catch(() => {
+        if (!cancelled) setConfigLoadError("Could not load mint config from the API.");
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [token]);
 
   // Already minted → go to dashboard (don't stay on mint page)
@@ -105,7 +125,7 @@ export default function Mint() {
   const handleDisconnect = () => {
     setAddressMenuOpen(false);
     disconnectWallet();
-    navigate("/", { replace: true });
+    assignAppPath("/");
   };
   useEffect(() => {
     function handleClickOutside(e) {
@@ -153,9 +173,14 @@ export default function Mint() {
       const mintPriceWei =
         mintPriceOnChain != null
           ? BigInt(mintPriceOnChain)
-          : config?.priceWei != null
-            ? BigInt(config.priceWei)
-            : parseUnits("30", 6);
+          : config?.priceWei != null && String(config.priceWei) !== ""
+            ? BigInt(String(config.priceWei))
+            : null;
+      if (mintPriceWei == null) {
+        setError("Mint price could not be read from the NFT contract. Check your wallet network and try again.");
+        setLoading(false);
+        return;
+      }
       const hashApprove = await writeContractAsync({
         address: usdtAddressNormalized,
         abi: USDT_ABI,
@@ -202,7 +227,16 @@ export default function Mint() {
     }
   };
 
-  const displayPrice = (config.priceFormatted || "30 USDT").replace(/^\$+\s*/, "").trim() || "30 USDT";
+  const displayPrice =
+    mintPriceOnChain != null
+      ? `${Number(formatUnits(mintPriceOnChain, 6))} USDT`
+      : config.price != null && String(config.price) !== "" && config.mintPriceKnown !== false
+        ? `${config.price} USDT`
+        : configLoadError
+          ? "—"
+          : "…";
+  const hasMintPrice =
+    mintPriceOnChain != null || (config?.priceWei != null && String(config.priceWei) !== "" && config.mintPriceKnown !== false);
   const supplyText = totalMinted != null && config.maxSupply != null
     ? `${Number(totalMinted).toLocaleString()} / ${Number(config.maxSupply).toLocaleString()}`
     : totalMinted != null
@@ -303,12 +337,13 @@ export default function Mint() {
             <span className="mint-modern__two-steps-item">1) Approve USDT</span>
             <span className="mint-modern__two-steps-item">2) Pay (Mint)</span>
           </div>
+          {configLoadError ? <p className="profile-modern__error mint-modern__error">{configLoadError}</p> : null}
           {error && <p className="profile-modern__error mint-modern__error">{error}</p>}
           <button
             type="button"
             className="profile-modern__submit mint-modern__submit"
             onClick={handleMint}
-            disabled={loading}
+            disabled={loading || !hasMintPrice}
           >
             {loading
               ? (mintStep === "approve" ? "1/2 Approving USDT…" : "2/2 Minting…")

@@ -284,9 +284,9 @@ function SyntheticMoreNode({ label, level, anchorId }) {
   );
 }
 
-function LevelTag({ n, rate }) {
+function LevelTag({ n, rate, header = false }) {
   return (
-    <div className="ref-tree__level-tag">
+    <div className={`ref-tree__level-tag${header ? " ref-tree__level-tag--header" : ""}`}>
       <span className="ref-tree__level-tag-main">Level {n}</span>
       <span className="ref-tree__level-tag-rate">${rate} / trade</span>
     </div>
@@ -466,6 +466,15 @@ export default function ReferralPyramidTree({ referralStats, user, referralNetwo
                 {/* Level 1 row — slots may include placeholders / +more */}
                 <section className="ref-tree__generation ref-tree__tier-section" style={{ "--ref-line": LEVEL_LINE[1] }}>
                   <div className="ref-tree__generation-main">
+                    <div className="ref-tree__tier-head">
+                      <div className="ref-tree__tier-head-fill">
+                        <LevelTag n={1} rate={tierUsd[1]} header />
+                        <p className="ref-tree__gen-meta ref-tree__gen-meta--in-head">
+                          <strong>{getCount(1)}</strong> in tier · <strong>{formatUsdt(getEarningsWei(1))}</strong> USDT
+                          <img src="/USDT_BEP20.png" alt="" className="ref-tree__usdt-ico" aria-hidden="true" />
+                        </p>
+                      </div>
+                    </div>
                     <div className="ref-tree__scroll">
                       <div className="ref-tree__tier-bundle" style={{ "--ref-line": LEVEL_LINE[1] }}>
                         <div className={`ref-tree__tier-nodes ${l1TierCountClass}`}>
@@ -494,17 +503,12 @@ export default function ReferralPyramidTree({ referralStats, user, referralNetwo
                         </div>
                       </div>
                     </div>
-                    <p className="ref-tree__gen-meta">
-                      <strong>{getCount(1)}</strong> in tier · <strong>{formatUsdt(getEarningsWei(1))}</strong> USDT
-                      <img src="/USDT_BEP20.png" alt="" className="ref-tree__usdt-ico" aria-hidden="true" />
-                    </p>
                     {showL2SyncHint && (
                       <p className="ref-tree__aggregate-note ref-tree__aggregate-note--inline">
                         Level 2 count is non-zero but no rows loaded under L1 — check referrer links in the database.
                       </p>
                     )}
                   </div>
-                  <LevelTag n={1} rate={tierUsd[1]} />
                 </section>
 
                 {/* Levels 2..N: only tiers that exist in the downline tree (rows from API) */}
@@ -514,6 +518,15 @@ export default function ReferralPyramidTree({ referralStats, user, referralNetwo
                     return (
                       <section key={depth} className="ref-tree__generation ref-tree__tier-section" style={{ "--ref-line": LEVEL_LINE[depth] }}>
                         <div className="ref-tree__generation-main">
+                          <div className="ref-tree__tier-head">
+                            <div className="ref-tree__tier-head-fill">
+                              <LevelTag n={depth} rate={tierUsd[depth]} header />
+                              <p className="ref-tree__gen-meta ref-tree__gen-meta--in-head">
+                                <strong>{getCount(depth)}</strong> in tier · <strong>{formatUsdt(getEarningsWei(depth))}</strong> USDT
+                                <img src="/USDT_BEP20.png" alt="" className="ref-tree__usdt-ico" aria-hidden="true" />
+                              </p>
+                            </div>
+                          </div>
                           <div className="ref-tree__scroll">
                             <div className="ref-tree__tier-bundle" style={{ "--ref-line": LEVEL_LINE[depth] }}>
                               <div className={`ref-tree__tier-nodes ref-tree__tier-nodes--count-${Math.min(Math.max(nodes.length, 1), 12)}`}>
@@ -525,20 +538,7 @@ export default function ReferralPyramidTree({ referralStats, user, referralNetwo
                               </div>
                             </div>
                           </div>
-                          <p className="ref-tree__gen-meta">
-                            <strong>{getCount(depth)}</strong> in tier · <strong>{formatUsdt(getEarningsWei(depth))}</strong> USDT
-                            <img src="/USDT_BEP20.png" alt="" className="ref-tree__usdt-ico" aria-hidden="true" />
-                          </p>
                         </div>
-                        <LevelTag
-                          n={depth}
-                          rate={tierUsd[depth]}
-                          perSeatHint={
-                            depth >= 2
-                              ? "USDT per qualifying sale from a seated direct in that tier (on-chain seat rules)."
-                              : undefined
-                          }
-                        />
                       </section>
                     );
                   })}
