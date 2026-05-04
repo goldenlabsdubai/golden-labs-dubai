@@ -12,6 +12,24 @@ function docIdFirebase(uid) {
   return uid ? `firebase_${uid}` : null;
 }
 
+/**
+ * Primary key of the profile row for this wallet: `id` may equal the address, or
+ * `users.wallet` may match while `id` is `firebase_*` (Firebase-first signups).
+ * Prefer the Firebase-linked row when both exist (indexer used to credit `id = wallet` shells only).
+ */
+async function resolveCanonicalUserIdForWallet(wallet) {
+  const w = docIdWallet(wallet);
+  if (!w) return null;
+  const { rows } = await query(
+    `SELECT id FROM users
+     WHERE id = $1 OR (wallet IS NOT NULL AND LOWER(TRIM(wallet)) = $1)
+     ORDER BY (CASE WHEN firebase_uid IS NOT NULL AND BTRIM(firebase_uid) <> '' THEN 0 ELSE 1 END), id
+     LIMIT 1`,
+    [w]
+  );
+  return rows[0]?.id ?? null;
+}
+
 function rowToUser(r) {
   if (!r) return null;
   const ids = r.owned_token_ids;
@@ -72,9 +90,15 @@ function rowToUser(r) {
 }
 
 export async function getUserByWallet(wallet) {
-  const id = docIdWallet(wallet);
-  if (!id) return null;
-  const { rows } = await query("SELECT * FROM users WHERE id = $1", [id]);
+  const w = docIdWallet(wallet);
+  if (!w) return null;
+  const { rows } = await query(
+    `SELECT * FROM users
+     WHERE id = $1 OR (wallet IS NOT NULL AND LOWER(TRIM(wallet)) = $1)
+     ORDER BY (CASE WHEN firebase_uid IS NOT NULL AND BTRIM(firebase_uid) <> '' THEN 0 ELSE 1 END), id
+     LIMIT 1`,
+    [w]
+  );
   return rows[0] ? rowToUser(rows[0]) : null;
 }
 
@@ -412,30 +436,31 @@ function addBigIntStrings(a, b) {
 
 export async function addReferralEarning(referrerWallet, level, amount) {
   if (!referrerWallet || level < 1 || level > 10) return;
-  const docId = docIdWallet(referrerWallet);
-  if (!docId) return;
+  const shellId = docIdWallet(referrerWallet);
+  if (!shellId) return;
+  const canonicalId = (await resolveCanonicalUserIdForWallet(referrerWallet)) ?? shellId;
   const delta = typeof amount === "bigint" ? amount.toString() : String(amount || "0");
   const col = `referral_earnings_l${level}`;
-  const { rows } = await query(`SELECT ${col}, referral_earnings_total FROM users WHERE id = $1`, [docId]);
+  const { rows } = await query(`SELECT ${col}, referral_earnings_total FROM users WHERE id = $1`, [canonicalId]);
   if (rows.length > 0) {
     const r = rows[0];
     await query(
       `UPDATE users SET ${col} = $1, referral_earnings_total = $2, last_activity = NOW() WHERE id = $3`,
-      [addBigIntStrings(r[col] ?? "0", delta), addBigIntStrings(r.referral_earnings_total ?? "0", delta), docId]
+      [addBigIntStrings(r[col] ?? "0", delta), addBigIntStrings(r.referral_earnings_total ?? "0", delta), canonicalId]
     );
   } else {
     await query(
       `INSERT INTO users (id, wallet, ${col}, referral_earnings_total, last_activity, created_at)
        VALUES ($1, $2, $3, $3, NOW(), NOW())
        ON CONFLICT (id) DO UPDATE SET ${col} = (COALESCE(users.${col}, '0')::numeric + $3::numeric)::text, referral_earnings_total = (COALESCE(users.referral_earnings_total, '0')::numeric + $3::numeric)::text, last_activity = NOW()`,
-      [docId, referrerWallet, delta]
+      [shellId, referrerWallet, delta]
     );
   }
 }
 
 export async function setReferralEarningsTotalAtLeast(wallet, amount) {
   if (!wallet || amount == null) return;
-  const id = docIdWallet(wallet);
+  const id = (await resolveCanonicalUserIdForWallet(wallet)) ?? docIdWallet(wallet);
   if (!id) return;
   const { rows } = await query("SELECT referral_earnings_total FROM users WHERE id = $1", [id]);
   const current = rows[0]?.referral_earnings_total ?? "0";
@@ -458,7 +483,7 @@ export async function setReferralEarningsL1AtLeast(wallet, amount) {
 /** Add to referral_earnings_l{level} only (does not change referral_earnings_total). Used to align per-level rows with lifetime total. */
 export async function incrementReferralEarningsLevelOnly(referrerWallet, level, amount) {
   if (!referrerWallet || level < 1 || level > 10) return;
-  const docId = docIdWallet(referrerWallet);
+  const docId = (await resolveCanonicalUserIdForWallet(referrerWallet)) ?? docIdWallet(referrerWallet);
   if (!docId) return;
   const delta = typeof amount === "bigint" ? amount.toString() : String(amount || "0");
   if (BigInt(delta || "0") <= 0n) return;
