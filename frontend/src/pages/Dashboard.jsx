@@ -26,6 +26,7 @@ import ReferralPyramidTree from "../components/ReferralPyramidTree";
 import { NavbarBrandLink } from "../components/NavbarBrandLink";
 import { USDT_DECIMALS } from "../constants/usdtDecimals";
 import { defaultReferralWithdrawChunkWei, readContractUint256 } from "../utils/formatUsdt";
+import { resolveReferralLifetimeWei, formatUsdtAmountForDashboard } from "../utils/referralEarnings";
 
 const NFT_ABI = [
   { name: "approve", type: "function", stateMutability: "nonpayable", inputs: [{ name: "to", type: "address" }, { name: "tokenId", type: "uint256" }], outputs: [] },
@@ -137,52 +138,12 @@ export default function Dashboard() {
   const displayAddress = rawAddress ? String(rawAddress).toLowerCase() : null;
   const usdtBalanceFormatted = usdtBalanceRaw != null ? Number(formatUnits(usdtBalanceRaw, USDT_DECIMALS)).toFixed(2) : null;
   const bnbBalanceFormatted = balanceData?.value != null ? Number(formatEther(balanceData.value)).toFixed(4) : null;
-  const totalTradeIncomeUsdtFormatted = (() => {
-    const w = user?.totalTradeIncomeWei;
-    if (w == null || w === "") return null;
-    try {
-      return Number(formatUnits(BigInt(w), USDT_DECIMALS)).toLocaleString(undefined, {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2,
-      });
-    } catch {
-      return null;
-    }
-  })();
-  const totalReferralIncomeUsdtFormatted = (() => {
-    const w = referralStats?.referralEarningsTotal ?? user?.referralEarningsTotal;
-    if (w == null || w === "") return null;
-    try {
-      const intStr = String(w).replace(/\..*$/, "") || "0";
-      return Number(formatUnits(BigInt(intStr), USDT_DECIMALS)).toLocaleString(undefined, {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2,
-      });
-    } catch {
-      return null;
-    }
-  })();
-  /** Trade income (from /me) + referral lifetime total — same components as the two lines above. */
-  const lifetimeEarningsUsdtFormatted = (() => {
-    try {
-      const t =
-        user?.totalTradeIncomeWei != null && user.totalTradeIncomeWei !== ""
-          ? BigInt(String(user.totalTradeIncomeWei).replace(/\..*$/, ""))
-          : 0n;
-      const refSrc = referralStats?.referralEarningsTotal ?? user?.referralEarningsTotal;
-      const r =
-        refSrc != null && refSrc !== ""
-          ? BigInt(String(refSrc).replace(/\..*$/, ""))
-          : 0n;
-      const sum = t + r;
-      return Number(formatUnits(sum, USDT_DECIMALS)).toLocaleString(undefined, {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2,
-      });
-    } catch {
-      return null;
-    }
-  })();
+  const tradeIncomeWei = readContractUint256(user?.totalTradeIncomeWei) ?? 0n;
+  const referralLifetimeWei = resolveReferralLifetimeWei(user, referralStats);
+
+  const totalTradeIncomeUsdtFormatted = formatUsdtAmountForDashboard(tradeIncomeWei);
+  const totalReferralIncomeUsdtFormatted = formatUsdtAmountForDashboard(referralLifetimeWei);
+  const lifetimeEarningsUsdtFormatted = formatUsdtAmountForDashboard(tradeIncomeWei + referralLifetimeWei);
 
   useEffect(() => {
     if (!token) return;
@@ -220,10 +181,16 @@ export default function Dashboard() {
   useEffect(() => {
     if (!token) return;
     fetch(`${API}/referral/stats`, { headers: { Authorization: `Bearer ${token}` } })
-      .then((r) => r.json())
-      .then((data) => setReferralStats(data))
+      .then(async (r) => {
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok) {
+          setReferralStats(null);
+          return;
+        }
+        setReferralStats(data);
+      })
       .catch(() => setReferralStats(null));
-  }, [token]);
+  }, [token, user]);
   useEffect(() => {
     if (!token) {
       setReferralNetwork(null);

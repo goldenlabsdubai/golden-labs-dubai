@@ -14,7 +14,8 @@ export function readContractUint256(data) {
     const t = data.trim();
     if (!t) return null;
     if (t.startsWith("0x")) return BigInt(t);
-    if (/^-?\d+$/.test(t)) return BigInt(t);
+    const intPart = t.split(/[.eE]/)[0].replace(/,/g, "");
+    if (/^-?\d+$/.test(intPart)) return BigInt(intPart);
     return null;
   }
   if (typeof data === "number" && Number.isFinite(data)) return BigInt(Math.trunc(data));
