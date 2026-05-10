@@ -30,6 +30,40 @@ async function resolveCanonicalUserIdForWallet(wallet) {
   return rows[0]?.id ?? null;
 }
 
+/**
+ * Sum referral_earnings_l1..l10 across every `users` row for this wallet (e.g. id = 0x… shell vs firebase_* profile).
+ * Indexer credits the canonical row, but legacy rows may still hold amounts; without this, /me and /referral/stats show 0 while on-chain claimable > 0.
+ */
+async function aggregateReferralEarningsByWallet(wallet) {
+  const w = docIdWallet(wallet);
+  if (!w) return null;
+  const sumCols = Array.from(
+    { length: 10 },
+    (_, i) => `COALESCE(SUM(referral_earnings_l${i + 1}::numeric), 0)::text AS s${i + 1}`
+  ).join(", ");
+  const { rows } = await query(
+    `SELECT ${sumCols} FROM users WHERE id = $1 OR (wallet IS NOT NULL AND LOWER(TRIM(wallet)) = $1)`,
+    [w]
+  );
+  const r = rows[0];
+  if (!r) return null;
+  let total = 0n;
+  const out = {};
+  for (let i = 1; i <= 10; i++) {
+    const raw = String(r[`s${i}`] ?? "0").split(".")[0].replace(/^0+/, "") || "0";
+    let bi = 0n;
+    try {
+      bi = BigInt(raw);
+    } catch {
+      bi = 0n;
+    }
+    out[`referralEarningsL${i}`] = bi.toString();
+    total += bi;
+  }
+  out.referralEarningsTotal = total.toString();
+  return out;
+}
+
 function rowToUser(r) {
   if (!r) return null;
   const ids = r.owned_token_ids;
@@ -99,7 +133,11 @@ export async function getUserByWallet(wallet) {
      LIMIT 1`,
     [w]
   );
-  return rows[0] ? rowToUser(rows[0]) : null;
+  if (!rows[0]) return null;
+  const base = rowToUser(rows[0]);
+  const agg = await aggregateReferralEarningsByWallet(wallet);
+  if (!agg) return base;
+  return { ...base, ...agg };
 }
 
 const REF_NETWORK_MAX_L1 = 80;
