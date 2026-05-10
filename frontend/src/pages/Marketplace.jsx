@@ -13,6 +13,7 @@ import { applyWalletTxError, tryOpenInsufficientUsdtModal } from "../utils/trans
 import { resolveSellerReferrerRoot } from "../utils/marketplaceReferrer";
 import { canAccessTradingNav } from "../utils/tradingAccess";
 import { marketplaceListPriceUsdtLabel } from "../utils/marketplaceListPriceLabel";
+import { USDT_DECIMALS } from "../constants/usdtDecimals";
 import {
   safeGasLimit,
   DEFAULT_APPROVE_GAS,
@@ -102,7 +103,7 @@ export default function Marketplace() {
     functionName: "balanceOf",
     args: address ? [address] : undefined,
   });
-  const usdtBalanceFormatted = usdtBalanceRaw != null ? Number(formatUnits(usdtBalanceRaw, 6)).toFixed(2) : null;
+  const usdtBalanceFormatted = usdtBalanceRaw != null ? Number(formatUnits(usdtBalanceRaw, USDT_DECIMALS)).toFixed(2) : null;
   const bnbBalanceFormatted = balanceData?.value != null ? Number(formatEther(balanceData.value)).toFixed(4) : null;
   const displayAddress = (token && (user?.wallet || address)) ? (user?.wallet || address) : (isConnected && address) ? address : null;
   const currentWallet = (displayAddress || user?.wallet || address || "").toString().toLowerCase();
@@ -610,7 +611,7 @@ export default function Marketplace() {
                   <div><dt>Status</dt><dd>{user.state || "—"}</dd></div>
                   <div><dt>Trades</dt><dd>{user.totalTrades ?? 0}</dd></div>
                   <div><dt>Referrals</dt><dd>{user.totalReferrals ?? 0}</dd></div>
-                  <div><dt>Earnings</dt><dd>${(Number(user.referralEarningsTotal || "0") / 1e6).toFixed(2)} USDT <img src="/USDT_BEP20.png" alt="" className="usdt-logo-inline" aria-hidden="true" /></dd></div>
+                  <div><dt>Earnings</dt><dd>${Number(formatUnits(BigInt(String(user.referralEarningsTotal || "0")), USDT_DECIMALS)).toFixed(2)} USDT <img src="/USDT_BEP20.png" alt="" className="usdt-logo-inline" aria-hidden="true" /></dd></div>
                 </dl>
                 <AppRouteLink to="/dashboard" className="marketplace-page__profile-card-link">My Dashboard</AppRouteLink>
               </div>
@@ -757,7 +758,7 @@ export default function Marketplace() {
                     <div className="profile-hub__nft-card-row">
                       <span className="profile-hub__nft-id">GLFA #{l.tokenId}</span>
                       <span className="profile-hub__nft-price">
-                      <span className="profile-hub__nft-price-label">{l.priceFormatted ? l.priceFormatted.replace(/\s*USDT$/i, "").trim() : (Number(l.price) / 1e6).toFixed(0)} USDT <img src="/USDT_BEP20.png" alt="" className="usdt-logo-inline" aria-hidden="true" /></span>
+                      <span className="profile-hub__nft-price-label">{l.priceFormatted ? l.priceFormatted.replace(/\s*USDT$/i, "").trim() : Number(formatUnits(BigInt(String(l.price || 0)), USDT_DECIMALS)).toFixed(0)} USDT <img src="/USDT_BEP20.png" alt="" className="usdt-logo-inline" aria-hidden="true" /></span>
                     </span>
                     </div>
                     <div className="profile-hub__nft-card-center">

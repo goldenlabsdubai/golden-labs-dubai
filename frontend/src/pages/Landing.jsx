@@ -8,6 +8,8 @@ import { useSignInWithWallet } from "../hooks/useSignInWithWallet";
 import { API, getAvatarUrl } from "../config.js";
 import { getTransactionErrorMessage } from "../utils/transactionError";
 import { NavbarBrandLink } from "../components/NavbarBrandLink";
+import { formatUnits } from "viem";
+import { USDT_DECIMALS } from "../constants/usdtDecimals";
 
 const POLL_TOP_SELLERS_MS = 8000;
 
@@ -448,7 +450,7 @@ export default function Landing() {
                     <div key={`listing-${l.tokenId}-${i}`} className="landing-v2__nft-card">
                       <div className="landing-v2__nft-card-image" style={{ backgroundImage: 'url("/gldass.png")', backgroundSize: "cover", backgroundPosition: "center" }} />
                       <h3 className="landing-v2__nft-card-title">GLFA #{l.tokenId}</h3>
-                      <p className="landing-v2__nft-card-price">{l.priceFormatted || (Number(l.price) / 1e6).toFixed(0) + " USDT"}</p>
+                      <p className="landing-v2__nft-card-price">{l.priceFormatted || `${Number(formatUnits(BigInt(String(l.price || 0)), USDT_DECIMALS)).toFixed(0)} USDT`}</p>
                       <button type="button" className="landing-v2__btn landing-v2__btn--primary landing-v2__btn--sm" onClick={() => assignAppPath("/marketplace")}>Buy Now</button>
                     </div>
                   ));
@@ -580,7 +582,7 @@ export default function Landing() {
                           <div key={`listing-${l.tokenId}-${i}`} className="landing-v2__nft-card">
                             <div className="landing-v2__nft-card-image" style={{ backgroundImage: 'url("/gldass.png")', backgroundSize: "cover", backgroundPosition: "center" }} />
                             <h3 className="landing-v2__nft-card-title">GLFA #{l.tokenId}</h3>
-                            <p className="landing-v2__nft-card-price">{l.priceFormatted || (Number(l.price) / 1e6).toFixed(0) + " USDT"}</p>
+                            <p className="landing-v2__nft-card-price">{l.priceFormatted || `${Number(formatUnits(BigInt(String(l.price || 0)), USDT_DECIMALS)).toFixed(0)} USDT`}</p>
                             <button type="button" className="landing-v2__btn landing-v2__btn--primary landing-v2__btn--sm" onClick={() => assignAppPath("/marketplace")}>Buy Now</button>
                           </div>
                         ));

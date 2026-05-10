@@ -47,3 +47,24 @@ export function logDeployedContractsCluster() {
   if (!s.marketplaceAndReservePoolAddress) missing.push("MARKETPLACE_AND_RESERVE_POOL_CONTRACT_ADDRESS");
   if (missing.length) console.warn("[contracts] missing env (stack incomplete):", missing.join(", "));
 }
+
+/** Must match deployed NFT `MAX_SUPPLY` (or lower safety cap). Used for metadata bounds and listing scans when env is unset. */
+const DEFAULT_NFT_MAX_SUPPLY_CAP = 100_000_000;
+
+export function getNftMaxSupplyCap() {
+  const n = Number(process.env.NFT_MAX_SUPPLY);
+  if (Number.isFinite(n) && n > 0) return Math.floor(n);
+  return DEFAULT_NFT_MAX_SUPPLY_CAP;
+}
+
+/**
+ * Ceiling for how many tokenIds to scan for marketplace “my assets” / listings RPC loops.
+ * Defaults to {@link getNftMaxSupplyCap} when `MARKETPLACE_MY_ASSETS_MAX_TOKENS` is unset.
+ */
+export function getMarketplaceMyAssetsMaxTokensCeiling() {
+  const raw = process.env.MARKETPLACE_MY_ASSETS_MAX_TOKENS;
+  if (raw == null || String(raw).trim() === "") return getNftMaxSupplyCap();
+  const n = Number(String(raw).trim());
+  if (!Number.isFinite(n) || n <= 0) return getNftMaxSupplyCap();
+  return Math.min(Math.floor(n), getNftMaxSupplyCap());
+}

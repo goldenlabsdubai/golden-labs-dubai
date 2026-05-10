@@ -2,8 +2,13 @@ import { Router } from "express";
 import { ethers } from "ethers";
 import * as User from "../services/user.js";
 import { getListingBlocksMap } from "../services/marketplaceActivityIndexer.js";
-import { getMarketplaceAndReservePoolAddress } from "../config/contractsEnv.js";
+import {
+  getMarketplaceAndReservePoolAddress,
+  getMarketplaceMyAssetsMaxTokensCeiling,
+  getNftMaxSupplyCap,
+} from "../config/contractsEnv.js";
 import { assertCanTradeOnConfiguredContracts } from "../services/marketplaceTradeEligibility.js";
+import { USDT_DECIMALS } from "../constants/usdtDecimals.js";
 
 const router = Router();
 let listingsCache = [];
@@ -25,15 +30,24 @@ function sortByListedTimeOldestFirst(a, b) {
   return String(a.seller || "").localeCompare(String(b.seller || ""));
 }
 
-function formatListPriceUsdtFromWei6(weiStr) {
-  const s = String(weiStr ?? "0").trim();
-  if (!/^\d+$/.test(s)) return "0";
-  const bi = BigInt(s);
-  const whole = bi / 1000000n;
-  const frac = bi % 1000000n;
-  if (frac === 0n) return whole.toString();
-  const fracPart = String(frac).padStart(6, "0").replace(/0+$/, "");
-  return `${whole}.${fracPart}`;
+function formatListPriceUsdtFromWei(weiStr) {
+  try {
+    let s = String(ethers.formatUnits(String(weiStr ?? "0").trim(), USDT_DECIMALS));
+    if (s.includes(".")) s = s.replace(/\.?0+$/, "");
+    return s || "0";
+  } catch {
+    return "0";
+  }
+}
+
+function formatListingPriceUsdtLabel(priceWei) {
+  try {
+    const s = ethers.formatUnits(String(priceWei ?? "0"), USDT_DECIMALS);
+    const n = Number.parseFloat(s);
+    return `${Number.isFinite(n) ? n.toFixed(0) : s} USDT`;
+  } catch {
+    return "0 USDT";
+  }
 }
 
 let cachedMarketplaceListPrice = null;
@@ -51,7 +65,7 @@ async function getConfiguredMarketplaceListPrice(marketContract) {
   if (weiStr === "0") throw new Error("marketplace listPrice is zero");
   cachedMarketplaceListPrice = {
     listPriceWei: weiStr,
-    listPriceUsdt: formatListPriceUsdtFromWei6(weiStr),
+    listPriceUsdt: formatListPriceUsdtFromWei(weiStr),
   };
   cachedMarketplaceListPriceAt = now;
   return cachedMarketplaceListPrice;
@@ -253,7 +267,7 @@ router.get("/listings", async (_, res) => {
             tokenId: r.tokenId,
             seller: String(r.seller),
             price: r.price,
-            priceFormatted: (Number(r.price) / 1e6).toFixed(0) + " USDT",
+            priceFormatted: formatListingPriceUsdtLabel(r.price),
             tokenURI: r.tokenURI || "",
             listedAtSec: r.listedAtSec ?? 0,
           });
@@ -362,7 +376,7 @@ router.get("/my-listings", async (req, res) => {
     if (!Number.isFinite(totalMinted) || totalMinted === 0) return res.json({ listings: [] });
     const maxTokens = Math.max(
       1,
-      Math.min(Number(process.env.MARKETPLACE_MY_ASSETS_MAX_TOKENS || 10000), totalMinted)
+      Math.min(getMarketplaceMyAssetsMaxTokensCeiling(), totalMinted)
     );
 
     const listings = [];
@@ -388,7 +402,7 @@ router.get("/my-listings", async (req, res) => {
       }
       const batch = await Promise.all(promises);
       batch.forEach((r) => {
-        if (r) listings.push({ tokenId: r.tokenId, seller: String(r.seller), price: r.price, priceFormatted: (Number(r.price) / 1e6).toFixed(0) + " USDT" });
+        if (r) listings.push({ tokenId: r.tokenId, seller: String(r.seller), price: r.price, priceFormatted: formatListingPriceUsdtLabel(r.price) });
       });
     }
     res.json({ listings });
@@ -416,7 +430,7 @@ const NFT_VIEW_ABI = [
 async function collectChainOwnedOrListedTokenIds(wallet, provider, nftAddr, marketAddr, totalMinted) {
   const maxTokens = Math.max(
     1,
-    Math.min(Number(process.env.MARKETPLACE_MY_ASSETS_MAX_TOKENS || 10000), totalMinted)
+    Math.min(getMarketplaceMyAssetsMaxTokensCeiling(), totalMinted)
   );
   const timeBudgetMs = Math.max(5000, Number(process.env.MARKETPLACE_MY_ASSETS_MAX_MS || 60000));
   const startedAt = Date.now();
@@ -621,7 +635,7 @@ router.get("/my-nfts", async (req, res) => {
     if (!Number.isFinite(totalMinted) || totalMinted === 0) return res.json({ nfts: [] });
     const maxTokens = Math.max(
       1,
-      Math.min(Number(process.env.MARKETPLACE_MY_ASSETS_MAX_TOKENS || 10000), totalMinted)
+      Math.min(getMarketplaceMyAssetsMaxTokensCeiling(), totalMinted)
     );
     const timeBudgetMs = Math.max(5000, Number(process.env.MARKETPLACE_MY_ASSETS_MAX_MS || 60000));
     const startedAt = Date.now();
@@ -725,11 +739,12 @@ router.get("/config", (_, res) => {
   });
 });
 
-// Dynamic metadata for tokens 1–10000: local MP4 (NFT_LOCAL_ANIMATION_URL) or IPFS (NFT_MP4_CID). No auth.
+// Dynamic metadata for tokens 1..NFT_MAX_SUPPLY: local MP4 (NFT_LOCAL_ANIMATION_URL) or IPFS (NFT_MP4_CID). No auth.
 router.get("/nft-metadata/:tokenId", (req, res) => {
   const tokenId = parseInt(req.params.tokenId, 10);
-  if (!Number.isInteger(tokenId) || tokenId < 1 || tokenId > 10000) {
-    return res.status(404).json({ error: "Invalid tokenId (1–10000)" });
+  const maxId = getNftMaxSupplyCap();
+  if (!Number.isInteger(tokenId) || tokenId < 1 || tokenId > maxId) {
+    return res.status(404).json({ error: `Invalid tokenId (must be 1–${maxId})` });
   }
   const localAnim = (process.env.NFT_LOCAL_ANIMATION_URL || "").trim();
   if (localAnim) {

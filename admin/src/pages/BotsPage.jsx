@@ -1,9 +1,15 @@
 import { useEffect, useState } from "react";
+import { formatUnits } from "viem";
+
+const USDT_DECIMALS = Number(import.meta.env.VITE_USDT_DECIMALS || 18) || 18;
 
 function formatUsdt(wei) {
   if (wei == null || wei === "") return "0.00";
-  const n = Number(wei) / 1e6;
-  return n.toFixed(2);
+  try {
+    return Number.parseFloat(formatUnits(BigInt(String(wei)), USDT_DECIMALS)).toFixed(2);
+  } catch {
+    return "0.00";
+  }
 }
 
 function formatBnb(wei) {

@@ -11,6 +11,7 @@ import { applyWalletTxError, getTransactionErrorMessage } from "../utils/transac
 import { canAccessTradingNav } from "../utils/tradingAccess";
 import InsufficientBalanceModal from "../components/InsufficientBalanceModal";
 import { NavbarBrandLink } from "../components/NavbarBrandLink";
+import { USDT_DECIMALS } from "../constants/usdtDecimals";
 
 const USDT_ABI = [
   { name: "balanceOf", type: "function", stateMutability: "view", inputs: [{ name: "account", type: "address" }], outputs: [{ type: "uint256" }] },
@@ -59,7 +60,7 @@ export default function Profile() {
     args: walletForReads ? [walletForReads] : undefined,
     ...(chainId != null && { chainId }),
   });
-  const usdtBalance = usdtBalanceRaw != null ? Number(formatUnits(usdtBalanceRaw, 6)) : null;
+  const usdtBalance = usdtBalanceRaw != null ? Number(formatUnits(usdtBalanceRaw, USDT_DECIMALS)) : null;
   const bnbBalanceFormatted = balanceData?.value != null ? Number(formatEther(balanceData.value)).toFixed(4) : null;
 
   const displayAddress = (token && user?.wallet) ? user.wallet : (isConnected && address) ? address : null;

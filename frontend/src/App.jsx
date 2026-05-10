@@ -9,8 +9,7 @@ import SupportChat from "./components/SupportChat";
 import MobileBottomNav from "./components/MobileBottomNav";
 import PlatformMaintenanceOverlay from "./components/PlatformMaintenanceOverlay";
 import { SeoHead } from "./components/SeoHead";
-
-const BSC_TESTNET_CHAIN_ID = 97;
+import { BSC_CHAIN_ID } from "./constants/chain";
 
 /** Same keys as useAuth — read without waiting for context (fixes MM in-app race + deep links). */
 function readStoredAuth() {
@@ -30,12 +29,12 @@ function readStoredAuth() {
   }
 }
 
-function ForceBscTestnet() {
+function ForceBscMainnet() {
   const { isConnected, chainId } = useAccount();
   const { switchChainAsync } = useSwitchChain();
   useEffect(() => {
-    if (!isConnected || chainId == null || chainId === BSC_TESTNET_CHAIN_ID) return;
-    switchChainAsync({ chainId: BSC_TESTNET_CHAIN_ID }).catch(() => {});
+    if (!isConnected || chainId == null || chainId === BSC_CHAIN_ID) return;
+    switchChainAsync({ chainId: BSC_CHAIN_ID }).catch(() => {});
   }, [isConnected, chainId, switchChainAsync]);
   return null;
 }
@@ -171,7 +170,7 @@ export default function App() {
     <div className={`app${showMobileBottomNav ? " app--mobile-nav" : ""}`}>
       <SeoHead />
       <ReconnectOnLoad />
-      <ForceBscTestnet />
+      <ForceBscMainnet />
       <div className={`app-content${isLandingPage ? " app-content--landing" : ""}`}>
         <div id="profile-bg-layer" className="profile-bg-layer" aria-hidden="true" />
         <ParticleNetwork />

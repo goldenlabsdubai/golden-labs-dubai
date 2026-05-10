@@ -156,7 +156,7 @@ router.get("/me", async (req, res) => {
     let user = await User.getUser(req);
     if (!user) return res.status(404).json({ error: "User not found" });
 
-    /** USDT wei (6 decimals): cumulative seller trading income from recorded sales (matches Activity tab). */
+    /** USDT wei (see `USDT_DECIMALS`): cumulative seller trading income from recorded sales (matches Activity tab). */
     let totalTradeIncomeWei = "0";
     /** For frontend routing: true/false when NFT read succeeded, null if unknown (avoid wrong /mint redirect). */
     let meChainHasMinted = null;

@@ -11,6 +11,7 @@ import { applyWalletTxError, tryOpenInsufficientUsdtModal } from "../utils/trans
 import InsufficientBalanceModal from "../components/InsufficientBalanceModal";
 import { NavbarBrandLink } from "../components/NavbarBrandLink";
 import { canAccessTradingNav } from "../utils/tradingAccess";
+import { USDT_DECIMALS } from "../constants/usdtDecimals";
 
 const USDT_ABI = [
   { name: "balanceOf", type: "function", stateMutability: "view", inputs: [{ name: "account", type: "address" }], outputs: [{ type: "uint256" }] },
@@ -80,7 +81,7 @@ export default function Mint() {
     args: address ? [address] : undefined,
     ...(chainId != null && { chainId }),
   });
-  const usdtBalance = usdtBalanceRaw != null ? Number(formatUnits(usdtBalanceRaw, 6)) : null;
+  const usdtBalance = usdtBalanceRaw != null ? Number(formatUnits(usdtBalanceRaw, USDT_DECIMALS)) : null;
   const bnbBalanceFormatted = balanceData?.value != null ? Number(formatEther(balanceData.value)).toFixed(4) : null;
 
   useEffect(() => setPortalReady(true), []);
@@ -233,7 +234,7 @@ export default function Mint() {
 
   const displayPrice =
     mintPriceOnChain != null
-      ? `${Number(formatUnits(mintPriceOnChain, 6))} USDT`
+      ? `${Number(formatUnits(mintPriceOnChain, USDT_DECIMALS))} USDT`
       : config.price != null && String(config.price) !== "" && config.mintPriceKnown !== false
         ? `${config.price} USDT`
         : configLoadError

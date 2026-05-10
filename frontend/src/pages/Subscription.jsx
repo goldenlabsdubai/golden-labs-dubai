@@ -15,6 +15,7 @@ import {
 } from "../utils/safeContractGas";
 import InsufficientBalanceModal from "../components/InsufficientBalanceModal";
 import { NavbarBrandLink } from "../components/NavbarBrandLink";
+import { USDT_DECIMALS } from "../constants/usdtDecimals";
 
 // USDT (BEP20) – balance and approve. Use same chain as connected wallet.
 const USDT_ABI = [
@@ -56,11 +57,11 @@ export default function Subscription() {
     functionName: "subscriptionPrice",
   });
   const subscriptionPriceFormatted =
-    subscriptionPriceWei != null ? `${Number(formatUnits(subscriptionPriceWei, 6))} USDT` : null;
+    subscriptionPriceWei != null ? `${Number(formatUnits(subscriptionPriceWei, USDT_DECIMALS))} USDT` : null;
   const [portalReady, setPortalReady] = useState(false);
   const menuRef = useRef(null);
 
-  // USDT contract from .env – same chain as connected wallet (e.g. BSC Testnet)
+  // USDT contract from .env – same chain as connected wallet (BNB Smart Chain mainnet)
   const usdtAddress = (import.meta.env.VITE_USDT_ADDRESS || "").trim();
   const usdtAddressNormalized = usdtAddress && usdtAddress.startsWith("0x") ? usdtAddress : usdtAddress ? `0x${usdtAddress}` : "";
   const walletForReads = address || (token && user?.wallet ? user.wallet : null) || undefined;
@@ -71,7 +72,7 @@ export default function Subscription() {
     args: walletForReads ? [walletForReads] : undefined,
     ...(chainId != null && { chainId }),
   });
-  const usdtBalance = usdtBalanceRaw != null ? Number(formatUnits(usdtBalanceRaw, 6)) : null;
+  const usdtBalance = usdtBalanceRaw != null ? Number(formatUnits(usdtBalanceRaw, USDT_DECIMALS)) : null;
   const bnbBalanceFormatted = balanceData?.value != null ? Number(formatEther(balanceData.value)).toFixed(4) : null;
 
   useEffect(() => {

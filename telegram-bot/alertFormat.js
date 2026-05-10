@@ -4,6 +4,10 @@
  */
 require("dotenv").config();
 
+const USDT_DECIMALS_RAW = Number.parseInt(String(process.env.USDT_DECIMALS || "18"), 10);
+const USDT_DECIMALS =
+  Number.isFinite(USDT_DECIMALS_RAW) && USDT_DECIMALS_RAW >= 0 && USDT_DECIMALS_RAW <= 36 ? USDT_DECIMALS_RAW : 18;
+
 /**
  * Same wording as the web modal (`PlatformMaintenanceOverlay.jsx`) — update both if copy changes.
  */
@@ -85,17 +89,21 @@ function formatAdminMaintenanceNoteHtml(raw) {
   return t.split(/\r?\n/).map(escapeHtml).join("<br/>");
 }
 
-function formatUsdtFromWei6(weiStr) {
+function formatUsdtFromWei(weiStr) {
   try {
     const n = BigInt(weiStr || 0);
-    const whole = n / 1000000n;
-    const frac = Number(n % 1000000n) / 1e6;
+    const div = 10n ** BigInt(USDT_DECIMALS);
+    const whole = n / div;
+    const frac = Number(n % div) / Number(div);
     const num = Number(whole) + frac;
     return `${num.toFixed(2)} USDT`;
   } catch {
     return String(weiStr || "0");
   }
 }
+
+/** @deprecated Use `formatUsdtFromWei`; kept for older requires. */
+const formatUsdtFromWei6 = formatUsdtFromWei;
 
 function goldenLabsSiteUrl() {
   let raw = (process.env.TELEGRAM_GOLDEN_LABS_URL || "https://goldenlabs.finance").trim().replace(/\/$/, "");
@@ -174,7 +182,7 @@ function formatActivityMessage(kind, fields) {
     case "listed": {
       const tidRaw = fields.tokenId != null && fields.tokenId !== "" ? String(fields.tokenId) : "";
       const priceLine =
-        fields.priceWei != null ? formatUsdtFromWei6(String(fields.priceWei)) : "—";
+        fields.priceWei != null ? formatUsdtFromWei(String(fields.priceWei)) : "—";
 
       lines.push("🚨 <b>NEW NFT LISTED</b>");
       lines.push("");
@@ -199,7 +207,7 @@ function formatActivityMessage(kind, fields) {
       const txLabel = (process.env.TELEGRAM_TX_VIEW_LABEL || "View on BscScan").trim();
       const tidRaw = fields.tokenId != null && fields.tokenId !== "" ? String(fields.tokenId) : "";
       const priceLine =
-        fields.priceWei != null ? formatUsdtFromWei6(String(fields.priceWei)) : "—";
+        fields.priceWei != null ? formatUsdtFromWei(String(fields.priceWei)) : "—";
 
       lines.push("🔔 <b>NFT Purchase Alert</b>");
       lines.push("");
@@ -258,4 +266,4 @@ function formatActivityMessage(kind, fields) {
   return lines.filter(Boolean).join("\n");
 }
 
-module.exports = { formatActivityMessage, addr, formatUsdtFromWei6, escapeHtml, explorerBase };
+module.exports = { formatActivityMessage, addr, formatUsdtFromWei, formatUsdtFromWei6, escapeHtml, explorerBase };

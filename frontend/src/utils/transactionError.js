@@ -83,7 +83,7 @@ function normalizeMessage(error) {
 }
 
 /**
- * Compare on-chain USDT balance to amount needed (6-decimal wei). Opens insufficient-USDT modal when balance is strictly lower.
+ * Compare on-chain USDT balance to amount needed (wei at `USDT_DECIMALS`). Opens insufficient-USDT modal when balance is strictly lower.
  * @returns {boolean} true if modal was opened (caller should abort the tx flow)
  */
 export function tryOpenInsufficientUsdtModal(usdtBalanceRaw, needWei, { setInsufficientBalanceType, refetchUsdt }) {

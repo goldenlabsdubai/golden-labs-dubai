@@ -2,16 +2,16 @@ import { ethers } from "ethers";
 import { getMarketplaceAndReservePoolAddress } from "../config/contractsEnv.js";
 
 /**
- * Default matches MarketplaceAndReservePoolContract.tradingIncomeAmount (0.75 USDT, 6 decimals).
+ * Default matches MarketplaceAndReservePoolContract.tradingIncomeAmount (0.75 USDT at USDT_DECIMALS).
  * Override with MARKETPLACE_TRADING_INCOME_WEI if chain config differs and RPC is unused.
  */
 export function getTradingIncomePerSellWeiFromEnv() {
-  const raw = String(process.env.MARKETPLACE_TRADING_INCOME_WEI || "750000").trim();
+  const raw = String(process.env.MARKETPLACE_TRADING_INCOME_WEI || "750000000000000000").trim();
   try {
     const v = BigInt(raw);
-    return v > 0n ? v : 750000n;
+    return v > 0n ? v : 750000000000000000n;
   } catch {
-    return 750000n;
+    return 750000000000000000n;
   }
 }
 
@@ -21,7 +21,7 @@ let cached = { wei: null, at: 0 };
 const CACHE_MS = 120_000;
 
 /**
- * Per-successful-sell trading income in USDT wei (6 decimals), from on-chain
+ * Per-successful-sell trading income in USDT smallest units, from on-chain
  * `MarketplaceAndReservePool.tradingIncomeAmount()` when RPC + address are configured.
  * Cached briefly to avoid hammering RPC on frequent GET /user/me. Falls back to env.
  */

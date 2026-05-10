@@ -2,12 +2,13 @@ import { Router } from "express";
 import { ethers } from "ethers";
 import { createPinnedJsonRpcProvider } from "../config/ethersRpc.js";
 import * as User from "../services/user.js";
+import { USDT_DECIMALS } from "../constants/usdtDecimals.js";
 
 const router = Router();
 
 const REFERRAL_LEVELS = 10;
-/** Default 10 USDT (6 decimals); must match ReferralContract unless changed on-chain */
-const REFERRAL_WITHDRAW_CHUNK_WEI = process.env.REFERRAL_WITHDRAW_CHUNK_WEI || "10000000";
+/** Default 10 USDT (18 decimals); must match ReferralContract unless changed on-chain */
+const REFERRAL_WITHDRAW_CHUNK_WEI = process.env.REFERRAL_WITHDRAW_CHUNK_WEI || "10000000000000000000";
 
 function sumEarningsByLevel(refUser) {
   let s = 0n;
@@ -30,10 +31,10 @@ router.get("/network", async (req, res) => {
 });
 
 router.get("/info", (_, res) => {
-  const withdrawChunkWei = String(REFERRAL_WITHDRAW_CHUNK_WEI || "10000000");
+  const withdrawChunkWei = String(REFERRAL_WITHDRAW_CHUNK_WEI || "10000000000000000000");
   let withdrawChunkUsdt = 10;
   try {
-    withdrawChunkUsdt = Number(withdrawChunkWei) / 1e6;
+    withdrawChunkUsdt = Number(ethers.formatUnits(withdrawChunkWei, USDT_DECIMALS));
   } catch {
     withdrawChunkUsdt = 10;
   }
@@ -55,7 +56,7 @@ router.get("/stats", async (req, res) => {
     const walletUser = wallet ? await User.getUserByWallet(wallet) : null;
     const refUser = walletUser || user;
 
-    /** On-chain claimable USDT (6 decimals). null = RPC/read failed — do not treat as zero (see Dashboard copy). */
+    /** On-chain claimable USDT (token decimals). null = RPC/read failed — do not treat as zero (see Dashboard copy). */
     let claimableWei = null;
     const contractAddress = process.env.REFERRAL_CONTRACT_ADDRESS || "";
     const rpcUrl = process.env.RPC_URL || "";

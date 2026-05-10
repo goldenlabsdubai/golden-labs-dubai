@@ -6,7 +6,7 @@ import { ethers } from "ethers";
 import * as User from "./user.js";
 import * as AdminPg from "./adminPostgres.js";
 import { getTradingIncomePerSellWeiFromEnv } from "../utils/tradingIncomeWei.js";
-import { getMarketplaceAndReservePoolAddress } from "../config/contractsEnv.js";
+import { getMarketplaceAndReservePoolAddress, getNftMaxSupplyCap } from "../config/contractsEnv.js";
 
 const BOT_SETTINGS_DOC = "bot_rules";
 const BOT_STATS_CACHE_TTL_MS = Number(process.env.BOT_STATS_CACHE_TTL_MS || 30000);
@@ -141,11 +141,12 @@ function pgTradesToShape(pg) {
   };
 }
 
-/** Get on-chain stats for one address: balances, buy/sell counts, total trades, total profit (USDT 6 decimals).
+/** Get on-chain stats for one address: balances, buy/sell counts, total trades, total profit (USDT wei at `USDT_DECIMALS`).
  * Options:
  *   - tradesFromChainOnly: true – skip Postgres `user_activities`; use only on-chain Sold events (slow; can time out).
  *   - default / false – use Postgres activity stats when present; otherwise fall back to chain (admin panel uses false).
- *   - skipMarketplaceListedNft: true – NFT count = wallet balanceOf only (fast; undercounts tokens listed on marketplace). */
+ *   - skipMarketplaceListedNft: true – NFT count = wallet balanceOf only (fast; undercounts tokens listed on marketplace).
+ */
 export async function getBotStats(address, options = {}) {
   const tradesFromChainOnly = Boolean(options?.tradesFromChainOnly);
   const skipMarketplaceListedNft = Boolean(options?.skipMarketplaceListedNft);
@@ -378,14 +379,15 @@ async function countListedForSellerFullScan(provider, marketplaceAddress, nftAdd
     ["function listings(uint256) view returns (address seller, uint256, uint256, bool active)"],
     provider
   );
+  const supplyCap = getNftMaxSupplyCap();
   let maxTokenId = Number(process.env.MARKETPLACE_MAX_TOKEN_ID || 500);
   try {
     const nft = new ethers.Contract(nftAddress, ["function totalMinted() view returns (uint256)"], provider);
     const minted = await withRpcRetry(() => nft.totalMinted());
     const n = Number(minted ?? 0);
-    if (Number.isFinite(n) && n > 0) maxTokenId = Math.min(n + 10, 10000);
+    if (Number.isFinite(n) && n > 0) maxTokenId = Math.min(n + 10, supplyCap);
   } catch (_) {}
-  maxTokenId = Math.max(1, Math.min(maxTokenId, 10000));
+  maxTokenId = Math.max(1, Math.min(maxTokenId, supplyCap));
 
   let listed = 0;
   const batch = BOT_NFT_LISTING_SCAN_BATCH;
@@ -442,7 +444,7 @@ function parseOptionalNonNegativeInt(value) {
   return Math.floor(n);
 }
 
-/** Query Sold events and compute buy/sell counts + profit-only (trading income per bot sell) in USDT 6 decimals. */
+/** Query Sold events and compute buy/sell counts + profit-only (trading income per bot sell) in USDT wei at `USDT_DECIMALS`. */
 async function getTradesAndProfit(provider, marketplaceAddress, botAddress) {
   try {
     let incomePerSell = getTradingIncomePerSellWeiFromEnv();

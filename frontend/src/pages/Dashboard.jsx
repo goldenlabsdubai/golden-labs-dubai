@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { AppRouteLink } from "../components/AppRouteLink";
 import { assignAppPath } from "../utils/appNavigation";
 import { useAccount, useBalance, useDisconnect, useReadContract, useWriteContract, usePublicClient, useWatchContractEvent } from "wagmi";
-import { formatEther, formatUnits } from "viem";
+import { formatEther, formatUnits, parseUnits } from "viem";
 import { useAuth } from "../hooks/useAuth";
 import { useWalletConnect } from "../hooks/useWalletConnect";
 import { API, BNB_LOGO_PUBLIC, EXPLORER_BY_CHAIN, getAvatarUrl, MARKETPLACE_AND_RESERVE_POOL_ADDRESS } from "../config";
@@ -24,6 +24,7 @@ import NFTMedia from "../components/NFTMedia";
 import InsufficientBalanceModal from "../components/InsufficientBalanceModal";
 import ReferralPyramidTree from "../components/ReferralPyramidTree";
 import { NavbarBrandLink } from "../components/NavbarBrandLink";
+import { USDT_DECIMALS } from "../constants/usdtDecimals";
 
 const NFT_ABI = [
   { name: "approve", type: "function", stateMutability: "nonpayable", inputs: [{ name: "to", type: "address" }, { name: "tokenId", type: "uint256" }], outputs: [] },
@@ -132,13 +133,13 @@ export default function Dashboard() {
   });
   const rawAddress = (token && (user?.wallet || address)) ? (user?.wallet || address) : (isConnected && address) ? address : null;
   const displayAddress = rawAddress ? String(rawAddress).toLowerCase() : null;
-  const usdtBalanceFormatted = usdtBalanceRaw != null ? Number(formatUnits(usdtBalanceRaw, 6)).toFixed(2) : null;
+  const usdtBalanceFormatted = usdtBalanceRaw != null ? Number(formatUnits(usdtBalanceRaw, USDT_DECIMALS)).toFixed(2) : null;
   const bnbBalanceFormatted = balanceData?.value != null ? Number(formatEther(balanceData.value)).toFixed(4) : null;
   const totalTradeIncomeUsdtFormatted = (() => {
     const w = user?.totalTradeIncomeWei;
     if (w == null || w === "") return null;
     try {
-      return Number(formatUnits(BigInt(w), 6)).toLocaleString(undefined, {
+      return Number(formatUnits(BigInt(w), USDT_DECIMALS)).toLocaleString(undefined, {
         minimumFractionDigits: 2,
         maximumFractionDigits: 2,
       });
@@ -151,7 +152,7 @@ export default function Dashboard() {
     if (w == null || w === "") return null;
     try {
       const intStr = String(w).replace(/\..*$/, "") || "0";
-      return Number(formatUnits(BigInt(intStr), 6)).toLocaleString(undefined, {
+      return Number(formatUnits(BigInt(intStr), USDT_DECIMALS)).toLocaleString(undefined, {
         minimumFractionDigits: 2,
         maximumFractionDigits: 2,
       });
@@ -172,7 +173,7 @@ export default function Dashboard() {
           ? BigInt(String(refSrc).replace(/\..*$/, ""))
           : 0n;
       const sum = t + r;
-      return Number(formatUnits(sum, 6)).toLocaleString(undefined, {
+      return Number(formatUnits(sum, USDT_DECIMALS)).toLocaleString(undefined, {
         minimumFractionDigits: 2,
         maximumFractionDigits: 2,
       });
@@ -389,7 +390,7 @@ export default function Dashboard() {
       setError(
         !claimableOnChainKnown
           ? "Claimable balance could not be loaded. Refresh the page or try again in a moment."
-          : `You need at least ${(Number(referralWithdrawChunkWei) / 1e6).toFixed(2)} USDT claimable to withdraw. Each transaction withdraws exactly that amount.`,
+          : `You need at least ${Number(formatUnits(BigInt(String(referralWithdrawChunkWei || 0)), USDT_DECIMALS)).toFixed(2)} USDT claimable to withdraw. Each transaction withdraws exactly that amount.`,
       );
       return;
     }
@@ -557,14 +558,28 @@ export default function Dashboard() {
     }
   };
 
-  const formatUsdt = (val) => (Number(val || 0) / 1e6).toFixed(2);
+  const formatUsdt = (val) => {
+    try {
+      return Number(formatUnits(BigInt(String(val || 0)), USDT_DECIMALS)).toFixed(2);
+    } catch {
+      return "0.00";
+    }
+  };
 
   const filterItems = (items, isNft) => {
     let out = items;
     if ((priceMin !== "" || priceMax !== "") && isNft) {
-      const min = priceMin === "" ? 0 : Number(priceMin) * 1e6;
-      const max = priceMax === "" ? 1e18 : Number(priceMax) * 1e6;
-      out = out.filter((n) => { const p = Number(n.price ?? n.listPriceWei ?? 0); return p >= min && p <= max; });
+      const min = priceMin === "" ? 0n : parseUnits(String(priceMin).trim(), USDT_DECIMALS);
+      const max = priceMax === "" ? (2n ** 256n - 2n) : parseUnits(String(priceMax).trim(), USDT_DECIMALS);
+      out = out.filter((n) => {
+        let p;
+        try {
+          p = BigInt(String(n.price ?? n.listPriceWei ?? 0));
+        } catch {
+          return false;
+        }
+        return p >= min && p <= max;
+      });
     }
     return out;
   };
@@ -802,7 +817,10 @@ export default function Dashboard() {
                           </thead>
                           <tbody>
                             {activities.map((a) => {
-                              const usdt = a.price != null ? (Number(a.price) / 1e6).toFixed(0) : null;
+                              const usdt =
+                                a.price != null
+                                  ? Number(formatUnits(BigInt(String(a.price)), USDT_DECIMALS)).toFixed(0)
+                                  : null;
                               const assetLabel =
                                 a.type === "subscription"
                                   ? "Subscription"
@@ -898,7 +916,14 @@ export default function Dashboard() {
                       <div className="profile-hub__nft-card-row">
                         <span className="profile-hub__nft-id">GLFA #{nft.tokenId}</span>
                         <span className="profile-hub__nft-price">
-                          <span className="profile-hub__nft-price-label">{nft.isListed ? (Number(nft.price || nft.listPriceWei) / 1e6).toFixed(0) : unlistedPriceLabel} USDT <img src="/USDT_BEP20.png" alt="" className="usdt-logo-inline" aria-hidden="true" /></span>
+                          <span className="profile-hub__nft-price-label">
+                            {nft.isListed
+                              ? Number(
+                                  formatUnits(BigInt(String(nft.price || nft.listPriceWei || 0)), USDT_DECIMALS)
+                                ).toFixed(0)
+                              : unlistedPriceLabel}{" "}
+                            USDT <img src="/USDT_BEP20.png" alt="" className="usdt-logo-inline" aria-hidden="true" />
+                          </span>
                         </span>
                       </div>
                       <div className="profile-hub__nft-card-center">
@@ -1015,7 +1040,7 @@ export default function Dashboard() {
                       >
                         {loadingWithdraw
                           ? "Withdrawing…"
-                          : `Withdraw ${(Number(referralWithdrawChunkWei) / 1e6).toFixed(2)} USDT`}
+                          : `Withdraw ${Number(formatUnits(BigInt(String(referralWithdrawChunkWei || 0)), USDT_DECIMALS)).toFixed(2)} USDT`}
                       </button>
                       <p className="profile-hub__referral-withdraw-hint">
                         {user?.state === "SUSPENDED"
@@ -1025,10 +1050,10 @@ export default function Dashboard() {
                             : referralStats != null && !claimableOnChainKnown
                               ? "On-chain claimable balance failed to load (RPC). Refresh the page; earnings above come from your indexed history."
                             : !canWithdrawReferral && claimableOnChainKnown && claimableReferralWei > 0n
-                              ? `Withdraw unlocks at ${(Number(referralWithdrawChunkWei) / 1e6).toFixed(2)} USDT claimable. You need ${(Number(referralWithdrawShortfallWei) / 1e6).toFixed(2)} USDT more. Each successful withdrawal sends exactly ${(Number(referralWithdrawChunkWei) / 1e6).toFixed(2)} USDT (not more, not less).`
+                              ? `Withdraw unlocks at ${Number(formatUnits(BigInt(String(referralWithdrawChunkWei || 0)), USDT_DECIMALS)).toFixed(2)} USDT claimable. You need ${Number(formatUnits(BigInt(String(referralWithdrawShortfallWei || 0)), USDT_DECIMALS)).toFixed(2)} USDT more. Each successful withdrawal sends exactly ${Number(formatUnits(BigInt(String(referralWithdrawChunkWei || 0)), USDT_DECIMALS)).toFixed(2)} USDT (not more, not less).`
                               : !canWithdrawReferral && claimableOnChainKnown && claimableReferralWei === 0n
                                 ? "Referral rewards accrue when your qualified referrals trade. Once claimable balance reaches the minimum, you can withdraw that fixed amount per transaction."
-                                : `Each withdrawal sends exactly ${(Number(referralWithdrawChunkWei) / 1e6).toFixed(2)} USDT from your claimable balance. Repeat while your balance stays at or above that amount. Requires active subscription.`}
+                                : `Each withdrawal sends exactly ${Number(formatUnits(BigInt(String(referralWithdrawChunkWei || 0)), USDT_DECIMALS)).toFixed(2)} USDT from your claimable balance. Repeat while your balance stays at or above that amount. Requires active subscription.`}
                       </p>
                     </div>
                   </>

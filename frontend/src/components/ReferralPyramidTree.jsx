@@ -7,6 +7,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { usePublicClient } from "wagmi";
 import { formatUnits } from "viem";
 import { getAvatarUrl } from "../config";
+import { USDT_DECIMALS } from "../constants/usdtDecimals";
 
 const REF_TIER_READ_ABI = [
   { name: "levelAmounts", type: "function", stateMutability: "view", inputs: [{ type: "uint256" }], outputs: [{ type: "uint256" }] },
@@ -15,12 +16,23 @@ const REF_TIER_READ_ABI = [
 
 /** Fallback if RPC/ABI read fails — matches default ReferralContract constructor. */
 function defaultTierPerTradeUsd() {
-  const grossWei = [500000n, 250000n, 250000n, 250000n, 150000n, 150000n, 150000n, 100000n, 100000n, 100000n];
+  const grossWei = [
+    500000000000000000n,
+    250000000000000000n,
+    250000000000000000n,
+    250000000000000000n,
+    150000000000000000n,
+    150000000000000000n,
+    150000000000000000n,
+    100000000000000000n,
+    100000000000000000n,
+    100000000000000000n,
+  ];
   const div = [1n, 2n, 3n, 4n, 5n, 6n, 6n, 6n, 6n, 6n];
   const o = {};
   for (let i = 0; i < 10; i++) {
     const per = grossWei[i] / div[i];
-    o[i + 1] = formatUnits(per, 6).replace(/\.?0+$/, "") || "0";
+    o[i + 1] = formatUnits(per, USDT_DECIMALS).replace(/\.?0+$/, "") || "0";
   }
   return o;
 }
@@ -28,7 +40,7 @@ function defaultTierPerTradeUsd() {
 function fmtRateFromChain(grossWei, divWei) {
   const d = divWei > 0n ? divWei : 1n;
   const per = grossWei / d;
-  return formatUnits(per, 6).replace(/\.?0+$/, "") || "0";
+  return formatUnits(per, USDT_DECIMALS).replace(/\.?0+$/, "") || "0";
 }
 
 const MAX_L1_COLS = 48;

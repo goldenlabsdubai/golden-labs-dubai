@@ -9,7 +9,7 @@
  *
  * Env keys used:
  *   RPC_URL
- *   CHAIN_ID or BOT_CHAIN_ID — e.g. 97 (BSC testnet), 56 (BSC mainnet); pins network to avoid eth_chainId RPS issues
+ *   CHAIN_ID or BOT_CHAIN_ID — defaults to 56 (BSC mainnet); testnet not supported
  *   MARKETPLACE_AND_RESERVE_POOL_CONTRACT_ADDRESS (legacy: MARKETPLACE_CONTRACT_ADDRESS)
  *   NFT_CONTRACT_ADDRESS
  *   USDT_ADDRESS
@@ -43,7 +43,7 @@ const __dirname = path.dirname(__filename);
 dotenv.config({ path: path.join(__dirname, ".env") });
 
 const RPC = process.env.RPC_URL || "http://127.0.0.1:8545";
-/** If set, skips automatic chain detection (fewer RPC calls; avoids RPS failures during startup). BSC testnet = 97, BSC mainnet = 56. */
+/** If set, skips automatic chain detection (fewer RPC calls; avoids RPS failures during startup). BSC mainnet = 56. Testnet is not supported. */
 const BOT_CHAIN_ID_RAW = process.env.CHAIN_ID || process.env.BOT_CHAIN_ID || "";
 const BOT_CHAIN_ID = (() => {
   const s = String(BOT_CHAIN_ID_RAW || "").trim();
@@ -55,25 +55,26 @@ const MARKETPLACE_ADDR =
   process.env.MARKETPLACE_AND_RESERVE_POOL_CONTRACT_ADDRESS || process.env.MARKETPLACE_CONTRACT_ADDRESS;
 const NFT_ADDR = process.env.NFT_CONTRACT_ADDRESS;
 const USDT_ADDR = process.env.USDT_ADDRESS;
-/** When CHAIN_ID is unset, infer from common RPC host patterns so JsonRpcProvider skips detectNetwork (saves RPS). */
-function inferChainIdFromRpcUrl(url) {
+/** When CHAIN_ID is unset, infer BSC mainnet (56) from common RPC host patterns so JsonRpcProvider skips detectNetwork (saves RPS). */
+function inferMainnetChainIdFromRpcUrl(url) {
   const u = String(url || "").toLowerCase();
   if (
-    u.includes("bsc-testnet") ||
-    u.includes("chapel") ||
-    u.includes("prebsc") ||
-    (u.includes("chainstack") && u.includes("testnet"))
+    u.includes("bsc-mainnet") ||
+    u.includes("bsc-dataseed") ||
+    u.includes("binance.org/nodes") ||
+    (u.includes("chainstack") && u.includes("mainnet"))
   ) {
-    return 97;
-  }
-  if (u.includes("bsc-mainnet") || u.includes("bsc-dataseed") || u.includes("binance.org/nodes")) {
     return 56;
   }
   return NaN;
 }
+const INFERRED_CHAIN_ID_FROM_RPC = inferMainnetChainIdFromRpcUrl(RPC);
 const RESOLVED_CHAIN_ID = (() => {
   if (Number.isFinite(BOT_CHAIN_ID) && BOT_CHAIN_ID > 0) return BOT_CHAIN_ID;
-  return inferChainIdFromRpcUrl(RPC);
+  if (Number.isFinite(INFERRED_CHAIN_ID_FROM_RPC) && INFERRED_CHAIN_ID_FROM_RPC > 0) {
+    return INFERRED_CHAIN_ID_FROM_RPC;
+  }
+  return 56;
 })();
 const LOCK_TTL_MS = Number(process.env.BOT_LOCK_TTL_MS || 2 * 60 * 1000);
 const CONTROL_REFRESH_MS = Number(process.env.BOT_CONTROL_REFRESH_MS || 5000);
@@ -289,12 +290,12 @@ async function main() {
   provider.pollingInterval = Math.max(4000, RPC_POLLING_INTERVAL_MS);
   if (Number.isFinite(RESOLVED_CHAIN_ID) && RESOLVED_CHAIN_ID > 0) {
     const src =
-      Number.isFinite(BOT_CHAIN_ID) && BOT_CHAIN_ID > 0 ? "CHAIN_ID/BOT_CHAIN_ID" : "RPC_URL (inferred)";
+      Number.isFinite(BOT_CHAIN_ID) && BOT_CHAIN_ID > 0
+        ? "CHAIN_ID/BOT_CHAIN_ID"
+        : Number.isFinite(INFERRED_CHAIN_ID_FROM_RPC) && INFERRED_CHAIN_ID_FROM_RPC > 0
+          ? "RPC_URL (BSC mainnet pattern)"
+          : "default BSC mainnet";
     console.log(`Bot ${botId}: RPC chain pinned CHAIN_ID=${RESOLVED_CHAIN_ID} (${src})`);
-  } else {
-    console.warn(
-      `Bot ${botId}: set CHAIN_ID in .env (e.g. 97 BSC testnet, 56 BSC mainnet) to skip network auto-detect and reduce RPC usage`
-    );
   }
   const wallet = new ethers.Wallet(privateKey, provider);
   const self = wallet.address.toLowerCase();

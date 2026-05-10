@@ -1,6 +1,6 @@
 /**
  * Upload the single .mp4 NFT asset to Pinata (one pin = no account limit issue).
- * Metadata for tokens 1–10000 is served dynamically by the backend (no 10k files on IPFS).
+ * Metadata for tokens 1..NFT_MAX_SUPPLY is served dynamically by the backend (one shared .mp4; no per-token files on IPFS).
  *
  * Run from backend: npm run upload-nft-pinata
  *
@@ -13,7 +13,7 @@
  * After upload, set in backend/.env:
  *   NFT_MP4_CID=<printed cid>
  *
- * Backend will then serve metadata for tokenId 1–10000 at /api/marketplace/nft-metadata/:tokenId
+ * Backend will then serve metadata for each tokenId at /api/marketplace/nft-metadata/:tokenId
  * (same .mp4 for every token).
  */
 
@@ -65,7 +65,7 @@ async function main() {
   console.log("CID (the .mp4):", cid);
   console.log("\nSet in backend/.env:");
   console.log("NFT_MP4_CID=" + cid);
-  console.log("\nThen restart the backend. Metadata for tokens 1–10000 will be served from your API (same video for all).");
+  console.log("\nThen restart the backend. Metadata for valid tokenIds will be served from your API (same video for all).");
 }
 
 main().catch((e) => {

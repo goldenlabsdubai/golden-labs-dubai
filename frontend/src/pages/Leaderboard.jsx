@@ -7,6 +7,8 @@ import { useWalletConnect } from "../hooks/useWalletConnect";
 import { API, getAvatarUrl } from "../config";
 import { canAccessTradingNav } from "../utils/tradingAccess";
 import { NavbarBrandLink } from "../components/NavbarBrandLink";
+import { formatUnits } from "viem";
+import { USDT_DECIMALS } from "../constants/usdtDecimals";
 
 const TOP_SELLERS_LIMIT = 10;
 
@@ -178,7 +180,7 @@ export default function Leaderboard() {
                           <strong>{seller.referrals ?? 0}</strong>
                         </td>
                         <td className="leaderboard-page__cell leaderboard-page__cell--earnings">
-                          <span className="leaderboard-page__earnings">${(Number(seller.earnings || "0") / 1e6).toFixed(2)} USDT</span>
+                          <span className="leaderboard-page__earnings">${Number(formatUnits(BigInt(String(seller.earnings || "0")), USDT_DECIMALS)).toFixed(2)} USDT</span>
                           <img src="/USDT_BEP20.png" alt="" className="usdt-logo-inline" aria-hidden="true" />
                         </td>
                       </tr>

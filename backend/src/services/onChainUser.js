@@ -4,6 +4,7 @@
  */
 import { ethers } from "ethers";
 import { getMarketplaceAndReservePoolAddress } from "../config/contractsEnv.js";
+import { USDT_DECIMALS } from "../constants/usdtDecimals.js";
 
 function getProvider() {
   const rpc = process.env.RPC_URL || "http://127.0.0.1:8545";
@@ -42,7 +43,7 @@ function getMarketplaceAddress() {
 const SUBSCRIPTION_PRICE_ABI = ["function subscriptionPrice() view returns (uint256)"];
 
 /**
- * Reads SubscriptionContract.subscriptionPrice() (USDT, 6 decimals).
+ * Reads SubscriptionContract.subscriptionPrice() (USDT, token decimals from USDT_DECIMALS).
  * Throws if address missing, RPC fails, or price is zero — no placeholder values.
  */
 export async function getSubscriptionPriceFromChain() {
@@ -57,7 +58,7 @@ export async function getSubscriptionPriceFromChain() {
   if (priceWei === "0") {
     throw new Error("subscriptionPrice is zero on-chain");
   }
-  const price = String(Number(ethers.formatUnits(wei, 6)));
+  const price = String(Number(ethers.formatUnits(wei, USDT_DECIMALS)));
   const priceFormatted = `$${price} USDT`;
   return { priceWei, price, priceFormatted, subscriptionKnown: true };
 }

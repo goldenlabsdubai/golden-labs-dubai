@@ -17,7 +17,6 @@ export const MARKETPLACE_AND_RESERVE_POOL_ADDRESS = (
 export const EXPLORER_BY_CHAIN = {
   1: "https://etherscan.io",
   56: "https://bscscan.com",
-  97: "https://testnet.bscscan.com",
   137: "https://polygonscan.com",
   8453: "https://basescan.org",
 };

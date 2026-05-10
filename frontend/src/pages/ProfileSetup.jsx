@@ -11,6 +11,7 @@ import { SiweMessage } from "siwe";
 import { useAuth } from "../hooks/useAuth";
 import { useWalletConnect } from "../hooks/useWalletConnect";
 import { API, ASSET_IMAGE } from "../config";
+import { BSC_CHAIN_ID } from "../constants/chain";
 import { getTransactionErrorMessage } from "../utils/transactionError";
 import { NavbarBrandLink } from "../components/NavbarBrandLink";
 
@@ -102,9 +103,8 @@ export default function ProfileSetup() {
       setError("Wallet not connected");
       return;
     }
-    const BSC_TESTNET_CHAIN_ID = 97;
-    if (Number(chainId) !== BSC_TESTNET_CHAIN_ID) {
-      setError("Switch your wallet to BSC Testnet (Chain ID 97), then try again.");
+    if (Number(chainId) !== BSC_CHAIN_ID) {
+      setError("Switch your wallet to BNB Smart Chain (Chain ID 56), then try again.");
       return;
     }
     if (!referrerRawEffective) {
@@ -156,10 +156,8 @@ export default function ProfileSetup() {
       setError("Wallet not connected");
       return;
     }
-    // Must match AppKit defaultNetwork (BSC Testnet) so SIWE chainId matches what users expect
-    const BSC_TESTNET_CHAIN_ID = 97;
-    if (Number(chainId) !== BSC_TESTNET_CHAIN_ID) {
-      setError("Switch your wallet to BSC Testnet (Chain ID 97), then tap Save again.");
+    if (Number(chainId) !== BSC_CHAIN_ID) {
+      setError("Switch your wallet to BNB Smart Chain (Chain ID 56), then tap Save again.");
       return;
     }
     const usernameVal = username.trim();

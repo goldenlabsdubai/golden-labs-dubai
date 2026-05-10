@@ -3,7 +3,7 @@ import { getPool } from "../config/postgres.js";
 import * as User from "./user.js";
 import * as MetaPg from "./metaPostgres.js";
 
-/** `amount` is the USDT (6 decimals) actually credited in that event (L1 = full level slice; L2+ = split per `levelAmounts[level-1]/minDirectReferralsRequired[level-1]` when seats qualify). */
+/** `amount` is the USDT actually credited in that event, in wei at chain `USDT_DECIMALS` (L1 = full level slice; L2+ = split per `levelAmounts[level-1]/minDirectReferralsRequired[level-1]` when seats qualify). */
 const ABI = ["event ReferralPaid(address indexed referrer, uint256 level, uint256 amount)"];
 
 const MAX_BLOCKS_PER_QUERY = 10; // Alchemy Free tier: eth_getLogs max 10 blocks per request

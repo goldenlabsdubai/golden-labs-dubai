@@ -1,24 +1,16 @@
 import { useCallback, useEffect, useState } from "react";
 import { useWalletClient } from "wagmi";
 import { createPublicClient, formatUnits, http, isAddress, parseUnits } from "viem";
-import { bsc, bscTestnet } from "viem/chains";
+import { bsc } from "viem/chains";
 
-const CONTRACT_CHAIN_ID = (() => {
-  const n = Number(import.meta.env.VITE_CHAIN_ID);
-  if (n === 56 || n === 97) return n;
-  return 97;
-})();
+const USDT_DECIMALS = Number(import.meta.env.VITE_USDT_DECIMALS || 18) || 18;
 
-const readChain = CONTRACT_CHAIN_ID === 56 ? bsc : bscTestnet;
 const readRpcUrl =
-  CONTRACT_CHAIN_ID === 56
-    ? import.meta.env.VITE_BSC_RPC_URL || "https://bsc-dataseed.binance.org/"
-    : import.meta.env.VITE_BSC_TESTNET_RPC_URL ||
-      "https://data-seed-prebsc-1-s1.binance.org:8545/";
+  import.meta.env.VITE_BSC_RPC_URL || "https://bsc-dataseed.binance.org/";
 
 /** Dedicated RPC client for reads — avoids `usePublicClient()` being undefined before the wallet session is ready. */
 const readPublicClient = createPublicClient({
-  chain: readChain,
+  chain: bsc,
   transport: http(readRpcUrl),
 });
 
@@ -247,31 +239,31 @@ export default function ContractsPage({ connectedWallet }) {
       ]);
 
       const nextState = {
-        subscriptionPrice: formatUnits(subscriptionPrice, 6),
-        subscriptionReserveAmount: formatUnits(subscriptionReserveAmount, 6),
-        subscriptionCreatorAmount: formatUnits(subscriptionCreatorAmount, 6),
-        subscriptionBotAAmount: formatUnits(subscriptionBotAAmount, 6),
-        subscriptionBotBAmount: formatUnits(subscriptionBotBAmount, 6),
+        subscriptionPrice: formatUnits(subscriptionPrice, USDT_DECIMALS),
+        subscriptionReserveAmount: formatUnits(subscriptionReserveAmount, USDT_DECIMALS),
+        subscriptionCreatorAmount: formatUnits(subscriptionCreatorAmount, USDT_DECIMALS),
+        subscriptionBotAAmount: formatUnits(subscriptionBotAAmount, USDT_DECIMALS),
+        subscriptionBotBAmount: formatUnits(subscriptionBotBAmount, USDT_DECIMALS),
         inactivityDays: String(inactivityDays),
-        profitThreshold: formatUnits(profitThreshold, 6),
-        referralTotalAmountOnChain: formatUnits(referralTotalAmountOnChain, 6),
-        referralWithdrawChunkOnChain: formatUnits(referralWithdrawChunkOnChainRaw, 6),
-        levelAmounts: levelAmountNums.map((x) => formatUnits(x, 6)),
+        profitThreshold: formatUnits(profitThreshold, USDT_DECIMALS),
+        referralTotalAmountOnChain: formatUnits(referralTotalAmountOnChain, USDT_DECIMALS),
+        referralWithdrawChunkOnChain: formatUnits(referralWithdrawChunkOnChainRaw, USDT_DECIMALS),
+        levelAmounts: levelAmountNums.map((x) => formatUnits(x, USDT_DECIMALS)),
         minDirectReferralsOnChain: minDirectNums.map((x) => String(x)),
         creatorWallet,
         botAWallet,
         botBWallet,
-        listPrice: formatUnits(listPrice, 6),
-        tradingIncomeAmount: formatUnits(tradingIncomeAmount, 6),
-        referralTotalAmount: formatUnits(referralTotalAmount, 6),
-        creatorAmount: formatUnits(creatorAmount, 6),
-        botAAmount: formatUnits(botAAmount, 6),
-        botBAmount: formatUnits(botBAmount, 6),
-        reserveBalance: formatUnits(reserveBalance, 6),
+        listPrice: formatUnits(listPrice, USDT_DECIMALS),
+        tradingIncomeAmount: formatUnits(tradingIncomeAmount, USDT_DECIMALS),
+        referralTotalAmount: formatUnits(referralTotalAmount, USDT_DECIMALS),
+        creatorAmount: formatUnits(creatorAmount, USDT_DECIMALS),
+        botAAmount: formatUnits(botAAmount, USDT_DECIMALS),
+        botBAmount: formatUnits(botBAmount, USDT_DECIMALS),
+        reserveBalance: formatUnits(reserveBalance, USDT_DECIMALS),
         dynamicMintEnabled,
-        dynamicMintStartThreshold: formatUnits(dynamicMintStartThreshold, 6),
-        dynamicMintStopThreshold: formatUnits(dynamicMintStopThreshold, 6),
-        mintPrice: formatUnits(mintPrice, 6),
+        dynamicMintStartThreshold: formatUnits(dynamicMintStartThreshold, USDT_DECIMALS),
+        dynamicMintStopThreshold: formatUnits(dynamicMintStopThreshold, USDT_DECIMALS),
+        mintPrice: formatUnits(mintPrice, USDT_DECIMALS),
         maxWalletHoldings: String(maxWalletHoldings),
         dynamicMintBatchSize: String(dynamicMintBatchSize),
       };
@@ -390,7 +382,7 @@ export default function ContractsPage({ connectedWallet }) {
       </div>
 
       <p className="section__empty">
-        Live values are read via RPC on chain {CONTRACT_CHAIN_ID} ({readChain.name}). Match <code>VITE_CHAIN_ID</code> and contract addresses to your deployment; use the same network in your wallet before sending transactions.
+        Live values are read via RPC on {bsc.name} (chain 56). Match <code>VITE_*_CONTRACT_*</code> addresses to your deployment; connect your wallet to BNB Smart Chain before sending transactions.
       </p>
       {error && <p className="section__error">{error}</p>}
       {success && <p className="section__success">{success}</p>}
@@ -416,7 +408,7 @@ export default function ContractsPage({ connectedWallet }) {
                 address: CONTRACTS.subscription,
                 abi: SUBSCRIPTION_ABI,
                 functionName: "setSubscriptionPrice",
-                args: [parseUnits(form.subscriptionPrice || "0", 6)],
+                args: [parseUnits(form.subscriptionPrice || "0", USDT_DECIMALS)],
                 message: "Subscription price updated on-chain.",
               }).catch((e) => setError(e?.shortMessage || e?.message || "Transaction failed"))
             }
@@ -469,10 +461,10 @@ export default function ContractsPage({ connectedWallet }) {
                 abi: SUBSCRIPTION_ABI,
                 functionName: "setSubscriptionSplitAmounts",
                 args: [
-                  parseUnits(form.subscriptionReserveAmount || "0", 6),
-                  parseUnits(form.subscriptionCreatorAmount || "0", 6),
-                  parseUnits(form.subscriptionBotAAmount || "0", 6),
-                  parseUnits(form.subscriptionBotBAmount || "0", 6),
+                  parseUnits(form.subscriptionReserveAmount || "0", USDT_DECIMALS),
+                  parseUnits(form.subscriptionCreatorAmount || "0", USDT_DECIMALS),
+                  parseUnits(form.subscriptionBotAAmount || "0", USDT_DECIMALS),
+                  parseUnits(form.subscriptionBotBAmount || "0", USDT_DECIMALS),
                 ],
                 message: "Subscription split amounts updated on-chain.",
               }).catch((e) => setError(e?.shortMessage || e?.message || "Transaction failed"))
@@ -523,7 +515,7 @@ export default function ContractsPage({ connectedWallet }) {
                 address: CONTRACTS.subscription,
                 abi: SUBSCRIPTION_ABI,
                 functionName: "setProfitThreshold",
-                args: [parseUnits(form.profitThreshold || "0", 6)],
+                args: [parseUnits(form.profitThreshold || "0", USDT_DECIMALS)],
                 message: "Profit threshold updated on-chain.",
               }).catch((e) => setError(e?.shortMessage || e?.message || "Transaction failed"))
             }
@@ -552,7 +544,7 @@ export default function ContractsPage({ connectedWallet }) {
                 address: CONTRACTS.referral,
                 abi: REFERRAL_ABI,
                 functionName: "setReferralTotalAmount",
-                args: [parseUnits(form.referralTotalAmountOnChain || "0", 6)],
+                args: [parseUnits(form.referralTotalAmountOnChain || "0", USDT_DECIMALS)],
                 message: "Referral total amount updated on-chain.",
               }).catch((e) => setError(e?.shortMessage || e?.message || "Transaction failed"))
             }
@@ -580,7 +572,7 @@ export default function ContractsPage({ connectedWallet }) {
                 address: CONTRACTS.referral,
                 abi: REFERRAL_ABI,
                 functionName: "setReferralWithdrawChunk",
-                args: [parseUnits(form.referralWithdrawChunk || "0", 6)],
+                args: [parseUnits(form.referralWithdrawChunk || "0", USDT_DECIMALS)],
                 message: "Referral withdraw chunk updated on-chain.",
               }).catch((e) => setError(e?.shortMessage || e?.message || "Transaction failed"))
             }
@@ -614,7 +606,7 @@ export default function ContractsPage({ connectedWallet }) {
                 address: CONTRACTS.referral,
                 abi: REFERRAL_ABI,
                 functionName: "setAllLevelAmounts",
-                args: [form.levelAmounts.map((v) => parseUnits(v || "0", 6))],
+                args: [form.levelAmounts.map((v) => parseUnits(v || "0", USDT_DECIMALS))],
                 message: "Referral level amounts updated on-chain.",
               }).catch((e) => setError(e?.shortMessage || e?.message || "Transaction failed"))
             }
@@ -792,12 +784,12 @@ export default function ContractsPage({ connectedWallet }) {
                 abi: MARKETPLACE_ABI,
                 functionName: "setTradeConfig",
                 args: [
-                  parseUnits(form.listPrice || "0", 6),
-                  parseUnits(form.tradingIncomeAmount || "0", 6),
-                  parseUnits(form.referralTotalAmount || "0", 6),
-                  parseUnits(form.creatorAmount || "0", 6),
-                  parseUnits(form.botAAmount || "0", 6),
-                  parseUnits(form.botBAmount || "0", 6),
+                  parseUnits(form.listPrice || "0", USDT_DECIMALS),
+                  parseUnits(form.tradingIncomeAmount || "0", USDT_DECIMALS),
+                  parseUnits(form.referralTotalAmount || "0", USDT_DECIMALS),
+                  parseUnits(form.creatorAmount || "0", USDT_DECIMALS),
+                  parseUnits(form.botAAmount || "0", USDT_DECIMALS),
+                  parseUnits(form.botBAmount || "0", USDT_DECIMALS),
                 ],
                 message: "Marketplace trade config updated on-chain.",
               }).catch((e) => setError(e?.shortMessage || e?.message || "Transaction failed"))
@@ -845,8 +837,8 @@ export default function ContractsPage({ connectedWallet }) {
                 functionName: "setDynamicMintConfig",
                 args: [
                   form.dynamicMintEnabled,
-                  parseUnits(form.dynamicMintStartThreshold || "0", 6),
-                  parseUnits(form.dynamicMintStopThreshold || "0", 6),
+                  parseUnits(form.dynamicMintStartThreshold || "0", USDT_DECIMALS),
+                  parseUnits(form.dynamicMintStopThreshold || "0", USDT_DECIMALS),
                 ],
                 message: "Dynamic mint config updated on-chain.",
               }).catch((e) => setError(e?.shortMessage || e?.message || "Transaction failed"))
@@ -906,7 +898,7 @@ export default function ContractsPage({ connectedWallet }) {
                 functionName: "withdrawReserveUSDT",
                 args: [
                   form.reserveWithdrawTo,
-                  parseUnits(form.reserveWithdrawAmount || "0", 6),
+                  parseUnits(form.reserveWithdrawAmount || "0", USDT_DECIMALS),
                   form.reserveWithdrawReason || "reserve_admin_withdraw",
                 ],
                 message: "Reserve USDT withdrawn from merged marketplace.",
@@ -938,7 +930,7 @@ export default function ContractsPage({ connectedWallet }) {
                 address: CONTRACTS.nft,
                 abi: NFT_ABI,
                 functionName: "setMintPrice",
-                args: [parseUnits(form.mintPrice || "0", 6)],
+                args: [parseUnits(form.mintPrice || "0", USDT_DECIMALS)],
                 message: "NFT mint price updated on-chain.",
               }).catch((e) => setError(e?.shortMessage || e?.message || "Transaction failed"))
             }

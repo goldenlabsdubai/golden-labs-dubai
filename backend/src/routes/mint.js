@@ -2,6 +2,7 @@ import { Router } from "express";
 import { ethers } from "ethers";
 import * as User from "../services/user.js";
 import { getOnChainUserStatus } from "../services/onChainUser.js";
+import { USDT_DECIMALS } from "../constants/usdtDecimals.js";
 
 const router = Router();
 
@@ -42,7 +43,7 @@ router.get("/config", async (_, res) => {
     if (mintPriceWei === "0") {
       return res.status(503).json({ error: "NFT mintPrice is zero on-chain", mintPriceKnown: false });
     }
-    const mintPriceUsdt = (Number(mintPriceWei) / 1e6).toFixed(6).replace(/\.?0+$/, "");
+    const mintPriceUsdt = String(ethers.formatUnits(mintPriceWei, USDT_DECIMALS)).replace(/\.?0+$/, "");
 
     res.json({
       price: mintPriceUsdt,

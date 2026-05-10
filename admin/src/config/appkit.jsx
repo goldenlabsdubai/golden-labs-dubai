@@ -1,11 +1,11 @@
 /**
- * Same wallet connect (Reown AppKit) as main platform – shows all wallet options.
+ * Same wallet connect (Reown AppKit) as main platform — BSC mainnet only.
  */
 import { createAppKit } from "@reown/appkit/react";
 import { WagmiProvider, http } from "wagmi";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { WagmiAdapter } from "@reown/appkit-adapter-wagmi";
-import { bsc, bscTestnet } from "@reown/appkit/networks";
+import { bsc } from "@reown/appkit/networks";
 
 const queryClient = new QueryClient();
 
@@ -25,11 +25,8 @@ const metadata = {
 
 const BSC_MAINNET_RPC =
   import.meta.env.VITE_BSC_RPC_URL || "https://bsc-dataseed.binance.org/";
-const BSC_TESTNET_RPC =
-  import.meta.env.VITE_BSC_TESTNET_RPC_URL ||
-  "https://data-seed-prebsc-1-s1.binance.org:8545/";
 
-const networks = [bsc, bscTestnet];
+const networks = [bsc];
 
 const wagmiAdapter = new WagmiAdapter({
   networks,
@@ -37,14 +34,13 @@ const wagmiAdapter = new WagmiAdapter({
   ssr: true,
   transports: {
     56: http(BSC_MAINNET_RPC),
-    97: http(BSC_TESTNET_RPC),
   },
 });
 
 createAppKit({
   adapters: [wagmiAdapter],
   networks,
-  defaultNetwork: bscTestnet,
+  defaultNetwork: bsc,
   projectId,
   metadata,
   features: {
