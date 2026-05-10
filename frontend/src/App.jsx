@@ -32,9 +32,30 @@ function readStoredAuth() {
 function ForceBscMainnet() {
   const { isConnected, chainId } = useAccount();
   const { switchChainAsync } = useSwitchChain();
+  const chainIdRef = useRef(chainId);
+  chainIdRef.current = chainId;
+  /** After a failed/rejected switch, don’t immediately re-prompt (wagmi may still report a stale chain briefly). */
+  const switchCooldownUntilRef = useRef(0);
+
   useEffect(() => {
-    if (!isConnected || chainId == null || chainId === BSC_CHAIN_ID) return;
-    switchChainAsync({ chainId: BSC_CHAIN_ID }).catch(() => {});
+    if (!isConnected) return;
+    const cid = chainId != null ? Number(chainId) : null;
+    if (cid == null || Number.isNaN(cid) || cid === BSC_CHAIN_ID) return;
+
+    const t = window.setTimeout(() => {
+      const latest = chainIdRef.current != null ? Number(chainIdRef.current) : null;
+      if (latest == null || Number.isNaN(latest) || latest === BSC_CHAIN_ID) return;
+      if (Date.now() < switchCooldownUntilRef.current) return;
+      switchChainAsync({ chainId: BSC_CHAIN_ID })
+        .then(() => {
+          switchCooldownUntilRef.current = 0;
+        })
+        .catch(() => {
+          switchCooldownUntilRef.current = Date.now() + 12_000;
+        });
+    }, 800);
+
+    return () => window.clearTimeout(t);
   }, [isConnected, chainId, switchChainAsync]);
   return null;
 }
