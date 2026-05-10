@@ -16,6 +16,7 @@ import {
 import InsufficientBalanceModal from "../components/InsufficientBalanceModal";
 import { NavbarBrandLink } from "../components/NavbarBrandLink";
 import { USDT_DECIMALS } from "../constants/usdtDecimals";
+import { formatUsdtTrim, readContractUint256 } from "../utils/formatUsdt";
 
 // USDT (BEP20) – balance and approve. Use same chain as connected wallet.
 const USDT_ABI = [
@@ -55,9 +56,11 @@ export default function Subscription() {
     address: subContractAddressNormalized || undefined,
     abi: SUBSCRIPTION_ABI,
     functionName: "subscriptionPrice",
+    query: { enabled: Boolean(subContractAddressNormalized) },
+    ...(chainId != null && { chainId }),
   });
-  const subscriptionPriceFormatted =
-    subscriptionPriceWei != null ? `${Number(formatUnits(subscriptionPriceWei, USDT_DECIMALS))} USDT` : null;
+  const subscriptionPricePretty = subscriptionPriceWei != null ? formatUsdtTrim(subscriptionPriceWei) : null;
+  const subscriptionPriceFormatted = subscriptionPricePretty != null ? `${subscriptionPricePretty} USDT` : null;
   const [portalReady, setPortalReady] = useState(false);
   const menuRef = useRef(null);
 
@@ -145,7 +148,7 @@ export default function Subscription() {
     setError("");
     try {
       const amount =
-        subscriptionPriceWei ??
+        readContractUint256(subscriptionPriceWei) ??
         (config.priceWei !== undefined && config.priceWei !== "" ? BigInt(String(config.priceWei)) : undefined);
       if (amount == null) {
         setError("Subscription price could not be loaded. Refresh the page or check your network.");

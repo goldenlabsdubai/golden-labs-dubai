@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { Link } from "react-router-dom";
 import { AppRouteLink } from "../components/AppRouteLink";
 import { assignAppPath } from "../utils/appNavigation";
-import { useBalance, useDisconnect, useWriteContract, usePublicClient, useWatchContractEvent, useReadContract } from "wagmi";
+import { useBalance, useDisconnect, useWriteContract, usePublicClient, useWatchContractEvent, useReadContract, useAccount } from "wagmi";
 import { formatEther, formatUnits } from "viem";
 import { useAuth } from "../hooks/useAuth";
 import { useWalletConnect } from "../hooks/useWalletConnect";
@@ -50,6 +50,7 @@ const LIST_RESUME_TTL_MS = 45 * 60 * 1000;
 export default function Marketplace() {
   const { user, token, refreshUser } = useAuth();
   const { openModal, isConnected, address } = useWalletConnect();
+  const { chainId } = useAccount();
   const { data: balanceData } = useBalance({ address: address ?? undefined });
   const { disconnect: disconnectWallet } = useDisconnect();
   const [listings, setListings] = useState([]);
@@ -93,6 +94,7 @@ export default function Marketplace() {
     abi: MARKETPLACE_ABI,
     functionName: "listPrice",
     query: { enabled: Boolean(marketplaceAddressNormalized) },
+    ...(chainId != null && { chainId }),
   });
   const chainListUsdt = marketplaceListPriceUsdtLabel(marketplaceListPriceWei);
   const chainListWeiStr = marketplaceListPriceWei != null ? String(marketplaceListPriceWei) : null;
@@ -102,6 +104,7 @@ export default function Marketplace() {
     abi: USDT_ABI,
     functionName: "balanceOf",
     args: address ? [address] : undefined,
+    ...(chainId != null && { chainId }),
   });
   const usdtBalanceFormatted = usdtBalanceRaw != null ? Number(formatUnits(usdtBalanceRaw, USDT_DECIMALS)).toFixed(2) : null;
   const bnbBalanceFormatted = balanceData?.value != null ? Number(formatEther(balanceData.value)).toFixed(4) : null;

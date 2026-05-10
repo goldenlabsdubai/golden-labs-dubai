@@ -58,7 +58,8 @@ export async function getSubscriptionPriceFromChain() {
   if (priceWei === "0") {
     throw new Error("subscriptionPrice is zero on-chain");
   }
-  const price = String(Number(ethers.formatUnits(wei, USDT_DECIMALS)));
+  const raw = ethers.formatUnits(wei, USDT_DECIMALS);
+  const price = raw.includes(".") ? raw.replace(/0+$/, "").replace(/\.$/, "") || "0" : raw;
   const priceFormatted = `$${price} USDT`;
   return { priceWei, price, priceFormatted, subscriptionKnown: true };
 }

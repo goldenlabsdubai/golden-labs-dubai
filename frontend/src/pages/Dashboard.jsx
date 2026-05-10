@@ -25,6 +25,7 @@ import InsufficientBalanceModal from "../components/InsufficientBalanceModal";
 import ReferralPyramidTree from "../components/ReferralPyramidTree";
 import { NavbarBrandLink } from "../components/NavbarBrandLink";
 import { USDT_DECIMALS } from "../constants/usdtDecimals";
+import { defaultReferralWithdrawChunkWei, readContractUint256 } from "../utils/formatUsdt";
 
 const NFT_ABI = [
   { name: "approve", type: "function", stateMutability: "nonpayable", inputs: [{ name: "to", type: "address" }, { name: "tokenId", type: "uint256" }], outputs: [] },
@@ -101,6 +102,7 @@ export default function Dashboard() {
     abi: MARKETPLACE_ABI,
     functionName: "listPrice",
     query: { enabled: Boolean(marketplaceAddressNormalized) },
+    ...(chainId != null && { chainId }),
   });
   const chainListUsdt = marketplaceListPriceUsdtLabel(marketplaceListPriceWei);
   const chainListWeiStr = marketplaceListPriceWei != null ? String(marketplaceListPriceWei) : null;
@@ -109,13 +111,12 @@ export default function Dashboard() {
     abi: REFERRAL_ABI,
     functionName: "referralWithdrawChunk",
     query: { enabled: Boolean(referralAddressNormalized) },
+    ...(chainId != null && { chainId }),
   });
   const referralWithdrawChunkWei =
-    referralWithdrawChunkRaw != null
-      ? BigInt(referralWithdrawChunkRaw)
-      : referralStats?.referralWithdrawChunkWei != null
-        ? BigInt(referralStats.referralWithdrawChunkWei)
-        : 10n * 10n ** 6n;
+    readContractUint256(referralWithdrawChunkRaw) ??
+    readContractUint256(referralStats?.referralWithdrawChunkWei) ??
+    defaultReferralWithdrawChunkWei(USDT_DECIMALS);
   const claimableOnChainRaw = referralStats?.claimableOnChain;
   const claimableReferralWei =
     claimableOnChainRaw != null && String(claimableOnChainRaw).trim() !== ""
@@ -130,6 +131,7 @@ export default function Dashboard() {
     abi: USDT_ABI,
     functionName: "balanceOf",
     args: address ? [address] : undefined,
+    ...(chainId != null && { chainId }),
   });
   const rawAddress = (token && (user?.wallet || address)) ? (user?.wallet || address) : (isConnected && address) ? address : null;
   const displayAddress = rawAddress ? String(rawAddress).toLowerCase() : null;

@@ -12,6 +12,7 @@ import InsufficientBalanceModal from "../components/InsufficientBalanceModal";
 import { NavbarBrandLink } from "../components/NavbarBrandLink";
 import { canAccessTradingNav } from "../utils/tradingAccess";
 import { USDT_DECIMALS } from "../constants/usdtDecimals";
+import { formatUsdtTrim, readContractUint256 } from "../utils/formatUsdt";
 
 const USDT_ABI = [
   { name: "balanceOf", type: "function", stateMutability: "view", inputs: [{ name: "account", type: "address" }], outputs: [{ type: "uint256" }] },
@@ -63,16 +64,22 @@ export default function Mint() {
     address: nftAddressNormalized || undefined,
     abi: NFT_ABI,
     functionName: "nextTokenId",
+    query: { enabled: Boolean(nftAddressNormalized) },
+    ...(chainId != null && { chainId }),
   });
   const { data: totalMinted } = useReadContract({
     address: nftAddressNormalized || undefined,
     abi: NFT_ABI,
     functionName: "totalMinted",
+    query: { enabled: Boolean(nftAddressNormalized) },
+    ...(chainId != null && { chainId }),
   });
   const { data: mintPriceOnChain } = useReadContract({
     address: nftAddressNormalized || undefined,
     abi: NFT_ABI,
     functionName: "mintPrice",
+    query: { enabled: Boolean(nftAddressNormalized) },
+    ...(chainId != null && { chainId }),
   });
   const { data: usdtBalanceRaw, isLoading: usdtBalanceLoading, refetch: refetchUsdtBalance } = useReadContract({
     address: usdtAddressNormalized || undefined,
@@ -173,7 +180,7 @@ export default function Mint() {
     try {
       const mintPriceWei =
         mintPriceOnChain != null
-          ? BigInt(mintPriceOnChain)
+          ? readContractUint256(mintPriceOnChain)
           : config?.priceWei != null && String(config.priceWei) !== ""
             ? BigInt(String(config.priceWei))
             : null;
@@ -234,7 +241,7 @@ export default function Mint() {
 
   const displayPrice =
     mintPriceOnChain != null
-      ? `${Number(formatUnits(mintPriceOnChain, USDT_DECIMALS))} USDT`
+      ? `${formatUsdtTrim(mintPriceOnChain)} USDT`
       : config.price != null && String(config.price) !== "" && config.mintPriceKnown !== false
         ? `${config.price} USDT`
         : configLoadError
