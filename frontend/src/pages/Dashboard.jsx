@@ -139,11 +139,17 @@ export default function Dashboard() {
   const usdtBalanceFormatted = usdtBalanceRaw != null ? Number(formatUnits(usdtBalanceRaw, USDT_DECIMALS)).toFixed(2) : null;
   const bnbBalanceFormatted = balanceData?.value != null ? Number(formatEther(balanceData.value)).toFixed(4) : null;
   const tradeIncomeWei = readContractUint256(user?.totalTradeIncomeWei) ?? 0n;
-  const referralLifetimeWei = resolveReferralLifetimeWei(user, referralStats);
+  /** Prefer /me `totalReferralIncomeWei` (explicit DB sum); else legacy fields + stats fallback. */
+  const referralIncomeWei =
+    readContractUint256(user?.totalReferralIncomeWei) ??
+    readContractUint256(user?.referralEarningsTotal) ??
+    resolveReferralLifetimeWei(user, referralStats);
+  const lifetimeWeiFromApi = readContractUint256(user?.lifetimeEarningsWei);
+  const lifetimeWei = lifetimeWeiFromApi != null ? lifetimeWeiFromApi : tradeIncomeWei + referralIncomeWei;
 
   const totalTradeIncomeUsdtFormatted = formatUsdtAmountForDashboard(tradeIncomeWei);
-  const totalReferralIncomeUsdtFormatted = formatUsdtAmountForDashboard(referralLifetimeWei);
-  const lifetimeEarningsUsdtFormatted = formatUsdtAmountForDashboard(tradeIncomeWei + referralLifetimeWei);
+  const totalReferralIncomeUsdtFormatted = formatUsdtAmountForDashboard(referralIncomeWei);
+  const lifetimeEarningsUsdtFormatted = formatUsdtAmountForDashboard(lifetimeWei);
 
   useEffect(() => {
     if (!token) return;

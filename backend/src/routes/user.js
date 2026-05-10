@@ -269,12 +269,28 @@ router.get("/me", async (req, res) => {
       ...userForResponse,
       referralEarningsTotal: sumReferralEarningsLevels(userForResponse),
     };
+    /** Referral credits indexed into Postgres (referral_earnings_l1..l10); same as `referralEarningsTotal` on /me. */
+    const totalReferralIncomeWeiFromDb = userForResponse.referralEarningsTotal;
+    let lifetimeEarningsWeiFromDb = "0";
+    try {
+      const t = BigInt(String(totalTradeIncomeWei || "0").replace(/\..*$/, "").replace(/,/g, "") || "0");
+      const r = BigInt(String(totalReferralIncomeWeiFromDb || "0").replace(/\..*$/, "").replace(/,/g, "") || "0");
+      lifetimeEarningsWeiFromDb = (t + r).toString();
+    } catch {
+      lifetimeEarningsWeiFromDb = "0";
+    }
+
     const response = toMeResponse(userForResponse);
     if (response) {
       response.isAdmin = await isAdminWallet(req.wallet || user.wallet);
       response.isBot = userWallet ? isConfiguredBotWallet(userWallet) : false;
       response.hasMinted = meChainHasMinted;
+      /** DB: seller trading-income wei from `user_activities` (successful sells × tradingIncomeAmount). */
       response.totalTradeIncomeWei = totalTradeIncomeWei;
+      /** DB: cumulative referral payouts wei (sum L1..L10, ReferralPaid indexer). */
+      response.totalReferralIncomeWei = totalReferralIncomeWeiFromDb;
+      /** DB: `totalTradeIncomeWei` + `totalReferralIncomeWei` (lifetime earnings headline). */
+      response.lifetimeEarningsWei = lifetimeEarningsWeiFromDb;
     }
     res.json(response || {});
   } catch (e) {
