@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import { Routes, Route, Navigate, useLocation } from "react-router-dom";
-import { useAccount, useSwitchChain, useReconnect } from "wagmi";
+import { useAccount, useSwitchChain } from "wagmi";
 import "./App.css";
 import { useAuth } from "./hooks/useAuth";
 import { withTradingGateOverlay } from "./utils/tradingRouteGate";
@@ -29,7 +29,9 @@ function readStoredAuth() {
   }
 }
 
+/** Only before sign-in: nudge wallet to BSC for connect/SIWE. After session exists, no auto `switchChain` (avoids repeat prompts + UI flicker from chainId churn). */
 function ForceBscMainnet() {
+  const { token } = useAuth();
   const { isConnected, chainId } = useAccount();
   const { switchChainAsync } = useSwitchChain();
   const chainIdRef = useRef(chainId);
@@ -38,6 +40,7 @@ function ForceBscMainnet() {
   const switchCooldownUntilRef = useRef(0);
 
   useEffect(() => {
+    if (token) return;
     if (!isConnected) return;
     const cid = chainId != null ? Number(chainId) : null;
     if (cid == null || Number.isNaN(cid) || cid === BSC_CHAIN_ID) return;
@@ -56,19 +59,7 @@ function ForceBscMainnet() {
     }, 800);
 
     return () => window.clearTimeout(t);
-  }, [isConnected, chainId, switchChainAsync]);
-  return null;
-}
-
-/** Restore wagmi connection from storage once when app loads so the same wallet stays connected across all pages. */
-function ReconnectOnLoad() {
-  const { mutate: reconnect } = useReconnect();
-  const done = useRef(false);
-  useEffect(() => {
-    if (done.current) return;
-    done.current = true;
-    reconnect();
-  }, [reconnect]);
+  }, [token, isConnected, chainId, switchChainAsync]);
   return null;
 }
 import Landing from "./pages/Landing";
@@ -190,7 +181,6 @@ export default function App() {
   return (
     <div className={`app${showMobileBottomNav ? " app--mobile-nav" : ""}`}>
       <SeoHead />
-      <ReconnectOnLoad />
       <ForceBscMainnet />
       <div className={`app-content${isLandingPage ? " app-content--landing" : ""}`}>
         <div id="profile-bg-layer" className="profile-bg-layer" aria-hidden="true" />
