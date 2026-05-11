@@ -119,19 +119,50 @@ async function handleSettingsStart(bot, msg, getRegisteredChatIds) {
   }
   const userId = msg.from.id;
   const registered = getRegisteredChatIds();
-  const { keyboard } = await groupPickerKeyboard(bot, registered, userId);
-  if (!keyboard) {
+  const { allowed, keyboard } = await groupPickerKeyboard(bot, registered, userId);
+
+  if (registered.length === 0) {
     await bot.sendMessage(
       msg.chat.id,
-      "No registered groups where you are an admin.\n\n" +
-        "1) Add this bot to your group\n" +
-        "2) Promote it to <b>admin</b> (needs to post messages)\n" +
-        "3) Send any message in that group so it registers\n" +
+      "No groups are registered for alerts yet.\n\n" +
+        "1) Add this bot to your group or channel\n" +
+        "2) Promote it to <b>admin</b> (must be able to post)\n" +
+        "3) Send any message <i>in that group</i> so it registers\n" +
         "4) Send /start here again",
       { parse_mode: "HTML" }
     );
     return true;
   }
+
+  if (allowed.length === 0) {
+    await bot.sendMessage(
+      msg.chat.id,
+      "You are not a Telegram <b>admin</b> of any registered group/channel.\n\n" +
+        "Ask an admin to promote you, or use an account that manages the announcement group. " +
+        "Registered chat ids: <code>" +
+        escHtml(registered.slice(0, 8).join(", ")) +
+        (registered.length > 8 ? "…" : "") +
+        "</code>",
+      { parse_mode: "HTML" }
+    );
+    return true;
+  }
+
+  if (allowed.length === 1) {
+    const groupChatId = allowed[0];
+    let title = String(groupChatId);
+    try {
+      const ch = await bot.getChat(groupChatId);
+      title = ch.title || ch.username || title;
+    } catch (_) {}
+    await bot.sendMessage(
+      msg.chat.id,
+      `Settings for: ${escHtml(title)}\n\nTap to turn alert types ON/OFF. Use “Set media” to attach image/video URLs.`,
+      { parse_mode: "HTML", reply_markup: groupMainKeyboard(groupChatId) }
+    );
+    return true;
+  }
+
   await bot.sendMessage(msg.chat.id, "Select a group to configure:", { reply_markup: keyboard });
   return true;
 }

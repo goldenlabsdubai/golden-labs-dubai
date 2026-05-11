@@ -10,9 +10,9 @@
  * POST /alert: { "kind": "subscription"|"mint"|"maintenance"|"maintenance_resumed"|..., ...fields } or { "message": "..." }
  * Optional: mediaUrl / imageUrl (HTTPS) or env TELEGRAM_ALERT_MEDIA_<KIND> — see .env.example
  */
-require("dotenv").config();
-const fs = require("fs");
 const path = require("path");
+require("dotenv").config({ path: path.join(__dirname, ".env") });
+const fs = require("fs");
 const http = require("http");
 const TelegramBot = require("node-telegram-bot-api");
 const { formatActivityMessage } = require("./alertFormat");

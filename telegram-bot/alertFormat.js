@@ -2,7 +2,7 @@
  * Golden Labs Telegram alert copy — HTML for Telegram (links + labels).
  * Explorer base: TELEGRAM_EXPLORER_BASE (default https://bscscan.com).
  */
-require("dotenv").config();
+require("dotenv").config({ path: require("path").join(__dirname, ".env") });
 
 const USDT_DECIMALS_RAW = Number.parseInt(String(process.env.USDT_DECIMALS || "18"), 10);
 const USDT_DECIMALS =
