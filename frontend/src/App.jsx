@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef } from "react";
+import { useEffect, useRef } from "react";
 import { Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { useAccount, useSwitchChain } from "wagmi";
 import "./App.css";
@@ -9,9 +9,7 @@ import SupportChat from "./components/SupportChat";
 import MobileBottomNav from "./components/MobileBottomNav";
 import PlatformMaintenanceOverlay from "./components/PlatformMaintenanceOverlay";
 import { SeoHead } from "./components/SeoHead";
-import WalletSessionReconnect from "./components/WalletSessionReconnect";
 import { BSC_CHAIN_ID } from "./constants/chain";
-import { syncWalletWebviewHtmlClass } from "./utils/walletEmbeddedBrowser";
 
 /** Same keys as useAuth — read without waiting for context (fixes MM in-app race + deep links). */
 function readStoredAuth() {
@@ -174,34 +172,18 @@ function ProtectedRoute({ children, require }) {
 export default function App() {
   const location = useLocation();
   const { isConnected } = useAccount();
-  const { token } = useAuth();
-  const { lsToken } = readStoredAuth();
-
-  useLayoutEffect(() => {
-    if (typeof document === "undefined") return undefined;
-    syncWalletWebviewHtmlClass();
-    return () => document.documentElement.classList.remove("gl-wallet-webview");
-  }, []);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return undefined;
-    const ids = [200, 700, 2000].map((ms) => window.setTimeout(() => syncWalletWebviewHtmlClass(), ms));
-    return () => ids.forEach(clearTimeout);
-  }, []);
-
   const isProfilePage = location.pathname === "/profile";
   const isProfileSetupPage = location.pathname === "/profile/setup";
   const isLandingPage = location.pathname === "/";
-  /** Tab bar when wagmi reports connected OR a saved SIWE session exists (connector can lag on mobile after navigation). */
+  /** Bottom tab bar only when wallet is connected — avoids dead-end taps that redirect to home while disconnected. */
   const showMobileBottomNav =
-    Boolean(isConnected || token || lsToken) &&
+    Boolean(isConnected) &&
     !/^\/profile\/setup/.test(location.pathname) &&
     !/^\/user\//.test(location.pathname);
 
   return (
     <div className={`app${showMobileBottomNav ? " app--mobile-nav" : ""}`}>
       <SeoHead />
-      <WalletSessionReconnect />
       <ForceBscMainnet />
       <div className={`app-content${isLandingPage ? " app-content--landing" : ""}`}>
         <div id="profile-bg-layer" className="profile-bg-layer" aria-hidden="true" />

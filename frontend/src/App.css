@@ -23,20 +23,6 @@
   z-index: 12;
 }
 
-/**
- * Applied on `<html>` only when `isLikelyWalletEmbeddedBrowser()` (see App.jsx).
- * Disables the global particle canvas — WebViews often paint it as a solid black layer over the app.
- */
-.gl-wallet-webview .particle-network-wrap {
-  display: none !important;
-}
-
-.gl-wallet-webview .app-routes {
-  position: relative;
-  z-index: 10;
-  isolation: isolate;
-}
-
 .particle-network-wrap .particle-network {
   display: block;
   width: 100%;
@@ -8648,10 +8634,11 @@ div.marketplace-page__nav-profile.marketplace-page__profile-icon-btn {
     align-items: stretch;
     min-height: 3.5rem;
     padding: 0.35rem 0.25rem calc(0.35rem + env(safe-area-inset-bottom, 0px));
-    /* Solid bar: backdrop-filter often blanks the whole WebView behind the tab bar in embedded browsers */
-    background: linear-gradient(180deg, rgb(12, 12, 18) 0%, rgb(6, 6, 10) 100%);
+    background: linear-gradient(180deg, rgba(10, 10, 15, 0.94) 0%, rgba(5, 5, 8, 0.99) 100%);
     border-top: 1px solid rgba(212, 175, 55, 0.3);
     box-shadow: 0 -6px 28px rgba(0, 0, 0, 0.5);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
   }
 
   .app-mobile-nav__link {
