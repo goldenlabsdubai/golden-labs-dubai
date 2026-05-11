@@ -1,5 +1,6 @@
 import { ethers } from "ethers";
 import { getPool } from "../config/postgres.js";
+import { getReferralRpcUrl } from "../config/ethersRpc.js";
 import * as User from "./user.js";
 import * as MetaPg from "./metaPostgres.js";
 
@@ -28,9 +29,9 @@ async function setLastProcessedBlock(block) {
 
 export function startReferralIndexer() {
   const contractAddress = process.env.REFERRAL_CONTRACT_ADDRESS;
-  const rpcUrl = process.env.RPC_URL;
+  const rpcUrl = getReferralRpcUrl();
   if (!contractAddress || !rpcUrl) {
-    console.warn("Referral indexer disabled: set REFERRAL_CONTRACT_ADDRESS and RPC_URL");
+    console.warn("Referral indexer disabled: set REFERRAL_CONTRACT_ADDRESS and REFERRAL_RPC_URL or RPC_URL");
     return;
   }
   if (!getPool()) {
@@ -58,7 +59,7 @@ export function startReferralIndexer() {
       if (isRateLimitError(e)) {
         if (!rateLimitWarned) {
           rateLimitWarned = true;
-          console.warn("Referral indexer: RPC rate limit (eth_getLogs). Will retry next poll. Use a dedicated RPC in RPC_URL for steady indexing.");
+          console.warn("Referral indexer: RPC rate limit (eth_getLogs). Will retry next poll. Set REFERRAL_RPC_URL (e.g. Chainstack) for steady indexing.");
         }
       } else {
         console.error("Referral indexer error:", e?.message || e);
@@ -128,9 +129,9 @@ async function runReferralIndexerPoll(provider, contract) {
 /** Run referral indexer once – for Vercel Cron or external cron. */
 export async function runReferralIndexerOnce() {
   const contractAddress = process.env.REFERRAL_CONTRACT_ADDRESS;
-  const rpcUrl = process.env.RPC_URL;
+  const rpcUrl = getReferralRpcUrl();
   if (!contractAddress || !rpcUrl) {
-    console.warn("Referral indexer disabled: set REFERRAL_CONTRACT_ADDRESS and RPC_URL");
+    console.warn("Referral indexer disabled: set REFERRAL_CONTRACT_ADDRESS and REFERRAL_RPC_URL or RPC_URL");
     return;
   }
   if (!getPool()) {

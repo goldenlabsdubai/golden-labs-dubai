@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { ethers } from "ethers";
-import { createPinnedJsonRpcProvider } from "../config/ethersRpc.js";
+import { createPinnedJsonRpcProvider, getReferralRpcUrl } from "../config/ethersRpc.js";
 import * as User from "../services/user.js";
 import { USDT_DECIMALS } from "../constants/usdtDecimals.js";
 
@@ -59,7 +59,7 @@ router.get("/stats", async (req, res) => {
     /** On-chain claimable USDT (token decimals). null = RPC/read failed — do not treat as zero (see Dashboard copy). */
     let claimableWei = null;
     const contractAddress = process.env.REFERRAL_CONTRACT_ADDRESS || "";
-    const rpcUrl = process.env.RPC_URL || "";
+    const rpcUrl = getReferralRpcUrl();
     if (wallet && contractAddress && rpcUrl) {
       try {
         const provider = createPinnedJsonRpcProvider(rpcUrl);

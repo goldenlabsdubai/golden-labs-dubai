@@ -6,7 +6,7 @@
  *   node scripts/backfill-referral-paid-once.js --dry-run
  *   node scripts/backfill-referral-paid-once.js --from-block=97533255
  *
- * Requires: REFERRAL_CONTRACT_ADDRESS, RPC_URL, PG* (same as main app).
+ * Requires: REFERRAL_CONTRACT_ADDRESS, REFERRAL_RPC_URL or RPC_URL, PG* (same as main app).
  * Start block (inclusive), in order: --from-block CLI → REFERRAL_BACKFILL_FROM_BLOCK → REFERRAL_INDEXER_FROM_BLOCK → 0
  *           REFERRAL_BACKFILL_BLOCKS_PER_QUERY (default 50)
  *           REFERRAL_BACKFILL_CHUNK_DELAY_MS (default 400)
@@ -17,6 +17,7 @@
 import "dotenv/config";
 import { ethers } from "ethers";
 import { getPool } from "../src/config/postgres.js";
+import { getReferralRpcUrl } from "../src/config/ethersRpc.js";
 import * as User from "../src/services/user.js";
 import * as MetaPg from "../src/services/metaPostgres.js";
 
@@ -61,9 +62,9 @@ async function main() {
   const { dryRun, fromBlock: fromArg } = parseArgs();
 
   const contractAddress = (process.env.REFERRAL_CONTRACT_ADDRESS || "").trim();
-  const rpcUrl = (process.env.RPC_URL || "").trim();
+  const rpcUrl = getReferralRpcUrl();
   if (!contractAddress || !rpcUrl) {
-    console.error("Set REFERRAL_CONTRACT_ADDRESS and RPC_URL in .env");
+    console.error("Set REFERRAL_CONTRACT_ADDRESS and REFERRAL_RPC_URL (or RPC_URL) in .env");
     process.exit(1);
   }
 
