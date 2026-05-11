@@ -25,6 +25,7 @@ import InsufficientBalanceModal from "../components/InsufficientBalanceModal";
 import ReferralPyramidTree from "../components/ReferralPyramidTree";
 import { NavbarBrandLink } from "../components/NavbarBrandLink";
 import { USDT_DECIMALS } from "../constants/usdtDecimals";
+import { BSC_CHAIN_ID } from "../constants/chain";
 import { defaultReferralWithdrawChunkWei, readContractUint256 } from "../utils/formatUsdt";
 import { resolveReferralLifetimeWei, formatUsdtAmountForDashboard } from "../utils/referralEarnings";
 
@@ -56,7 +57,13 @@ export default function Dashboard() {
   const { user, token, refreshUser } = useAuth();
   const { openModal, isConnected, address } = useWalletConnect();
   const { chainId } = useAccount();
-  const { data: balanceData } = useBalance({ address: address ?? undefined });
+  /** Same as Subscription/Mint: don’t depend on connector `chainId` / `address` for reads — mobile often has JWT+wallet while wagmi address lag fails balance RPC. */
+  const walletForReads =
+    address || (token && user?.wallet ? user.wallet : null) || undefined;
+  const { data: balanceData } = useBalance({
+    address: walletForReads,
+    chainId: BSC_CHAIN_ID,
+  });
   const { disconnect: disconnectWallet } = useDisconnect();
   const [activeTab, setActiveTab] = useState("Owned");
   const [listings, setListings] = useState([]);
@@ -102,8 +109,8 @@ export default function Dashboard() {
     address: marketplaceAddressNormalized || undefined,
     abi: MARKETPLACE_ABI,
     functionName: "listPrice",
+    chainId: BSC_CHAIN_ID,
     query: { enabled: Boolean(marketplaceAddressNormalized) },
-    ...(chainId != null && { chainId }),
   });
   const chainListUsdt = marketplaceListPriceUsdtLabel(marketplaceListPriceWei);
   const chainListWeiStr = marketplaceListPriceWei != null ? String(marketplaceListPriceWei) : null;
@@ -111,8 +118,8 @@ export default function Dashboard() {
     address: referralAddressNormalized || undefined,
     abi: REFERRAL_ABI,
     functionName: "referralWithdrawChunk",
+    chainId: BSC_CHAIN_ID,
     query: { enabled: Boolean(referralAddressNormalized) },
-    ...(chainId != null && { chainId }),
   });
   const referralWithdrawChunkWei =
     readContractUint256(referralWithdrawChunkRaw) ??
@@ -127,12 +134,14 @@ export default function Dashboard() {
   const canWithdrawReferral =
     claimableOnChainKnown && claimableReferralWei >= referralWithdrawChunkWei;
   const referralWithdrawShortfallWei = canWithdrawReferral ? 0n : referralWithdrawChunkWei > claimableReferralWei ? referralWithdrawChunkWei - claimableReferralWei : 0n;
+  const usdtBalanceReadEnabled = Boolean(usdtAddressNormalized && walletForReads);
   const { data: usdtBalanceRaw, refetch: refetchUsdtBalance } = useReadContract({
     address: usdtAddressNormalized || undefined,
     abi: USDT_ABI,
     functionName: "balanceOf",
-    args: address ? [address] : undefined,
-    ...(chainId != null && { chainId }),
+    args: walletForReads ? [walletForReads] : undefined,
+    chainId: BSC_CHAIN_ID,
+    query: { enabled: usdtBalanceReadEnabled },
   });
   const rawAddress = (token && (user?.wallet || address)) ? (user?.wallet || address) : (isConnected && address) ? address : null;
   const displayAddress = rawAddress ? String(rawAddress).toLowerCase() : null;

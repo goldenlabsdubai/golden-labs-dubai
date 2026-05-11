@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { AppRouteLink } from "../components/AppRouteLink";
 import { assignAppPath } from "../utils/appNavigation";
-import { useAccount, useBalance, useDisconnect, useReadContract, useWriteContract, usePublicClient } from "wagmi";
+import { useBalance, useDisconnect, useReadContract, useWriteContract, usePublicClient } from "wagmi";
 import { formatEther, formatUnits, getAddress, zeroAddress } from "viem";
 import { useAuth } from "../hooks/useAuth";
 import { useWalletConnect } from "../hooks/useWalletConnect";
@@ -12,6 +12,7 @@ import { canAccessTradingNav } from "../utils/tradingAccess";
 import InsufficientBalanceModal from "../components/InsufficientBalanceModal";
 import { NavbarBrandLink } from "../components/NavbarBrandLink";
 import { USDT_DECIMALS } from "../constants/usdtDecimals";
+import { BSC_CHAIN_ID } from "../constants/chain";
 
 const USDT_ABI = [
   { name: "balanceOf", type: "function", stateMutability: "view", inputs: [{ name: "account", type: "address" }], outputs: [{ type: "uint256" }] },
@@ -23,7 +24,6 @@ const REFERRAL_ABI = [
 export default function Profile() {
   const { user, token, setSession, refreshUser, connect, logout } = useAuth();
   const { openModal, isConnected, address } = useWalletConnect();
-  const { chainId } = useAccount();
   const { disconnect: disconnectWallet } = useDisconnect();
   const publicClient = usePublicClient();
   const { writeContractAsync } = useWriteContract();
@@ -52,13 +52,18 @@ export default function Profile() {
   const usdtAddress = (import.meta.env.VITE_USDT_ADDRESS || "").trim();
   const usdtAddressNormalized = usdtAddress && usdtAddress.startsWith("0x") ? usdtAddress : usdtAddress ? `0x${usdtAddress}` : "";
   const walletForReads = address || (token && user?.wallet ? user.wallet : null) || undefined;
-  const { data: balanceData } = useBalance({ address: walletForReads });
+  const { data: balanceData } = useBalance({
+    address: walletForReads,
+    chainId: BSC_CHAIN_ID,
+  });
+  const usdtReadEnabled = Boolean(usdtAddressNormalized && walletForReads);
   const { data: usdtBalanceRaw, refetch: refetchUsdtBalance } = useReadContract({
     address: usdtAddressNormalized || undefined,
     abi: USDT_ABI,
     functionName: "balanceOf",
     args: walletForReads ? [walletForReads] : undefined,
-    ...(chainId != null && { chainId }),
+    chainId: BSC_CHAIN_ID,
+    query: { enabled: usdtReadEnabled },
   });
   const usdtBalance = usdtBalanceRaw != null ? Number(formatUnits(usdtBalanceRaw, USDT_DECIMALS)) : null;
   const bnbBalanceFormatted = balanceData?.value != null ? Number(formatEther(balanceData.value)).toFixed(4) : null;

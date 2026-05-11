@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { Link } from "react-router-dom";
 import { AppRouteLink } from "../components/AppRouteLink";
 import { assignAppPath } from "../utils/appNavigation";
-import { useBalance, useDisconnect, useWriteContract, usePublicClient, useWatchContractEvent, useReadContract, useAccount } from "wagmi";
+import { useBalance, useDisconnect, useWriteContract, usePublicClient, useWatchContractEvent, useReadContract } from "wagmi";
 import { formatEther, formatUnits } from "viem";
 import { useAuth } from "../hooks/useAuth";
 import { useWalletConnect } from "../hooks/useWalletConnect";
@@ -14,6 +14,7 @@ import { resolveSellerReferrerRoot } from "../utils/marketplaceReferrer";
 import { canAccessTradingNav } from "../utils/tradingAccess";
 import { marketplaceListPriceUsdtLabel } from "../utils/marketplaceListPriceLabel";
 import { USDT_DECIMALS } from "../constants/usdtDecimals";
+import { BSC_CHAIN_ID } from "../constants/chain";
 import {
   safeGasLimit,
   DEFAULT_APPROVE_GAS,
@@ -50,8 +51,12 @@ const LIST_RESUME_TTL_MS = 45 * 60 * 1000;
 export default function Marketplace() {
   const { user, token, refreshUser } = useAuth();
   const { openModal, isConnected, address } = useWalletConnect();
-  const { chainId } = useAccount();
-  const { data: balanceData } = useBalance({ address: address ?? undefined });
+  const walletForReads =
+    address || (token && user?.wallet ? user.wallet : null) || undefined;
+  const { data: balanceData } = useBalance({
+    address: walletForReads,
+    chainId: BSC_CHAIN_ID,
+  });
   const { disconnect: disconnectWallet } = useDisconnect();
   const [listings, setListings] = useState([]);
   const [myAssets, setMyAssets] = useState([]);
@@ -93,18 +98,20 @@ export default function Marketplace() {
     address: marketplaceAddressNormalized || undefined,
     abi: MARKETPLACE_ABI,
     functionName: "listPrice",
+    chainId: BSC_CHAIN_ID,
     query: { enabled: Boolean(marketplaceAddressNormalized) },
-    ...(chainId != null && { chainId }),
   });
   const chainListUsdt = marketplaceListPriceUsdtLabel(marketplaceListPriceWei);
   const chainListWeiStr = marketplaceListPriceWei != null ? String(marketplaceListPriceWei) : null;
 
+  const usdtReadEnabled = Boolean(usdtAddressNormalized && walletForReads);
   const { data: usdtBalanceRaw, refetch: refetchUsdtBalance } = useReadContract({
     address: usdtAddressNormalized || undefined,
     abi: USDT_ABI,
     functionName: "balanceOf",
-    args: address ? [address] : undefined,
-    ...(chainId != null && { chainId }),
+    args: walletForReads ? [walletForReads] : undefined,
+    chainId: BSC_CHAIN_ID,
+    query: { enabled: usdtReadEnabled },
   });
   const usdtBalanceFormatted = usdtBalanceRaw != null ? Number(formatUnits(usdtBalanceRaw, USDT_DECIMALS)).toFixed(2) : null;
   const bnbBalanceFormatted = balanceData?.value != null ? Number(formatEther(balanceData.value)).toFixed(4) : null;
