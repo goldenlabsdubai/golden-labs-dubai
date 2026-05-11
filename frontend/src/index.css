@@ -1,5 +1,6 @@
 /* Theme: Golden Labs – gold & deep black (gldas.png) */
 :root {
+  color-scheme: dark;
   --bg: #050508;
   --surface: #0a0a0c;
   --border: rgba(212, 175, 55, 0.2);
@@ -20,16 +21,25 @@
   padding: 0;
 }
 
+html {
+  min-height: 100%;
+  min-height: -webkit-fill-available;
+}
+
 body {
   font-family: "Syne", system-ui, sans-serif;
   background: var(--bg);
   color: var(--text);
   min-height: 100vh;
+  min-height: 100dvh;
+  min-height: -webkit-fill-available;
   line-height: 1.5;
 }
 
 #root {
   min-height: 100vh;
+  min-height: 100dvh;
+  min-height: -webkit-fill-available;
 }
 
 button {
