@@ -66,6 +66,15 @@ export default function MaintenancePage({ token }) {
     load();
   }, [load]);
 
+  /** Refresh when a window is enabled so auto-end (server) updates Status / “End maintenance” after endsAt. */
+  useEffect(() => {
+    if (!enabled || !token) return;
+    const id = setInterval(() => {
+      load();
+    }, 30_000);
+    return () => clearInterval(id);
+  }, [enabled, token, load]);
+
   const save = async (nextEnabled) => {
     if (!token) return;
     setSaving(true);
