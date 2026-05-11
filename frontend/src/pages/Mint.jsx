@@ -1,17 +1,17 @@
 import { useState, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
-import { AppRouteLink } from "../components/AppRouteLink";
 import { assignAppPath } from "../utils/appNavigation";
-import { useAccount, useBalance, useDisconnect, useReadContract, useWriteContract, usePublicClient } from "wagmi";
+import { useBalance, useDisconnect, useReadContract, useWriteContract, usePublicClient } from "wagmi";
 import { formatEther, formatUnits } from "viem";
 import { useAuth } from "../hooks/useAuth";
 import { useWalletConnect } from "../hooks/useWalletConnect";
-import { API, ASSET_IMAGE, EXPLORER_BY_CHAIN } from "../config";
+import { API, ASSET_IMAGE } from "../config";
 import { applyWalletTxError, tryOpenInsufficientUsdtModal } from "../utils/transactionError";
 import InsufficientBalanceModal from "../components/InsufficientBalanceModal";
 import { NavbarBrandLink } from "../components/NavbarBrandLink";
 import { canAccessTradingNav } from "../utils/tradingAccess";
 import { USDT_DECIMALS } from "../constants/usdtDecimals";
+import { BSC_CHAIN_ID } from "../constants/chain";
 import { formatUsdtTrim, readContractUint256 } from "../utils/formatUsdt";
 
 const USDT_ABI = [
@@ -26,9 +26,12 @@ const NFT_ABI = [
 ];
 export default function Mint() {
   const { token, refreshUser, user } = useAuth();
-  const { openModal, isConnected, address } = useWalletConnect();
-  const { chainId } = useAccount();
-  const { data: balanceData } = useBalance({ address: address ?? undefined });
+  const { openModal, address } = useWalletConnect();
+  const balanceAddress = (address || (token && user?.wallet ? user.wallet : null)) ?? undefined;
+  const { data: balanceData } = useBalance({
+    address: balanceAddress,
+    chainId: BSC_CHAIN_ID,
+  });
   const { disconnect: disconnectWallet } = useDisconnect();
   const [loading, setLoading] = useState(false);
   const [mintStep, setMintStep] = useState(null);
@@ -51,42 +54,57 @@ export default function Mint() {
   const [configLoadError, setConfigLoadError] = useState("");
   const [portalReady, setPortalReady] = useState(false);
   const menuRef = useRef(null);
-  const publicClient = usePublicClient();
-  const { writeContractAsync } = useWriteContract();
 
   const nftContractAddress = (config.contractAddress || import.meta.env.VITE_NFT_CONTRACT || "").trim();
-  const nftAddressNormalized = nftContractAddress && nftContractAddress.startsWith("0x") ? nftContractAddress : nftContractAddress ? `0x${nftContractAddress}` : "";
-
+  const nftAddressNormalized =
+    nftContractAddress && nftContractAddress.startsWith("0x")
+      ? nftContractAddress
+      : nftContractAddress
+        ? `0x${nftContractAddress}`
+        : "";
   const usdtAddress = (import.meta.env.VITE_USDT_ADDRESS || "").trim();
-  const usdtAddressNormalized = usdtAddress && usdtAddress.startsWith("0x") ? usdtAddress : usdtAddress ? `0x${usdtAddress}` : "";
+  const usdtAddressNormalized =
+    usdtAddress && usdtAddress.startsWith("0x") ? usdtAddress : usdtAddress ? `0x${usdtAddress}` : "";
 
+  const publicClient = usePublicClient({ chainId: BSC_CHAIN_ID });
+  const { writeContractAsync } = useWriteContract();
+
+  const nftReadsEnabled = Boolean(nftAddressNormalized);
   const { data: nextTokenId } = useReadContract({
     address: nftAddressNormalized || undefined,
     abi: NFT_ABI,
     functionName: "nextTokenId",
-    query: { enabled: Boolean(nftAddressNormalized) },
-    ...(chainId != null && { chainId }),
+    chainId: BSC_CHAIN_ID,
+    query: { enabled: nftReadsEnabled },
   });
   const { data: totalMinted } = useReadContract({
     address: nftAddressNormalized || undefined,
     abi: NFT_ABI,
     functionName: "totalMinted",
-    query: { enabled: Boolean(nftAddressNormalized) },
-    ...(chainId != null && { chainId }),
+    chainId: BSC_CHAIN_ID,
+    query: { enabled: nftReadsEnabled },
   });
   const { data: mintPriceOnChain } = useReadContract({
     address: nftAddressNormalized || undefined,
     abi: NFT_ABI,
     functionName: "mintPrice",
-    query: { enabled: Boolean(nftAddressNormalized) },
-    ...(chainId != null && { chainId }),
+    chainId: BSC_CHAIN_ID,
+    query: { enabled: nftReadsEnabled },
   });
-  const { data: usdtBalanceRaw, isLoading: usdtBalanceLoading, refetch: refetchUsdtBalance } = useReadContract({
+  const walletForReads = address || (token && user?.wallet ? user.wallet : null) || undefined;
+  const usdtReadEnabled = Boolean(usdtAddressNormalized && walletForReads);
+  const {
+    data: usdtBalanceRaw,
+    isLoading: usdtBalanceLoading,
+    isError: usdtBalanceError,
+    refetch: refetchUsdtBalance,
+  } = useReadContract({
     address: usdtAddressNormalized || undefined,
     abi: USDT_ABI,
     functionName: "balanceOf",
-    args: address ? [address] : undefined,
-    ...(chainId != null && { chainId }),
+    args: walletForReads ? [walletForReads] : undefined,
+    chainId: BSC_CHAIN_ID,
+    query: { enabled: usdtReadEnabled },
   });
   const usdtBalance = usdtBalanceRaw != null ? Number(formatUnits(usdtBalanceRaw, USDT_DECIMALS)) : null;
   const bnbBalanceFormatted = balanceData?.value != null ? Number(formatEther(balanceData.value)).toFixed(4) : null;
@@ -125,9 +143,6 @@ export default function Mint() {
   }, [user?.state]);
 
   const displayAddress = address || (token && user?.wallet ? user.wallet : null) || null;
-  const explorerUrl = chainId && EXPLORER_BY_CHAIN[chainId] && displayAddress
-    ? `${EXPLORER_BY_CHAIN[chainId]}/address/${displayAddress}`
-    : null;
 
   const handleConnect = () => { if (openModal) openModal(); };
   const handleDisconnect = () => {
@@ -157,6 +172,11 @@ export default function Mint() {
   };
 
   const handleMint = async () => {
+    if (!address) {
+      setError("Connect your wallet in the browser to approve USDT and mint (same address as your profile).");
+      openModal?.();
+      return;
+    }
     const nftAddr = config.contractAddress || nftAddressNormalized;
     if (!nftAddr) {
       setError("Asset contract not configured.");
@@ -194,6 +214,7 @@ export default function Mint() {
         return;
       }
       const hashApprove = await writeContractAsync({
+        chainId: BSC_CHAIN_ID,
         address: usdtAddressNormalized,
         abi: USDT_ABI,
         functionName: "approve",
@@ -202,6 +223,7 @@ export default function Mint() {
       await publicClient.waitForTransactionReceipt({ hash: hashApprove });
       const tokenIdMinted = nextTokenId != null ? Number(nextTokenId) : null;
       const hashMint = await writeContractAsync({
+        chainId: BSC_CHAIN_ID,
         address: nftAddr,
         abi: NFT_ABI,
         functionName: "mint",
@@ -339,7 +361,16 @@ export default function Mint() {
               <img src="/USDT_BEP20.png" alt="" className="mint-modern__balance-icon" aria-hidden="true" />
               <span className="mint-modern__balance-label">Your USDT balance:</span>
               <span className="mint-modern__balance-value">
-                {usdtBalanceLoading ? "…" : usdtBalance != null ? <>{usdtBalance.toFixed(2)} USDT <img src="/USDT_BEP20.png" alt="" className="usdt-logo-inline" aria-hidden="true" /></> : "—"}
+                {usdtBalanceLoading
+                  ? "…"
+                  : usdtBalanceError
+                    ? "unavailable"
+                    : usdtBalance != null
+                      ? <>
+                          {usdtBalance.toFixed(2)} USDT{" "}
+                          <img src="/USDT_BEP20.png" alt="" className="usdt-logo-inline" aria-hidden="true" />
+                        </>
+                      : "—"}
               </span>
             </div>
           </div>
@@ -359,7 +390,9 @@ export default function Mint() {
           >
             {loading
               ? (mintStep === "approve" ? "1/2 Approving USDT…" : "2/2 Minting…")
-              : `Mint Asset · ${displayPrice}`}
+              : !address
+                ? "Connect wallet to mint"
+                : `Mint Asset · ${displayPrice}`}
           </button>
         </div>
       </main>

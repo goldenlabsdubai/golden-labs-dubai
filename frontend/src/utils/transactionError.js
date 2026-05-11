@@ -34,6 +34,8 @@ export function isUserRejection(error) {
 export function getTransactionErrorMessage(error, fallback = "Something went wrong") {
   if (isUserRejection(error)) return USER_REJECTED_MESSAGE;
   const msg = (error?.message || error?.shortMessage || "").toLowerCase();
+  if (msg.includes("connector not connected"))
+    return "Wallet not connected. Tap Connect wallet and complete the connection in your wallet app, then try again.";
   if (msg.includes("subscription suspended")) return "Subscription suspended — resubscribe to withdraw earnings.";
   if (msg.includes("no earnings")) return "No earnings to withdraw.";
   if (msg.includes("subscription not set")) return "Referral contract not configured.";
