@@ -4,6 +4,14 @@
  */
 const settings = require("./botSettings");
 
+/** Escape text for Telegram HTML parse_mode. */
+function escHtml(s) {
+  return String(s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
 /** @type {Map<number, { groupChatId: string, kind: string, expires: number }>} */
 const pendingMediaUrl = new Map();
 
@@ -79,16 +87,21 @@ function mediaPickKeyboard(chatId) {
   return { inline_keyboard: rows };
 }
 
-async function safeEdit(bot, chatId, messageId, text, replyMarkup) {
+async function safeEdit(bot, chatId, messageId, text, replyMarkup, parseMode) {
+  const opts = {
+    chat_id: chatId,
+    message_id: messageId,
+    reply_markup: replyMarkup,
+  };
+  if (parseMode) opts.parse_mode = parseMode;
   try {
-    await bot.editMessageText(text, {
-      chat_id: chatId,
-      message_id: messageId,
-      reply_markup: replyMarkup,
-    });
+    await bot.editMessageText(text, opts);
   } catch (e) {
     if (String(e?.message || "").includes("message is not modified")) return;
-    await bot.sendMessage(chatId, text, { reply_markup: replyMarkup });
+    await bot.sendMessage(chatId, text, {
+      reply_markup: replyMarkup,
+      ...(parseMode ? { parse_mode: parseMode } : {}),
+    });
   }
 }
 
@@ -112,10 +125,10 @@ async function handleSettingsStart(bot, msg, getRegisteredChatIds) {
       msg.chat.id,
       "No registered groups where you are an admin.\n\n" +
         "1) Add this bot to your group\n" +
-        "2) Promote it to **admin** (needs to post messages)\n" +
+        "2) Promote it to <b>admin</b> (needs to post messages)\n" +
         "3) Send any message in that group so it registers\n" +
         "4) Send /start here again",
-      { parse_mode: "Markdown" }
+      { parse_mode: "HTML" }
     );
     return true;
   }
@@ -170,8 +183,9 @@ async function handleSettingsCallback(bot, query, getRegisteredChatIds) {
       bot,
       chatId,
       msg.message_id,
-      `Settings for: ${title}\n\nTap to turn alert types ON/OFF. Use “Set media” to attach image/video URLs.`,
-      groupMainKeyboard(groupChatId)
+      `Settings for: ${escHtml(title)}\n\nTap to turn alert types ON/OFF. Use “Set media” to attach image/video URLs.`,
+      groupMainKeyboard(groupChatId),
+      "HTML"
     );
     await bot.answerCallbackQuery(query.id);
     return;
@@ -198,8 +212,9 @@ async function handleSettingsCallback(bot, query, getRegisteredChatIds) {
       bot,
       chatId,
       msg.message_id,
-      `Settings for: ${title}\n\nTap to turn alert types ON/OFF. Use “Set media” to attach image/video URLs.`,
-      groupMainKeyboard(groupChatId)
+      `Settings for: ${escHtml(title)}\n\nTap to turn alert types ON/OFF. Use “Set media” to attach image/video URLs.`,
+      groupMainKeyboard(groupChatId),
+      "HTML"
     );
     await bot.answerCallbackQuery(query.id, { text: !cur ? "Enabled" : "Disabled" });
     return;
@@ -215,8 +230,9 @@ async function handleSettingsCallback(bot, query, getRegisteredChatIds) {
       bot,
       chatId,
       msg.message_id,
-      "Pick an alert type, then send an **HTTPS** image or video URL in this chat.\n\nUse /cancel to abort.",
-      mediaPickKeyboard(groupChatId)
+      "Pick an alert type, then send an <b>HTTPS</b> image or video URL in this chat.\n\nUse /cancel to abort.",
+      mediaPickKeyboard(groupChatId),
+      "HTML"
     );
     await bot.answerCallbackQuery(query.id);
     return;
@@ -237,8 +253,8 @@ async function handleSettingsCallback(bot, query, getRegisteredChatIds) {
     const label = settings.KIND_LABELS[kind] || kind;
     await bot.sendMessage(
       chatId,
-      `Send a public **HTTPS** URL for media on **${label}** alerts in that group (image, or .mp4/.webm/.mov).\n\n/cancel to abort.`,
-      { parse_mode: "Markdown" }
+      `Send a public <b>HTTPS</b> URL for media on <b>${escHtml(label)}</b> alerts in that group (image, or .mp4/.webm/.mov).\n\n/cancel to abort.`,
+      { parse_mode: "HTML" }
     );
     await bot.answerCallbackQuery(query.id);
     return;
@@ -271,14 +287,18 @@ async function handlePrivateText(bot, msg) {
   }
 
   if (!/^https:\/\//i.test(text)) {
-    await bot.sendMessage(msg.chat.id, "Send a valid **https://** URL, or /cancel.", { parse_mode: "Markdown" });
+    await bot.sendMessage(msg.chat.id, "Send a valid <b>https://</b> URL, or /cancel.", { parse_mode: "HTML" });
     return true;
   }
 
   settings.setMediaUrl(pend.groupChatId, pend.kind, text);
   pendingMediaUrl.delete(userId);
   const label = settings.KIND_LABELS[pend.kind] || pend.kind;
-  await bot.sendMessage(msg.chat.id, `Saved media URL for **${label}** in that group.`, { parse_mode: "Markdown" });
+  await bot.sendMessage(
+    msg.chat.id,
+    `Saved media URL for <b>${escHtml(label)}</b> in that group.`,
+    { parse_mode: "HTML" }
+  );
   return true;
 }
 

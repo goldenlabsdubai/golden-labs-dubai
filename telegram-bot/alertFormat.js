@@ -119,7 +119,7 @@ function poweredByGoldenLabsLine(emoji = "✨") {
 }
 
 /**
- * @param {"user_joined"|"subscription"|"mint"|"listed"|"bought"|"maintenance"|"maintenance_resumed"} kind
+ * @param {"user_joined"|"subscription"|"mint"|"listed"|"bought"|"sold"|"maintenance"|"maintenance_resumed"} kind
  * @param {Record<string, string|null|undefined>} fields
  * @returns {string} Telegram HTML
  */
@@ -215,6 +215,34 @@ function formatActivityMessage(kind, fields) {
       lines.push("");
       lines.push(`👤 <b>Buyer:</b> ${linkAddress(fields.buyer)}`);
       lines.push(`🏪 <b>Seller:</b> ${linkAddress(fields.seller)}`);
+      lines.push("");
+      lines.push(
+        tidRaw
+          ? `🖼 <b>Token ID:</b> <code>#${escapeHtml(tidRaw)}</code>`
+          : `🖼 <b>Token ID:</b> —`
+      );
+      lines.push(`💰 <b>Price:</b> <b>${escapeHtml(priceLine)}</b>`);
+      lines.push("");
+      if (fields.txHash) {
+        lines.push(`🔗 <b>Transaction:</b> ${linkTxWithLabel(fields.txHash, txLabel)}`);
+      }
+      lines.push("");
+      lines.push("━━━━━━━━━━━━━━━");
+      lines.push(poweredByGoldenLabsLine("🚀"));
+      break;
+    }
+    case "sold": {
+      const txLabel = (process.env.TELEGRAM_TX_VIEW_LABEL || "View on BscScan").trim();
+      const tidRaw = fields.tokenId != null && fields.tokenId !== "" ? String(fields.tokenId) : "";
+      const priceLine =
+        fields.priceWei != null ? formatUsdtFromWei(String(fields.priceWei)) : "—";
+
+      lines.push("🔔 <b>NFT Sale Alert</b>");
+      lines.push("");
+      lines.push("🟢 <b>NFT Successfully Sold!</b>");
+      lines.push("");
+      lines.push(`🏪 <b>Seller:</b> ${linkAddress(fields.seller)}`);
+      lines.push(`👤 <b>Buyer:</b> ${linkAddress(fields.buyer)}`);
       lines.push("");
       lines.push(
         tidRaw

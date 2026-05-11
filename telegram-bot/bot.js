@@ -83,6 +83,7 @@ const KIND_MEDIA_ENV = {
   mint: "TELEGRAM_ALERT_MEDIA_MINT",
   listed: "TELEGRAM_ALERT_MEDIA_LISTED",
   bought: "TELEGRAM_ALERT_MEDIA_BOUGHT",
+  sold: "TELEGRAM_ALERT_MEDIA_SOLD",
   maintenance: "TELEGRAM_ALERT_MEDIA_MAINTENANCE",
 };
 
@@ -90,7 +91,9 @@ const PHOTO_VIDEO_CAPTION_MAX = 1024;
 
 function logicalMediaKind(kind) {
   const k = String(kind || "").toLowerCase();
-  return k === "maintenance_resumed" ? "maintenance" : k;
+  if (k === "maintenance_resumed") return "maintenance";
+  if (k === "sold") return "sold";
+  return k;
 }
 
 function resolveAlertMediaUrl(targetChatId, kind, override) {
@@ -105,6 +108,10 @@ function resolveAlertMediaUrl(targetChatId, kind, override) {
   const envKey = KIND_MEDIA_ENV[k];
   const fromKind = envKey ? (process.env[envKey] || "").trim() : "";
   if (fromKind) return fromKind;
+  if (k === "sold") {
+    const fromBought = (process.env.TELEGRAM_ALERT_MEDIA_BOUGHT || "").trim();
+    if (fromBought) return fromBought;
+  }
   return (process.env.TELEGRAM_ALERT_MEDIA_DEFAULT || "").trim();
 }
 
@@ -158,9 +165,12 @@ async function sendAlert(message, parseMode, extra = {}) {
   if (parseMode) opts.parse_mode = parseMode;
   const errors = [];
   const pin = Boolean(extra.pin);
+  let sent = 0;
+  let skippedDisabled = 0;
   for (const id of unique) {
     try {
       if (extra.kind && !botSettings.isAlertEnabled(id, extra.kind)) {
+        skippedDisabled++;
         continue;
       }
       const mediaUrl = resolveAlertMediaUrl(id, extra.kind, extra.mediaUrl);
@@ -175,10 +185,11 @@ async function sendAlert(message, parseMode, extra = {}) {
         }
       }
       if (messageId == null) {
-        const sent = await bot.sendMessage(id, message, opts);
-        messageId = sent.message_id;
+        const sentMsg = await bot.sendMessage(id, message, opts);
+        messageId = sentMsg.message_id;
         console.log(`[telegram] Alert sent to chat ${id} (${message.length} chars)`);
       }
+      sent++;
       if (pin && messageId != null) {
         try {
           await bot.pinChatMessage(id, messageId, { disable_notification: true });
@@ -192,6 +203,13 @@ async function sendAlert(message, parseMode, extra = {}) {
       console.error(`[telegram] sendMessage failed for ${id}:`, body || e?.message || e);
       errors.push({ id, err: body || e?.message || String(e) });
     }
+  }
+  if (sent === 0 && unique.length > 0) {
+    console.warn(
+      `[telegram] Alert reached no chats (kind=${extra.kind || "n/a"}). ` +
+        `${skippedDisabled}/${unique.length} skipped (type disabled in bot /start for that group). ` +
+        `Enable the toggle or set TELEGRAM_CHAT_ID / alert-chats.json.`
+    );
   }
   if (errors.length === unique.length) {
     throw new Error(errors.map((e) => `${e.id}: ${e.err}`).join("; "));
@@ -210,22 +228,63 @@ function getRegisteredChatIds() {
   return [...alertChatIds].map(String);
 }
 
-bot.on("message", async (msg) => {
-  registerChatFromTelegramMessage(msg.chat);
+function matchesCommand(text, commandName) {
+  const part = (text || "").trim().split(/\s+/)[0].toLowerCase();
+  const cmd = String(commandName).toLowerCase();
+  return part === `/${cmd}` || part.startsWith(`/${cmd}@`);
+}
 
-  const text = (msg.text || "").trim();
-  if (msg.chat.type === "private") {
-    if (text === "/start" || text === "/settings") {
-      await settingsUi.handleSettingsStart(bot, msg, getRegisteredChatIds);
+bot.on("message", async (msg) => {
+  try {
+    registerChatFromTelegramMessage(msg.chat);
+
+    const isStart = matchesCommand(msg.text, "start");
+    const isSettings = matchesCommand(msg.text, "settings");
+
+    if (msg.chat.type !== "private" && (isStart || isSettings)) {
+      try {
+        await bot.sendMessage(
+          msg.chat.id,
+          "To configure alert toggles: open a <b>private chat</b> with me and send /start (you must be a group admin).",
+          { parse_mode: "HTML", reply_to_message_id: msg.message_id }
+        );
+      } catch (e) {
+        console.warn("[telegram] group /start reply failed:", e?.message || e);
+      }
       return;
     }
-    const handled = await settingsUi.handlePrivateText(bot, msg);
-    if (handled) return;
+
+    if (msg.chat.type === "private") {
+      if (isStart || isSettings) {
+        await settingsUi.handleSettingsStart(bot, msg, getRegisteredChatIds);
+        return;
+      }
+      const handled = await settingsUi.handlePrivateText(bot, msg);
+      if (handled) return;
+    }
+  } catch (e) {
+    console.error("[telegram] message handler:", e?.message || e);
+    try {
+      if (msg.chat?.id) {
+        await bot.sendMessage(msg.chat.id, "Something went wrong. Try again or check server logs.");
+      }
+    } catch (_) {
+      /* ignore */
+    }
   }
 });
 
 bot.on("callback_query", async (query) => {
-  await settingsUi.handleSettingsCallback(bot, query, getRegisteredChatIds);
+  try {
+    await settingsUi.handleSettingsCallback(bot, query, getRegisteredChatIds);
+  } catch (e) {
+    console.error("[telegram] callback_query:", e?.message || e);
+    try {
+      await bot.answerCallbackQuery(query.id, { text: "Error — try /start again.", show_alert: true });
+    } catch (_) {
+      /* ignore */
+    }
+  }
 });
 
 bot.on("my_chat_member", (ev) => {
