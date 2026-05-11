@@ -75,12 +75,24 @@ function ForceBscMainnet() {
   return null;
 }
 
+/** One reconnect on first paint — matches working testnet app; pairs with WagmiProvider `reconnectOnMount`. */
+function ReconnectOnLoad() {
+  const { reconnectAsync } = useReconnect();
+  const done = useRef(false);
+  useEffect(() => {
+    if (done.current) return;
+    done.current = true;
+    void reconnectAsync().catch(() => {});
+  }, [reconnectAsync]);
+  return null;
+}
+
 /**
  * After SIWE, keep wagmi’s connector in sync: re-run reconnect on navigation and when the tab
  * becomes visible so mobile / in-app browsers restore `address` without manual “connect again”.
  */
 function AuthWalletReconnect() {
-  const { token } = useAuth();
+  const { token, user } = useAuth();
   const { pathname } = useLocation();
   const { reconnectAsync } = useReconnect();
   const { address, status } = useAccount();
@@ -93,7 +105,7 @@ function AuthWalletReconnect() {
       void reconnectAsync().catch(() => {});
     }, 0);
     return () => clearTimeout(t);
-  }, [token, pathname, address, status, reconnectAsync]);
+  }, [token, user?.wallet, pathname, address, status, reconnectAsync]);
 
   useEffect(() => {
     if (!token) return;
@@ -217,6 +229,7 @@ export default function App() {
   return (
     <div className={`app${showMobileBottomNav ? " app--mobile-nav" : ""}`}>
       <SeoHead />
+      <ReconnectOnLoad />
       <ForceBscMainnet />
       <AuthWalletReconnect />
       <div className={`app-content${isLandingPage ? " app-content--landing" : ""}`}>

@@ -142,16 +142,7 @@ export default function Subscription() {
 
   const handlePay = async () => {
     if (!address) {
-      if (isWalletPending) {
-        setError("");
-        return;
-      }
-      if (token && user?.wallet) {
-        setError("Wallet link expired in this tab. Tap the button — your session stays signed in.");
-      } else {
-        setError("Connect your wallet in the browser (same address as your profile) to approve USDT and pay.");
-      }
-      openModal?.();
+      setError(isWalletPending ? "" : "Wallet is connecting… Please wait a moment and try again.");
       return;
     }
     if (!config.contractAddress) {
@@ -359,14 +350,14 @@ export default function Subscription() {
             type="button"
             className="profile-modern__submit subscription-modern__submit"
             onClick={handlePay}
-            disabled={loading || !approveAmountReady || (isWalletPending && !address)}
+            disabled={loading || !address || !approveAmountReady}
           >
             {loading
               ? (payStep === "approve" ? "1/2 Approving USDT…" : "2/2 Subscribing…")
               : isWalletPending && !address
                 ? "Restoring wallet…"
                 : !address
-                  ? "Connect wallet to pay"
+                  ? "Preparing wallet…"
                   : !approveAmountReady
                     ? "Loading price…"
                     : isResubscribe ? `Re-subscribe ${displayPrice}` : `Pay ${displayPrice}`}

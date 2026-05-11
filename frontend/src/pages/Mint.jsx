@@ -176,16 +176,7 @@ export default function Mint() {
 
   const handleMint = async () => {
     if (!address) {
-      if (isWalletPending) {
-        setError("");
-        return;
-      }
-      if (token && user?.wallet) {
-        setError("Wallet link expired in this tab. Tap the button — your session stays signed in.");
-      } else {
-        setError("Connect your wallet in the browser to approve USDT and mint (same address as your profile).");
-      }
-      openModal?.();
+      setError(isWalletPending ? "" : "Wallet is connecting… Please wait a moment and try again.");
       return;
     }
     const nftAddr = config.contractAddress || nftAddressNormalized;
@@ -397,14 +388,14 @@ export default function Mint() {
             type="button"
             className="profile-modern__submit mint-modern__submit"
             onClick={handleMint}
-            disabled={loading || !hasMintPrice || (isWalletPending && !address)}
+            disabled={loading || !address || !hasMintPrice}
           >
             {loading
               ? (mintStep === "approve" ? "1/2 Approving USDT…" : "2/2 Minting…")
               : isWalletPending && !address
                 ? "Restoring wallet…"
                 : !address
-                  ? "Connect wallet to mint"
+                  ? "Preparing wallet…"
                   : `Mint Asset · ${displayPrice}`}
           </button>
         </div>
