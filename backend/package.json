@@ -7,7 +7,8 @@
     "start": "node src/index.js",
     "upload-nft-pinata": "node scripts/upload-nft-pinata.js",
     "seed-admins": "node scripts/seed-admins.js",
-    "seed-bot-profiles": "node scripts/seed-bot-profiles.js"
+    "seed-bot-profiles": "node scripts/seed-bot-profiles.js",
+    "backfill-referral": "node scripts/backfill-referral-paid-once.js"
   },
   "dependencies": {
     "cors": "^2.8.5",
