@@ -708,15 +708,6 @@ async function notifyTradeActivityTelegram(buyer, seller, tid, priceStr, txHash)
       priceWei: priceStr,
       txHash: th,
     });
-    if (seller) {
-      await notifyActivity("sold", {
-        seller,
-        buyer,
-        tokenId: tid,
-        priceWei: priceStr,
-        txHash: th,
-      });
-    }
   } catch {
     /* non-fatal */
   }

@@ -13,7 +13,7 @@ const META_KEY = "telegramDbNotifier";
 /** Snapshot of active listing tokenIds to diff new listings (aligned with /api/marketplace/listings). */
 const META_LISTINGS_API = "telegramListingsApiPoller";
 
-/** Default 24h — poller skips subscription/mint/buy/sell/user_joined/listed when activity time is older (stale after cursor/meta bugs). Set TELEGRAM_POLLER_MAX_EVENT_AGE_MS=0 to disable. */
+/** Default 24h — poller skips subscription/mint/buy/user_joined/listed when activity time is older (stale after cursor/meta bugs). Set TELEGRAM_POLLER_MAX_EVENT_AGE_MS=0 to disable. */
 const DEFAULT_POLLER_MAX_EVENT_AGE_MS = 24 * 60 * 60 * 1000;
 
 function pollerMaxEventAgeMs() {
@@ -157,32 +157,8 @@ export async function runTelegramActivityFromDbNotifierOnce() {
             });
           }
         }
-      } else if (type === "sell") {
-        const tx = r.tx_hash ? String(r.tx_hash).trim() : "";
-        let buyer = "";
-        let priceWei = r.price != null ? String(r.price) : "0";
-        if (tx) {
-          const pr = await query(`SELECT buyer, price FROM nft_purchases WHERE tx_hash = $1 LIMIT 1`, [tx]);
-          if (pr.rows[0]) {
-            buyer = String(pr.rows[0].buyer || "").toLowerCase();
-            if (pr.rows[0].price != null) priceWei = String(pr.rows[0].price);
-          }
-        }
-        const seller = wallet;
-        const buyerBot = Boolean(buyer) && isConfiguredBotWallet(buyer);
-        const sellerBot = isConfiguredBotWallet(seller);
-        if (!(buyerBot && sellerBot)) {
-          if (freshUa) {
-            await notifyActivity("sold", {
-              seller,
-              buyer: buyer || "",
-              tokenId: String(r.token_id ?? ""),
-              priceWei,
-              ...(tx ? { txHash: tx } : {}),
-            });
-          }
-        }
       }
+      // type "sell" — no Telegram alert (bought-only; sell side was duplicate for operators)
     }
 
     const { rows: newUsers } = await query(

@@ -35,25 +35,6 @@ function shouldSendBoughtAlert(fields) {
   return true;
 }
 
-const soldAlertDedup = new Map();
-const SOLD_DEDUP_MS = 120_000;
-
-function shouldSendSoldAlert(fields) {
-  const txHash = fields?.txHash ? String(fields.txHash).trim().toLowerCase() : "";
-  if (!txHash.startsWith("0x")) return true;
-  const key = `sold:${txHash}`;
-  const now = Date.now();
-  const prev = soldAlertDedup.get(key);
-  if (prev && now - prev < SOLD_DEDUP_MS) return false;
-  soldAlertDedup.set(key, now);
-  if (soldAlertDedup.size > 400) {
-    for (const [k, t] of soldAlertDedup) {
-      if (now - t > SOLD_DEDUP_MS) soldAlertDedup.delete(k);
-    }
-  }
-  return true;
-}
-
 const SUBSCRIPTION_DEDUP_MS = 120_000;
 const subscriptionAlertDedup = new Map();
 
@@ -206,13 +187,13 @@ export async function sendTelegramText(text, options = {}) {
 
 /**
  * Structured alert — formatted in telegram-bot from `kind` + fields.
- * @param {"user_joined"|"subscription"|"mint"|"listed"|"bought"|"sold"|"maintenance"|"maintenance_resumed"} kind
+ * @param {"user_joined"|"subscription"|"mint"|"listed"|"bought"|"maintenance"|"maintenance_resumed"} kind
  */
 export async function notifyActivity(kind, fields) {
   const base = bridgeUrl();
   if (!base) return;
+  if (kind === "sold") return;
   if (kind === "bought" && !shouldSendBoughtAlert(fields)) return;
-  if (kind === "sold" && !shouldSendSoldAlert(fields)) return;
   if (kind === "subscription" && !shouldSendSubscriptionAlert(fields)) return;
   if (kind === "mint" && !shouldSendMintAlert(fields)) return;
   if (kind === "listed" && !shouldSendListedAlert(fields)) return;
