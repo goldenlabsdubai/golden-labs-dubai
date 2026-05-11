@@ -50,7 +50,8 @@ const networks = [bsc];
 const wagmiAdapter = new WagmiAdapter({
   networks,
   projectId,
-  ssr: true,
+  /** Pure SPA (Vite): reconnect runs immediately on first paint; `ssr: true` defers until useEffect and caused stale `address` on mobile. */
+  ssr: false,
   transports: {
     56: http(BSC_MAINNET_RPC),
   },

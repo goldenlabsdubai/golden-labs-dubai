@@ -8,14 +8,24 @@ import { useAccount } from "wagmi";
 
 export function useWalletConnect() {
   const { open } = useAppKit();
-  const { address, isConnected } = useAccount();
+  const acct = useAccount();
+  const address = acct.address ?? null;
+  const status = acct.status;
+  const isReconnecting = Boolean(acct.isReconnecting);
+  const isConnecting = Boolean(acct.isConnecting);
+  /** True while wagmi is restoring a prior session (common on SSR flag + mobile). */
+  const isWalletPending = Boolean(isReconnecting || isConnecting);
 
   return {
     openModal: () => {
       // Defer so modal open runs after current React render; avoids AppKit/Lit "scheduled an update after update completed" warning
       queueMicrotask(() => open());
     },
-    isConnected: Boolean(isConnected && address),
-    address: address ?? null,
+    isConnected: Boolean(acct.isConnected && address),
+    address,
+    status,
+    isReconnecting,
+    isConnecting,
+    isWalletPending,
   };
 }

@@ -31,7 +31,7 @@ const SUBSCRIPTION_ABI = [
 export default function Subscription() {
   const { token, refreshUser, user } = useAuth();
   const isResubscribe = user?.state === "SUSPENDED";
-  const { openModal, address } = useWalletConnect();
+  const { openModal, address, isWalletPending } = useWalletConnect();
   const balanceAddress = (address || (token && user?.wallet ? user.wallet : null)) ?? undefined;
   /** Reads must not depend on connector `chainId` — it is often undefined before reconnect, which broke balance & price RPC calls. */
   const { data: balanceData } = useBalance({
@@ -92,6 +92,9 @@ export default function Subscription() {
   useEffect(() => {
     setPortalReady(true);
   }, []);
+  useEffect(() => {
+    if (address) setError("");
+  }, [address]);
 
   const displayAddress = address || (token && user?.wallet ? user.wallet : null) || null;
 
@@ -139,10 +142,12 @@ export default function Subscription() {
 
   const handlePay = async () => {
     if (!address) {
+      if (isWalletPending) {
+        setError("");
+        return;
+      }
       if (token && user?.wallet) {
-        setError(
-          "You’re signed in and we can read your balance, but this browser session isn’t linked to your wallet yet. Tap below to reconnect the same address, then pay again."
-        );
+        setError("Wallet link expired in this tab. Tap the button — your session stays signed in.");
       } else {
         setError("Connect your wallet in the browser (same address as your profile) to approve USDT and pay.");
       }
@@ -354,17 +359,17 @@ export default function Subscription() {
             type="button"
             className="profile-modern__submit subscription-modern__submit"
             onClick={handlePay}
-            disabled={loading || !approveAmountReady}
+            disabled={loading || !approveAmountReady || (isWalletPending && !address)}
           >
             {loading
               ? (payStep === "approve" ? "1/2 Approving USDT…" : "2/2 Subscribing…")
-              : !address
-                ? token && user?.wallet
-                  ? "Reconnect wallet to pay"
-                  : "Connect wallet to pay"
-                : !approveAmountReady
-                  ? "Loading price…"
-                  : isResubscribe ? `Re-subscribe ${displayPrice}` : `Pay ${displayPrice}`}
+              : isWalletPending && !address
+                ? "Restoring wallet…"
+                : !address
+                  ? "Connect wallet to pay"
+                  : !approveAmountReady
+                    ? "Loading price…"
+                    : isResubscribe ? `Re-subscribe ${displayPrice}` : `Pay ${displayPrice}`}
           </button>
         </div>
       </main>

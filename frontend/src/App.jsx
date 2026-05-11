@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import { Routes, Route, Navigate, useLocation } from "react-router-dom";
-import { useAccount, useSwitchChain } from "wagmi";
+import { useAccount, useSwitchChain, useReconnect } from "wagmi";
 import "./App.css";
 import { useAuth } from "./hooks/useAuth";
 import { withTradingGateOverlay } from "./utils/tradingRouteGate";
@@ -10,6 +10,15 @@ import MobileBottomNav from "./components/MobileBottomNav";
 import PlatformMaintenanceOverlay from "./components/PlatformMaintenanceOverlay";
 import { SeoHead } from "./components/SeoHead";
 import { BSC_CHAIN_ID } from "./constants/chain";
+import Landing from "./pages/Landing";
+import Profile from "./pages/Profile";
+import ProfileSetup from "./pages/ProfileSetup";
+import Subscription from "./pages/Subscription";
+import Mint from "./pages/Mint";
+import Marketplace from "./pages/Marketplace";
+import Dashboard from "./pages/Dashboard";
+import Leaderboard from "./pages/Leaderboard";
+import UserProfile from "./pages/UserProfile";
 
 /** Same keys as useAuth — read without waiting for context (fixes MM in-app race + deep links). */
 function readStoredAuth() {
@@ -65,15 +74,39 @@ function ForceBscMainnet() {
   }, [hasSession, isConnected, chainId, switchChainAsync]);
   return null;
 }
-import Landing from "./pages/Landing";
-import Profile from "./pages/Profile";
-import ProfileSetup from "./pages/ProfileSetup";
-import Subscription from "./pages/Subscription";
-import Mint from "./pages/Mint";
-import Marketplace from "./pages/Marketplace";
-import Dashboard from "./pages/Dashboard";
-import Leaderboard from "./pages/Leaderboard";
-import UserProfile from "./pages/UserProfile";
+
+/**
+ * After SIWE, keep wagmi’s connector in sync: re-run reconnect on navigation and when the tab
+ * becomes visible so mobile / in-app browsers restore `address` without manual “connect again”.
+ */
+function AuthWalletReconnect() {
+  const { token } = useAuth();
+  const { pathname } = useLocation();
+  const { reconnectAsync } = useReconnect();
+  const { address, status } = useAccount();
+
+  useEffect(() => {
+    if (!token) return;
+    if (address) return;
+    if (status === "connecting" || status === "reconnecting") return;
+    const t = window.setTimeout(() => {
+      void reconnectAsync().catch(() => {});
+    }, 0);
+    return () => clearTimeout(t);
+  }, [token, pathname, address, status, reconnectAsync]);
+
+  useEffect(() => {
+    if (!token) return;
+    const onVis = () => {
+      if (document.visibilityState !== "visible") return;
+      void reconnectAsync().catch(() => {});
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => document.removeEventListener("visibilitychange", onVis);
+  }, [token, reconnectAsync]);
+
+  return null;
+}
 
 /**
  * Onboarding funnel (matches SubscriptionContract + NFT gates):
@@ -185,6 +218,7 @@ export default function App() {
     <div className={`app${showMobileBottomNav ? " app--mobile-nav" : ""}`}>
       <SeoHead />
       <ForceBscMainnet />
+      <AuthWalletReconnect />
       <div className={`app-content${isLandingPage ? " app-content--landing" : ""}`}>
         <div id="profile-bg-layer" className="profile-bg-layer" aria-hidden="true" />
         <ParticleNetwork />

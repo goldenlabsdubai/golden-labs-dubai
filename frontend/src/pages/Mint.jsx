@@ -26,7 +26,7 @@ const NFT_ABI = [
 ];
 export default function Mint() {
   const { token, refreshUser, user } = useAuth();
-  const { openModal, address } = useWalletConnect();
+  const { openModal, address, isWalletPending } = useWalletConnect();
   const balanceAddress = (address || (token && user?.wallet ? user.wallet : null)) ?? undefined;
   const { data: balanceData } = useBalance({
     address: balanceAddress,
@@ -111,6 +111,9 @@ export default function Mint() {
 
   useEffect(() => setPortalReady(true), []);
   useEffect(() => {
+    if (address) setError("");
+  }, [address]);
+  useEffect(() => {
     if (!token) {
       setConfigLoadError("");
       return;
@@ -173,10 +176,12 @@ export default function Mint() {
 
   const handleMint = async () => {
     if (!address) {
+      if (isWalletPending) {
+        setError("");
+        return;
+      }
       if (token && user?.wallet) {
-        setError(
-          "You’re signed in and we can read your balance, but this browser session isn’t linked to your wallet yet. Tap the button below to reconnect the same address, then approve again."
-        );
+        setError("Wallet link expired in this tab. Tap the button — your session stays signed in.");
       } else {
         setError("Connect your wallet in the browser to approve USDT and mint (same address as your profile).");
       }
@@ -392,15 +397,15 @@ export default function Mint() {
             type="button"
             className="profile-modern__submit mint-modern__submit"
             onClick={handleMint}
-            disabled={loading || !hasMintPrice}
+            disabled={loading || !hasMintPrice || (isWalletPending && !address)}
           >
             {loading
               ? (mintStep === "approve" ? "1/2 Approving USDT…" : "2/2 Minting…")
-              : !address
-                ? token && user?.wallet
-                  ? "Reconnect wallet to mint"
-                  : "Connect wallet to mint"
-                : `Mint Asset · ${displayPrice}`}
+              : isWalletPending && !address
+                ? "Restoring wallet…"
+                : !address
+                  ? "Connect wallet to mint"
+                  : `Mint Asset · ${displayPrice}`}
           </button>
         </div>
       </main>
