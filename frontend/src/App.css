@@ -24,17 +24,17 @@
 }
 
 /**
- * Wallet in-app browsers (MetaMask, Trust, etc.) sometimes composite the particle canvas as an opaque
- * layer when it stacks above route content — page looks black/blank. Keep canvas under `.app-routes` on small viewports.
+ * Applied on `<html>` only when `isLikelyWalletEmbeddedBrowser()` (see App.jsx).
+ * Disables the global particle canvas — WebViews often paint it as a solid black layer over the app.
  */
-@media (max-width: 768px) {
-  .app-content--landing .particle-network-wrap {
-    z-index: 4;
-  }
+.gl-wallet-webview .particle-network-wrap {
+  display: none !important;
+}
 
-  .app-content--landing .app-cards-overlay {
-    z-index: 11;
-  }
+.gl-wallet-webview .app-routes {
+  position: relative;
+  z-index: 10;
+  isolation: isolate;
 }
 
 .particle-network-wrap .particle-network {

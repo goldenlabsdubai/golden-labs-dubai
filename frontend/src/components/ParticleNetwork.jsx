@@ -59,6 +59,9 @@ function ParticleNetwork() {
 
   useEffect(() => {
     if (skipCanvas) return undefined;
+    if (typeof document !== "undefined" && document.documentElement.classList.contains("gl-wallet-webview")) {
+      return undefined;
+    }
     const wrap = wrapRef.current;
     const canvas = canvasRef.current;
     if (!wrap || !canvas) return undefined;

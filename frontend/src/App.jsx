@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 import { Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { useAccount, useSwitchChain } from "wagmi";
 import "./App.css";
@@ -11,6 +11,7 @@ import PlatformMaintenanceOverlay from "./components/PlatformMaintenanceOverlay"
 import { SeoHead } from "./components/SeoHead";
 import WalletSessionReconnect from "./components/WalletSessionReconnect";
 import { BSC_CHAIN_ID } from "./constants/chain";
+import { syncWalletWebviewHtmlClass } from "./utils/walletEmbeddedBrowser";
 
 /** Same keys as useAuth — read without waiting for context (fixes MM in-app race + deep links). */
 function readStoredAuth() {
@@ -175,6 +176,19 @@ export default function App() {
   const { isConnected } = useAccount();
   const { token } = useAuth();
   const { lsToken } = readStoredAuth();
+
+  useLayoutEffect(() => {
+    if (typeof document === "undefined") return undefined;
+    syncWalletWebviewHtmlClass();
+    return () => document.documentElement.classList.remove("gl-wallet-webview");
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+    const ids = [200, 700, 2000].map((ms) => window.setTimeout(() => syncWalletWebviewHtmlClass(), ms));
+    return () => ids.forEach(clearTimeout);
+  }, []);
+
   const isProfilePage = location.pathname === "/profile";
   const isProfileSetupPage = location.pathname === "/profile/setup";
   const isLandingPage = location.pathname === "/";
