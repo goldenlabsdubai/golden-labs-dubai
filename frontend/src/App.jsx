@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { Routes, Route, Navigate, useLocation } from "react-router-dom";
+import { Routes, Route, Navigate, useLocation, useNavigate } from "react-router-dom";
 import { useAccount, useSwitchChain, useReconnect, useConnect, useConnectors, useConfig } from "wagmi";
 import { getConnection } from "@wagmi/core";
 import "./App.css";
@@ -10,6 +10,7 @@ import SupportChat from "./components/SupportChat";
 import MobileBottomNav from "./components/MobileBottomNav";
 import PlatformMaintenanceOverlay from "./components/PlatformMaintenanceOverlay";
 import { SeoHead } from "./components/SeoHead";
+import { registerSpaNavigate } from "./utils/appNavigation";
 import { BSC_CHAIN_ID } from "./constants/chain";
 import Landing from "./pages/Landing";
 import Profile from "./pages/Profile";
@@ -128,23 +129,38 @@ function AuthWalletReconnect() {
   const { reconnectAsync } = useReconnect();
   const { connectAsync } = useConnect();
   const connectors = useConnectors();
+  const reconnectRef = useRef(reconnectAsync);
+  const connectRef = useRef(connectAsync);
+  const connectorsRef = useRef(connectors);
+  const configRef = useRef(config);
+  reconnectRef.current = reconnectAsync;
+  connectRef.current = connectAsync;
+  connectorsRef.current = connectors;
+  configRef.current = config;
+
   const { address, status, isReconnecting } = useAccount();
-  const sessionWallet = user?.wallet && typeof user.wallet === "string" ? user.wallet.trim() : "";
-  const sessionNorm = sessionWallet ? sessionWallet.toLowerCase() : "";
+  const { lsUser, lsToken } = readStoredAuth();
+  const sessionWalletRaw =
+    (user?.wallet && String(user.wallet)) ||
+    (lsUser?.wallet && String(lsUser.wallet)) ||
+    "";
+  const sessionNorm = sessionWalletRaw.trim().toLowerCase();
+  const hasSession = Boolean(token || lsToken);
   const lastSilentTryRef = useRef(0);
+  const lastSilentPathRef = useRef("");
 
   useEffect(() => {
-    if (!token) return;
+    if (!hasSession) return;
     const onVis = () => {
       if (document.visibilityState !== "visible") return;
-      void reconnectAsync().catch(() => {});
+      void reconnectRef.current().catch(() => {});
     };
     document.addEventListener("visibilitychange", onVis);
     return () => document.removeEventListener("visibilitychange", onVis);
-  }, [token, reconnectAsync]);
+  }, [hasSession]);
 
   useEffect(() => {
-    if (!token || !sessionNorm) return;
+    if (!hasSession || !sessionNorm) return;
     if (address && address.toLowerCase() === sessionNorm) return;
     /** Different wallet is active; do not auto-switch accounts. */
     if (address) return;
@@ -154,22 +170,31 @@ function AuthWalletReconnect() {
     const t = window.setTimeout(() => {
       void (async () => {
         try {
-          await reconnectAsync();
+          await reconnectRef.current();
         } catch {
           /* ignore */
         }
         if (cancelled) return;
         await new Promise((r) => setTimeout(r, 400));
         if (cancelled) return;
-        const cur = getConnection(config);
+        const cur = getConnection(configRef.current);
         if (cur.status === "connected" && cur.address) return;
+        if (lastSilentPathRef.current !== pathname) {
+          lastSilentPathRef.current = pathname;
+          lastSilentTryRef.current = 0;
+        }
         const now = Date.now();
         if (now - lastSilentTryRef.current < 4000) return;
         lastSilentTryRef.current = now;
         try {
-          await trySilentConnectToAuthorizedAccount(connectAsync, connectors, sessionNorm, BSC_CHAIN_ID);
+          await trySilentConnectToAuthorizedAccount(
+            connectRef.current,
+            connectorsRef.current,
+            sessionNorm,
+            BSC_CHAIN_ID,
+          );
         } catch {
-          /* Modal/connect reject — user can tap Connect in header */
+          /* reject — header Connect still works */
         }
       })();
     }, 120);
@@ -178,19 +203,18 @@ function AuthWalletReconnect() {
       cancelled = true;
       clearTimeout(t);
     };
-  }, [
-    token,
-    sessionNorm,
-    address,
-    status,
-    isReconnecting,
-    pathname,
-    reconnectAsync,
-    connectAsync,
-    connectors,
-    config,
-  ]);
+  }, [hasSession, sessionNorm, address, status, isReconnecting, pathname]);
 
+  return null;
+}
+
+/** Keeps client-side `assignAppPath` from doing full reloads (preserves wagmi session). */
+function SpaNavigateRegistration() {
+  const navigate = useNavigate();
+  useEffect(() => {
+    registerSpaNavigate(navigate);
+    return () => registerSpaNavigate(null);
+  }, [navigate]);
   return null;
 }
 
@@ -302,6 +326,7 @@ export default function App() {
 
   return (
     <div className={`app${showMobileBottomNav ? " app--mobile-nav" : ""}`}>
+      <SpaNavigateRegistration />
       <SeoHead />
       <ReconnectOnLoad />
       <ForceBscMainnet />
