@@ -62,6 +62,13 @@ createAppKit({
   defaultNetwork: bsc,
   projectId,
   metadata,
+  /**
+   * Some injected / in-app wallets briefly report a chain id AppKit does not map to `networks`
+   * (or strict equality fails), which opens the “doesn’t support your current network” modal even on BSC.
+   * Per Reown docs, this suppresses that blocking dialog; wagmi + our pages still enforce BSC for txs/SIWE.
+   * @see https://docs.reown.com/appkit/react/core/options#allowunsupportedchain
+   */
+  allowUnsupportedChain: true,
   features: {
     analytics: false,
     email: false,
