@@ -32,6 +32,9 @@ function readStoredAuth() {
 /** Only before sign-in: nudge wallet to BSC for connect/SIWE. After session exists, no auto `switchChain` (avoids repeat prompts + UI flicker from chainId churn). */
 function ForceBscMainnet() {
   const { token } = useAuth();
+  /** Match `ProtectedRoute`: context can lag behind `gl_token` (e.g. MM in-app / deep links) — still a signed-in session, so never auto-switch. */
+  const { lsToken } = readStoredAuth();
+  const hasSession = Boolean(token || lsToken);
   const { isConnected, chainId } = useAccount();
   const { switchChainAsync } = useSwitchChain();
   const chainIdRef = useRef(chainId);
@@ -40,7 +43,7 @@ function ForceBscMainnet() {
   const switchCooldownUntilRef = useRef(0);
 
   useEffect(() => {
-    if (token) return;
+    if (hasSession) return;
     if (!isConnected) return;
     const cid = chainId != null ? Number(chainId) : null;
     if (cid == null || Number.isNaN(cid) || cid === BSC_CHAIN_ID) return;
@@ -59,7 +62,7 @@ function ForceBscMainnet() {
     }, 800);
 
     return () => window.clearTimeout(t);
-  }, [token, isConnected, chainId, switchChainAsync]);
+  }, [hasSession, isConnected, chainId, switchChainAsync]);
   return null;
 }
 import Landing from "./pages/Landing";
