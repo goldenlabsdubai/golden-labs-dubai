@@ -1,9 +1,8 @@
 import { useState, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
-import { AppRouteLink } from "../components/AppRouteLink";
 import { assignAppPath } from "../utils/appNavigation";
-import { useAccount, useBalance, useDisconnect, useReadContract, useWriteContract, usePublicClient } from "wagmi";
-import { formatEther, formatUnits, parseUnits } from "viem";
+import { useBalance, useDisconnect, useReadContract, useWriteContract, usePublicClient } from "wagmi";
+import { formatEther, formatUnits } from "viem";
 import { useAuth } from "../hooks/useAuth";
 import { useWalletConnect } from "../hooks/useWalletConnect";
 import { API, ASSET_IMAGE } from "../config";
@@ -16,6 +15,7 @@ import {
 import InsufficientBalanceModal from "../components/InsufficientBalanceModal";
 import { NavbarBrandLink } from "../components/NavbarBrandLink";
 import { USDT_DECIMALS } from "../constants/usdtDecimals";
+import { BSC_CHAIN_ID } from "../constants/chain";
 import { formatUsdtTrim, readContractUint256 } from "../utils/formatUsdt";
 
 // USDT (BEP20) – balance and approve. Use same chain as connected wallet.
@@ -31,9 +31,13 @@ const SUBSCRIPTION_ABI = [
 export default function Subscription() {
   const { token, refreshUser, user } = useAuth();
   const isResubscribe = user?.state === "SUSPENDED";
-  const { openModal, isConnected, address } = useWalletConnect();
-  const { chainId } = useAccount();
-  const { data: balanceData } = useBalance({ address: (address || (token && user?.wallet ? user.wallet : null)) ?? undefined });
+  const { openModal, address } = useWalletConnect();
+  const balanceAddress = (address || (token && user?.wallet ? user.wallet : null)) ?? undefined;
+  /** Reads must not depend on connector `chainId` — it is often undefined before reconnect, which broke balance & price RPC calls. */
+  const { data: balanceData } = useBalance({
+    address: balanceAddress,
+    chainId: BSC_CHAIN_ID,
+  });
   const { disconnect: disconnectWallet } = useDisconnect();
   const [loading, setLoading] = useState(false);
   const [payStep, setPayStep] = useState(null);
@@ -49,15 +53,15 @@ export default function Subscription() {
   });
   const [configLoadError, setConfigLoadError] = useState("");
   const [addressMenuOpen, setAddressMenuOpen] = useState(false);
-  const publicClient = usePublicClient();
+  const publicClient = usePublicClient({ chainId: BSC_CHAIN_ID });
   const { writeContractAsync } = useWriteContract();
 
   const { data: subscriptionPriceWei } = useReadContract({
     address: subContractAddressNormalized || undefined,
     abi: SUBSCRIPTION_ABI,
     functionName: "subscriptionPrice",
+    chainId: BSC_CHAIN_ID,
     query: { enabled: Boolean(subContractAddressNormalized) },
-    ...(chainId != null && { chainId }),
   });
   const subscriptionPricePretty = subscriptionPriceWei != null ? formatUsdtTrim(subscriptionPriceWei) : null;
   const subscriptionPriceFormatted = subscriptionPricePretty != null ? `${subscriptionPricePretty} USDT` : null;
@@ -68,12 +72,19 @@ export default function Subscription() {
   const usdtAddress = (import.meta.env.VITE_USDT_ADDRESS || "").trim();
   const usdtAddressNormalized = usdtAddress && usdtAddress.startsWith("0x") ? usdtAddress : usdtAddress ? `0x${usdtAddress}` : "";
   const walletForReads = address || (token && user?.wallet ? user.wallet : null) || undefined;
-  const { data: usdtBalanceRaw, isLoading: usdtBalanceLoading, refetch: refetchUsdtBalance } = useReadContract({
+  const usdtReadEnabled = Boolean(usdtAddressNormalized && walletForReads);
+  const {
+    data: usdtBalanceRaw,
+    isLoading: usdtBalanceLoading,
+    isError: usdtBalanceError,
+    refetch: refetchUsdtBalance,
+  } = useReadContract({
     address: usdtAddressNormalized || undefined,
     abi: USDT_ABI,
     functionName: "balanceOf",
     args: walletForReads ? [walletForReads] : undefined,
-    ...(chainId != null && { chainId }),
+    chainId: BSC_CHAIN_ID,
+    query: { enabled: usdtReadEnabled },
   });
   const usdtBalance = usdtBalanceRaw != null ? Number(formatUnits(usdtBalanceRaw, USDT_DECIMALS)) : null;
   const bnbBalanceFormatted = balanceData?.value != null ? Number(formatEther(balanceData.value)).toFixed(4) : null;
@@ -128,7 +139,8 @@ export default function Subscription() {
 
   const handlePay = async () => {
     if (!address) {
-      setError("Wallet is connecting… Please wait a moment and try again.");
+      setError("Connect your wallet in the browser (same address as your profile) to approve USDT and pay.");
+      openModal?.();
       return;
     }
     if (!config.contractAddress) {
@@ -174,6 +186,7 @@ export default function Subscription() {
         DEFAULT_APPROVE_GAS
       );
       const hashApprove = await writeContractAsync({
+        chainId: BSC_CHAIN_ID,
         address: usdtAddressNormalized,
         abi: USDT_ABI,
         functionName: "approve",
@@ -194,6 +207,7 @@ export default function Subscription() {
         DEFAULT_SUBSCRIBE_GAS
       );
       const hashSubscribe = await writeContractAsync({
+        chainId: BSC_CHAIN_ID,
         address: config.contractAddress,
         abi: SUBSCRIPTION_ABI,
         functionName: "subscribe",
@@ -309,7 +323,16 @@ export default function Subscription() {
               <img src="/USDT_BEP20.png" alt="" className="subscription-modern__balance-icon" aria-hidden="true" />
               <span className="subscription-modern__balance-label">Your USDT balance:</span>
               <span className="subscription-modern__balance-value">
-                {usdtBalanceLoading ? "…" : usdtBalance != null ? <>{usdtBalance.toFixed(2)} USDT <img src="/USDT_BEP20.png" alt="" className="usdt-logo-inline" aria-hidden="true" /></> : "—"}
+                {usdtBalanceLoading
+                  ? "…"
+                  : usdtBalanceError
+                    ? "unavailable"
+                    : usdtBalance != null
+                      ? <>
+                          {usdtBalance.toFixed(2)} USDT{" "}
+                          <img src="/USDT_BEP20.png" alt="" className="usdt-logo-inline" aria-hidden="true" />
+                        </>
+                      : "—"}
               </span>
             </div>
           </div>
@@ -325,12 +348,12 @@ export default function Subscription() {
             type="button"
             className="profile-modern__submit subscription-modern__submit"
             onClick={handlePay}
-            disabled={loading || !address || !approveAmountReady}
+            disabled={loading || !approveAmountReady}
           >
             {loading
               ? (payStep === "approve" ? "1/2 Approving USDT…" : "2/2 Subscribing…")
               : !address
-                ? "Preparing wallet…"
+                ? "Connect wallet to pay"
                 : !approveAmountReady
                   ? "Loading price…"
                   : isResubscribe ? `Re-subscribe ${displayPrice}` : `Pay ${displayPrice}`}
