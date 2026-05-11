@@ -13,8 +13,8 @@ const META_KEY = "telegramDbNotifier";
 /** Snapshot of active listing tokenIds to diff new listings (aligned with /api/marketplace/listings). */
 const META_LISTINGS_API = "telegramListingsApiPoller";
 
-/** Default 3h — poller skips subscription/mint/buy/user_joined/listed when DB/API time is older (stops “today” spam after cursor/meta bugs). Set TELEGRAM_POLLER_MAX_EVENT_AGE_MS=0 to disable. */
-const DEFAULT_POLLER_MAX_EVENT_AGE_MS = 3 * 60 * 60 * 1000;
+/** Default 24h — poller skips subscription/mint/buy/sell/user_joined/listed when activity time is older (stale after cursor/meta bugs). Set TELEGRAM_POLLER_MAX_EVENT_AGE_MS=0 to disable. */
+const DEFAULT_POLLER_MAX_EVENT_AGE_MS = 24 * 60 * 60 * 1000;
 
 function pollerMaxEventAgeMs() {
   const raw = (process.env.TELEGRAM_POLLER_MAX_EVENT_AGE_MS ?? "").trim();
@@ -48,7 +48,7 @@ function isPollerEventFresh(timeSource) {
   const maxAge = pollerMaxEventAgeMs();
   if (maxAge === Infinity) return true;
   const t = eventTimeMs(timeSource);
-  if (t == null) return false;
+  if (t == null) return true;
   return Date.now() - t <= maxAge;
 }
 
@@ -151,6 +151,31 @@ export async function runTelegramActivityFromDbNotifierOnce() {
             await notifyActivity("bought", {
               buyer: wallet,
               seller: seller || "",
+              tokenId: String(r.token_id ?? ""),
+              priceWei,
+              ...(tx ? { txHash: tx } : {}),
+            });
+          }
+        }
+      } else if (type === "sell") {
+        const tx = r.tx_hash ? String(r.tx_hash).trim() : "";
+        let buyer = "";
+        let priceWei = r.price != null ? String(r.price) : "0";
+        if (tx) {
+          const pr = await query(`SELECT buyer, price FROM nft_purchases WHERE tx_hash = $1 LIMIT 1`, [tx]);
+          if (pr.rows[0]) {
+            buyer = String(pr.rows[0].buyer || "").toLowerCase();
+            if (pr.rows[0].price != null) priceWei = String(pr.rows[0].price);
+          }
+        }
+        const seller = wallet;
+        const buyerBot = Boolean(buyer) && isConfiguredBotWallet(buyer);
+        const sellerBot = isConfiguredBotWallet(seller);
+        if (!(buyerBot && sellerBot)) {
+          if (freshUa) {
+            await notifyActivity("sold", {
+              seller,
+              buyer: buyer || "",
               tokenId: String(r.token_id ?? ""),
               priceWei,
               ...(tx ? { txHash: tx } : {}),

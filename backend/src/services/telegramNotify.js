@@ -35,6 +35,68 @@ function shouldSendBoughtAlert(fields) {
   return true;
 }
 
+const soldAlertDedup = new Map();
+const SOLD_DEDUP_MS = 120_000;
+
+function shouldSendSoldAlert(fields) {
+  const txHash = fields?.txHash ? String(fields.txHash).trim().toLowerCase() : "";
+  if (!txHash.startsWith("0x")) return true;
+  const key = `sold:${txHash}`;
+  const now = Date.now();
+  const prev = soldAlertDedup.get(key);
+  if (prev && now - prev < SOLD_DEDUP_MS) return false;
+  soldAlertDedup.set(key, now);
+  if (soldAlertDedup.size > 400) {
+    for (const [k, t] of soldAlertDedup) {
+      if (now - t > SOLD_DEDUP_MS) soldAlertDedup.delete(k);
+    }
+  }
+  return true;
+}
+
+const SUBSCRIPTION_DEDUP_MS = 120_000;
+const subscriptionAlertDedup = new Map();
+
+function shouldSendSubscriptionAlert(fields) {
+  const txHash = fields?.txHash ? String(fields.txHash).trim().toLowerCase() : "";
+  const addr = fields?.address ? String(fields.address).trim().toLowerCase() : "";
+  const key = txHash.startsWith("0x") ? `subscription:tx:${txHash}` : `subscription:${addr}:${Math.floor(Date.now() / SUBSCRIPTION_DEDUP_MS)}`;
+  if (!addr && !txHash.startsWith("0x")) return true;
+  const now = Date.now();
+  const prev = subscriptionAlertDedup.get(key);
+  if (prev && now - prev < SUBSCRIPTION_DEDUP_MS) return false;
+  subscriptionAlertDedup.set(key, now);
+  if (subscriptionAlertDedup.size > 400) {
+    for (const [k, t] of subscriptionAlertDedup) {
+      if (now - t > SUBSCRIPTION_DEDUP_MS) subscriptionAlertDedup.delete(k);
+    }
+  }
+  return true;
+}
+
+const MINT_DEDUP_MS = 120_000;
+const mintAlertDedup = new Map();
+
+function shouldSendMintAlert(fields) {
+  const txHash = fields?.txHash ? String(fields.txHash).trim().toLowerCase() : "";
+  const addr = fields?.address ? String(fields.address).trim().toLowerCase() : "";
+  const tid = fields?.tokenId != null && fields.tokenId !== "" ? String(fields.tokenId) : "";
+  const key = txHash.startsWith("0x")
+    ? `mint:tx:${txHash}`
+    : `mint:${addr}:${tid}:${Math.floor(Date.now() / MINT_DEDUP_MS)}`;
+  if (!addr && !txHash.startsWith("0x")) return true;
+  const now = Date.now();
+  const prev = mintAlertDedup.get(key);
+  if (prev && now - prev < MINT_DEDUP_MS) return false;
+  mintAlertDedup.set(key, now);
+  if (mintAlertDedup.size > 400) {
+    for (const [k, t] of mintAlertDedup) {
+      if (now - t > MINT_DEDUP_MS) mintAlertDedup.delete(k);
+    }
+  }
+  return true;
+}
+
 /** Skip duplicate "listed" when both indexer DB row and listings API poller fire for the same listing. */
 const listedAlertDedup = new Map();
 const LISTED_DEDUP_MS = 300_000;
@@ -144,12 +206,15 @@ export async function sendTelegramText(text, options = {}) {
 
 /**
  * Structured alert — formatted in telegram-bot from `kind` + fields.
- * @param {"user_joined"|"subscription"|"mint"|"listed"|"bought"|"maintenance"|"maintenance_resumed"} kind
+ * @param {"user_joined"|"subscription"|"mint"|"listed"|"bought"|"sold"|"maintenance"|"maintenance_resumed"} kind
  */
 export async function notifyActivity(kind, fields) {
   const base = bridgeUrl();
   if (!base) return;
   if (kind === "bought" && !shouldSendBoughtAlert(fields)) return;
+  if (kind === "sold" && !shouldSendSoldAlert(fields)) return;
+  if (kind === "subscription" && !shouldSendSubscriptionAlert(fields)) return;
+  if (kind === "mint" && !shouldSendMintAlert(fields)) return;
   if (kind === "listed" && !shouldSendListedAlert(fields)) return;
   if (kind === "maintenance" && !shouldSendMaintenanceAlert(fields)) return;
   if (kind === "maintenance_resumed" && !shouldSendMaintenanceResumedAlert()) return;

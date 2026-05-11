@@ -688,6 +688,40 @@ export async function getActivitiesSince(wallet, since, limit = 10) {
   return { activities };
 }
 
+/** After a successful marketplace purchase commit; dynamic import avoids circular deps with botService. */
+async function notifyTradeActivityTelegram(buyer, seller, tid, priceStr, txHash) {
+  const th = typeof txHash === "string" ? txHash.trim().toLowerCase() : "";
+  if (!th.startsWith("0x")) return;
+  try {
+    const [{ notifyActivity, isTelegramSendConfigured }, { isConfiguredBotWallet }] = await Promise.all([
+      import("./telegramNotify.js"),
+      import("./botService.js"),
+    ]);
+    if (!isTelegramSendConfigured()) return;
+    const buyerBot = isConfiguredBotWallet(buyer);
+    const sellerBot = seller ? isConfiguredBotWallet(seller) : false;
+    if (buyerBot && sellerBot) return;
+    await notifyActivity("bought", {
+      buyer,
+      seller: seller || "",
+      tokenId: tid,
+      priceWei: priceStr,
+      txHash: th,
+    });
+    if (seller) {
+      await notifyActivity("sold", {
+        seller,
+        buyer,
+        tokenId: tid,
+        priceWei: priceStr,
+        txHash: th,
+      });
+    }
+  } catch {
+    /* non-fatal */
+  }
+}
+
 export async function recordPurchase(buyerWallet, sellerWallet, tokenId, price, options = {}) {
   const buyer = (buyerWallet || "").toLowerCase();
   const seller = (sellerWallet || "").toLowerCase();
@@ -744,6 +778,7 @@ export async function recordPurchase(buyerWallet, sellerWallet, tokenId, price, 
       await client.query("UPDATE users SET owned_token_ids = $1::jsonb, last_activity = NOW() WHERE id = $2", [JSON.stringify(sIds), docIdWallet(seller)]);
     }
     await client.query("COMMIT");
+    notifyTradeActivityTelegram(buyer, seller, tid, priceStr, txHash).catch(() => {});
   } catch (e) {
     await client.query("ROLLBACK");
     if (e?.code === "23505") return;

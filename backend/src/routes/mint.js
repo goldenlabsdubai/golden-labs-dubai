@@ -3,6 +3,8 @@ import { ethers } from "ethers";
 import * as User from "../services/user.js";
 import { getOnChainUserStatus } from "../services/onChainUser.js";
 import { USDT_DECIMALS } from "../constants/usdtDecimals.js";
+import { isConfiguredBotWallet } from "../services/botService.js";
+import { notifyActivity } from "../services/telegramNotify.js";
 
 const router = Router();
 
@@ -99,6 +101,13 @@ router.post("/confirm", async (req, res) => {
       return res.status(503).json({ error: e?.message || "Failed to read mintPrice from chain" });
     }
     await User.logActivity(wallet, "mint", { tokenId: tokenId != null ? String(tokenId) : null, price: mintPriceWei, ...(txHash ? { txHash } : {}) });
+    if (!isConfiguredBotWallet(wallet)) {
+      notifyActivity("mint", {
+        address: wallet,
+        ...(tokenId != null && tokenId !== "" ? { tokenId: String(tokenId) } : {}),
+        ...(txHash ? { txHash } : {}),
+      }).catch((e) => console.warn("[telegram] mint alert:", e?.message || e));
+    }
     await User.updateUser(user.id, { state: "MINTED", lastActivity: new Date() });
     const updated = await User.getUser(req);
     res.json({

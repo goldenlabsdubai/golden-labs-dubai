@@ -1,6 +1,8 @@
 import { Router } from "express";
 import * as User from "../services/user.js";
 import { getOnChainUserStatus, getSubscriptionPriceFromChain } from "../services/onChainUser.js";
+import { isConfiguredBotWallet } from "../services/botService.js";
+import { notifyActivity } from "../services/telegramNotify.js";
 
 const router = Router();
 
@@ -52,6 +54,11 @@ router.post("/confirm", async (req, res) => {
       return res.status(503).json({ error: e?.message || "Could not read subscription price from chain for activity log" });
     }
     await User.logActivity(wallet, "subscription", { price: priceWeiLog, ...(txHash ? { txHash } : {}) });
+    if (!isConfiguredBotWallet(wallet)) {
+      notifyActivity("subscription", { address: wallet, ...(txHash ? { txHash } : {}) }).catch((e) =>
+        console.warn("[telegram] subscription alert:", e?.message || e)
+      );
+    }
     const updated = await User.getUser(req);
     res.json({
       user: { wallet: updated.wallet, state: updated.state },
