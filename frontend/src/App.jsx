@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { Routes, Route, Navigate, useLocation } from "react-router-dom";
-import { useAccount, useSwitchChain, useReconnect } from "wagmi";
+import { useAccount, useSwitchChain, useReconnect, useConnect, useConnectors, useConfig } from "wagmi";
+import { getConnection } from "@wagmi/core";
 import "./App.css";
 import { useAuth } from "./hooks/useAuth";
 import { withTradingGateOverlay } from "./utils/tradingRouteGate";
@@ -36,6 +37,34 @@ function readStoredAuth() {
   } catch {
     return { lsToken: null, lsUser: null };
   }
+}
+
+/**
+ * If the browser wallet already authorized this origin for `expectedLower` (`eth_accounts`),
+ * bind wagmi to that connector without showing the AppKit modal. WalletConnect sessions are
+ * handled by reconnect(); this closes the gap where JWT + `gl_user.wallet` exist but wagmi
+ * `address` is still null (injected / mobile web).
+ */
+async function trySilentConnectToAuthorizedAccount(connectAsync, connectors, expectedLower, chainId) {
+  const seen = new Set();
+  for (const c of connectors) {
+    const key = `${c.id ?? ""}:${c.uid ?? ""}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    try {
+      if (typeof c.getProvider !== "function") continue;
+      const provider = await c.getProvider();
+      if (!provider || typeof provider.request !== "function") continue;
+      const accounts = await provider.request({ method: "eth_accounts" });
+      const a0 = Array.isArray(accounts) ? accounts[0] : null;
+      if (!a0 || typeof a0 !== "string" || a0.toLowerCase() !== expectedLower) continue;
+      await connectAsync({ connector: c, chainId });
+      return true;
+    } catch {
+      /* try next connector */
+    }
+  }
+  return false;
 }
 
 /** Only before sign-in: nudge wallet to BSC for connect/SIWE. After session exists, no auto `switchChain` (avoids repeat prompts + UI flicker from chainId churn). */
@@ -88,24 +117,21 @@ function ReconnectOnLoad() {
 }
 
 /**
- * After SIWE, keep wagmi’s connector in sync: re-run reconnect on navigation and when the tab
- * becomes visible so mobile / in-app browsers restore `address` without manual “connect again”.
+ * After SIWE, keep wagmi’s connector in sync: reconnect on navigation / tab focus, then if the
+ * user is still logged in with `user.wallet` but wagmi has no `address`, try a silent injected
+ * connect when `eth_accounts` already matches (same behavior users expect as “I connected on Landing”).
  */
 function AuthWalletReconnect() {
+  const config = useConfig();
   const { token, user } = useAuth();
   const { pathname } = useLocation();
   const { reconnectAsync } = useReconnect();
-  const { address, status } = useAccount();
-
-  useEffect(() => {
-    if (!token) return;
-    if (address) return;
-    if (status === "connecting" || status === "reconnecting") return;
-    const t = window.setTimeout(() => {
-      void reconnectAsync().catch(() => {});
-    }, 0);
-    return () => clearTimeout(t);
-  }, [token, user?.wallet, pathname, address, status, reconnectAsync]);
+  const { connectAsync } = useConnect();
+  const connectors = useConnectors();
+  const { address, status, isReconnecting } = useAccount();
+  const sessionWallet = user?.wallet && typeof user.wallet === "string" ? user.wallet.trim() : "";
+  const sessionNorm = sessionWallet ? sessionWallet.toLowerCase() : "";
+  const lastSilentTryRef = useRef(0);
 
   useEffect(() => {
     if (!token) return;
@@ -116,6 +142,54 @@ function AuthWalletReconnect() {
     document.addEventListener("visibilitychange", onVis);
     return () => document.removeEventListener("visibilitychange", onVis);
   }, [token, reconnectAsync]);
+
+  useEffect(() => {
+    if (!token || !sessionNorm) return;
+    if (address && address.toLowerCase() === sessionNorm) return;
+    /** Different wallet is active; do not auto-switch accounts. */
+    if (address) return;
+    if (status === "connecting" || status === "reconnecting" || isReconnecting) return;
+
+    let cancelled = false;
+    const t = window.setTimeout(() => {
+      void (async () => {
+        try {
+          await reconnectAsync();
+        } catch {
+          /* ignore */
+        }
+        if (cancelled) return;
+        await new Promise((r) => setTimeout(r, 400));
+        if (cancelled) return;
+        const cur = getConnection(config);
+        if (cur.status === "connected" && cur.address) return;
+        const now = Date.now();
+        if (now - lastSilentTryRef.current < 4000) return;
+        lastSilentTryRef.current = now;
+        try {
+          await trySilentConnectToAuthorizedAccount(connectAsync, connectors, sessionNorm, BSC_CHAIN_ID);
+        } catch {
+          /* Modal/connect reject — user can tap Connect in header */
+        }
+      })();
+    }, 120);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [
+    token,
+    sessionNorm,
+    address,
+    status,
+    isReconnecting,
+    pathname,
+    reconnectAsync,
+    connectAsync,
+    connectors,
+    config,
+  ]);
 
   return null;
 }
