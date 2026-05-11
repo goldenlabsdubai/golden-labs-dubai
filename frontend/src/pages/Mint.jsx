@@ -173,7 +173,13 @@ export default function Mint() {
 
   const handleMint = async () => {
     if (!address) {
-      setError("Connect your wallet in the browser to approve USDT and mint (same address as your profile).");
+      if (token && user?.wallet) {
+        setError(
+          "You’re signed in and we can read your balance, but this browser session isn’t linked to your wallet yet. Tap the button below to reconnect the same address, then approve again."
+        );
+      } else {
+        setError("Connect your wallet in the browser to approve USDT and mint (same address as your profile).");
+      }
       openModal?.();
       return;
     }
@@ -391,7 +397,9 @@ export default function Mint() {
             {loading
               ? (mintStep === "approve" ? "1/2 Approving USDT…" : "2/2 Minting…")
               : !address
-                ? "Connect wallet to mint"
+                ? token && user?.wallet
+                  ? "Reconnect wallet to mint"
+                  : "Connect wallet to mint"
                 : `Mint Asset · ${displayPrice}`}
           </button>
         </div>

@@ -139,7 +139,13 @@ export default function Subscription() {
 
   const handlePay = async () => {
     if (!address) {
-      setError("Connect your wallet in the browser (same address as your profile) to approve USDT and pay.");
+      if (token && user?.wallet) {
+        setError(
+          "You’re signed in and we can read your balance, but this browser session isn’t linked to your wallet yet. Tap below to reconnect the same address, then pay again."
+        );
+      } else {
+        setError("Connect your wallet in the browser (same address as your profile) to approve USDT and pay.");
+      }
       openModal?.();
       return;
     }
@@ -353,7 +359,9 @@ export default function Subscription() {
             {loading
               ? (payStep === "approve" ? "1/2 Approving USDT…" : "2/2 Subscribing…")
               : !address
-                ? "Connect wallet to pay"
+                ? token && user?.wallet
+                  ? "Reconnect wallet to pay"
+                  : "Connect wallet to pay"
                 : !approveAmountReady
                   ? "Loading price…"
                   : isResubscribe ? `Re-subscribe ${displayPrice}` : `Pay ${displayPrice}`}

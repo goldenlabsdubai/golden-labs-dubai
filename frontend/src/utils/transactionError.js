@@ -4,15 +4,44 @@
  */
 const USER_REJECTED_MESSAGE = "User rejected";
 
+/** Safe string for error matching (primitives, boxed values, odd wallet payloads). */
+function safeErrorText(error) {
+  if (error == null) return "";
+  try {
+    if (typeof error === "string") return error;
+    const m = error?.message ?? error?.shortMessage ?? error?.reason;
+    if (m != null && typeof m === "string") return m;
+    return String(error);
+  } catch {
+    try {
+      return String(error);
+    } catch {
+      return "";
+    }
+  }
+}
+
 export function isUserRejection(error) {
   if (!error) return false;
   const name = String(error.name || "");
   if (name === "UserRejectedRequestError" || name.includes("UserRejected")) return true;
-  const msg = (error.message || error.shortMessage || String(error)).toLowerCase();
-  const causeMsg = String(error.cause?.message || error.cause?.shortMessage || "").toLowerCase();
+  const msg = safeErrorText(error).toLowerCase();
+  const causeMsg = String(error?.cause?.message || error?.cause?.shortMessage || "").toLowerCase();
   const combined = `${msg} ${causeMsg}`;
-  const code = error.code ?? error.error?.code ?? error.cause?.code;
+  const code = error?.code ?? error?.error?.code ?? error?.cause?.code;
   if (code === 4001 || code === "4001") return true;
+  // WalletConnect / mobile sometimes surfaces bare "cancelled" or a viem wrapper bug with this text
+  if (
+    msg === "cancelled" ||
+    msg === "canceled" ||
+    combined.includes("user cancelled") ||
+    combined.includes("user canceled") ||
+    combined.includes("request cancelled") ||
+    combined.includes("was cancelled") ||
+    combined.includes("transaction cancelled")
+  )
+    return true;
+  if (msg.includes("cannot use 'in' operator") && msg.includes("cancelled")) return true;
   if (
     combined.includes("user rejected") ||
     combined.includes("user denied") ||
@@ -33,55 +62,59 @@ export function isUserRejection(error) {
  */
 export function getTransactionErrorMessage(error, fallback = "Something went wrong") {
   if (isUserRejection(error)) return USER_REJECTED_MESSAGE;
-  const msg = (error?.message || error?.shortMessage || "").toLowerCase();
+  const msg = safeErrorText(error).toLowerCase();
   if (msg.includes("connector not connected"))
     return "Wallet not connected. Tap Connect wallet and complete the connection in your wallet app, then try again.";
   if (msg.includes("subscription suspended")) return "Subscription suspended — resubscribe to withdraw earnings.";
   if (msg.includes("no earnings")) return "No earnings to withdraw.";
   if (msg.includes("subscription not set")) return "Referral contract not configured.";
-  return error?.message || error?.shortMessage || fallback;
+  return safeErrorText(error) || fallback;
 }
 
 /** Deep text from viem/wagmi/BaseError chains (message, shortMessage, details, metaMessages, cause, data). */
 function normalizeMessage(error) {
-  const parts = [];
-  const seen = new Set();
-  function add(v) {
-    if (v == null) return;
-    const s = String(v).trim();
-    if (s) parts.push(s);
-  }
-  function walk(err, depth) {
-    if (err == null || depth > 14) return;
-    if (typeof err === "string") {
-      add(err);
-      return;
+  try {
+    const parts = [];
+    const seen = new Set();
+    function add(v) {
+      if (v == null) return;
+      const s = String(v).trim();
+      if (s) parts.push(s);
     }
-    if (typeof err !== "object") return;
-    if (seen.has(err)) return;
-    seen.add(err);
-    add(err.message);
-    add(err.shortMessage);
-    add(err.details);
-    add(err.reason);
-    if (Array.isArray(err.metaMessages)) {
-      for (const m of err.metaMessages) add(m);
-    }
-    if (err.data != null) {
-      if (typeof err.data === "string") add(err.data);
-      else {
-        try {
-          add(JSON.stringify(err.data));
-        } catch (_) {
-          add(String(err.data));
+    function walk(err, depth) {
+      if (err == null || depth > 14) return;
+      if (typeof err === "string") {
+        add(err);
+        return;
+      }
+      if (typeof err !== "object") return;
+      if (seen.has(err)) return;
+      seen.add(err);
+      add(err.message);
+      add(err.shortMessage);
+      add(err.details);
+      add(err.reason);
+      if (Array.isArray(err.metaMessages)) {
+        for (const m of err.metaMessages) add(m);
+      }
+      if (err.data != null) {
+        if (typeof err.data === "string") add(err.data);
+        else {
+          try {
+            add(JSON.stringify(err.data));
+          } catch (_) {
+            add(String(err.data));
+          }
         }
       }
+      walk(err.cause, depth + 1);
+      walk(err.error, depth + 1);
     }
-    walk(err.cause, depth + 1);
-    walk(err.error, depth + 1);
+    walk(error, 0);
+    return parts.join(" \n ").toLowerCase();
+  } catch {
+    return safeErrorText(error).toLowerCase();
   }
-  walk(error, 0);
-  return parts.join(" \n ").toLowerCase();
 }
 
 /**
@@ -165,15 +198,15 @@ export function applyWalletTxError(error, opts) {
   } = opts || {};
   if (!setInsufficientBalanceType || !setError) return false;
 
+  if (isUserRejection(error)) {
+    setInsufficientBalanceType("rejected");
+    setError("");
+    return true;
+  }
   const insufficientType = detectInsufficientBalanceType(error);
   if (insufficientType) {
     setInsufficientBalanceType(insufficientType);
     if (insufficientType === "usdt") refetchUsdt?.();
-    setError("");
-    return true;
-  }
-  if (isUserRejection(error)) {
-    setInsufficientBalanceType("rejected");
     setError("");
     return true;
   }

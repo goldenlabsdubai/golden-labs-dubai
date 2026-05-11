@@ -24,8 +24,8 @@ export default function InsufficientBalanceModal({
     const el = (
       <div className="marketplace-page__insufficient-overlay" role="dialog" aria-modal="true" aria-labelledby="wallet-rejected-title">
         <div className="marketplace-page__insufficient-modal">
-          <h2 id="wallet-rejected-title" className="marketplace-page__insufficient-title">Transaction cancelled</h2>
-          <p className="marketplace-page__insufficient-desc">You rejected the request in your wallet. Nothing was sent to the network.</p>
+          <h2 id="wallet-rejected-title" className="marketplace-page__insufficient-title">User rejected</h2>
+          <p className="marketplace-page__insufficient-desc">You cancelled the request in your wallet. Nothing was sent to the network.</p>
           <p className="marketplace-page__insufficient-hint">Try again when you’re ready to confirm.</p>
           <button type="button" className="marketplace-page__insufficient-close" onClick={onClose}>
             Close
