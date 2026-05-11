@@ -7,7 +7,7 @@
  * - Groups/channels are auto-registered (silent) so alerts have a chat_id; see alert-chats.json.
  *   Optional TELEGRAM_CHAT_ID seeds an extra target.
  *
- * POST /alert: { "kind": "subscription"|"mint"|"maintenance"|"maintenance_resumed"|..., ...fields } or { "message": "..." }
+ * POST /alert: { "kind": "subscription"|"mint"|"bought"|"maintenance"|"maintenance_resumed"|..., ...fields } or { "message": "..." }
  * Optional: mediaUrl / imageUrl (HTTPS) or env TELEGRAM_ALERT_MEDIA_<KIND> — see .env.example
  */
 const path = require("path");
@@ -83,7 +83,6 @@ const KIND_MEDIA_ENV = {
   mint: "TELEGRAM_ALERT_MEDIA_MINT",
   listed: "TELEGRAM_ALERT_MEDIA_LISTED",
   bought: "TELEGRAM_ALERT_MEDIA_BOUGHT",
-  sold: "TELEGRAM_ALERT_MEDIA_SOLD",
   maintenance: "TELEGRAM_ALERT_MEDIA_MAINTENANCE",
 };
 
@@ -108,10 +107,6 @@ function resolveAlertMediaUrl(targetChatId, kind, override) {
   const envKey = KIND_MEDIA_ENV[k];
   const fromKind = envKey ? (process.env[envKey] || "").trim() : "";
   if (fromKind) return fromKind;
-  if (k === "sold") {
-    const fromBought = (process.env.TELEGRAM_ALERT_MEDIA_BOUGHT || "").trim();
-    if (fromBought) return fromBought;
-  }
   return (process.env.TELEGRAM_ALERT_MEDIA_DEFAULT || "").trim();
 }
 
@@ -357,6 +352,11 @@ const server = http.createServer(async (req, res) => {
     } else if (typeof json.text === "string" && json.text) {
       msg = json.text;
     } else if (typeof json.kind === "string" && json.kind) {
+      if (String(json.kind).toLowerCase() === "sold") {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: true, skipped: "sold_disabled" }));
+        return;
+      }
       const { kind, mediaUrl, imageUrl, ...fields } = json;
       kindForMedia = kind;
       const inlineMedia = (mediaUrl || imageUrl || "").trim();

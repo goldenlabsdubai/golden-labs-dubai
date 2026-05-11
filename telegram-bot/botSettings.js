@@ -9,7 +9,7 @@ const SETTINGS_FILE = path.join(__dirname, "bot-settings.json");
 /** @type {Record<string, { alerts?: Record<string, boolean>, media?: Record<string, string> }>} */
 let cache = {};
 
-const KINDS = ["user_joined", "subscription", "mint", "listed", "bought", "sold", "maintenance"];
+const KINDS = ["user_joined", "subscription", "mint", "listed", "bought", "maintenance"];
 
 const KIND_LABELS = {
   user_joined: "New user",
@@ -17,7 +17,6 @@ const KIND_LABELS = {
   mint: "Mint",
   listed: "Listed",
   bought: "Bought / buy",
-  sold: "Sold / sell",
   maintenance: "Maintenance",
 };
 
