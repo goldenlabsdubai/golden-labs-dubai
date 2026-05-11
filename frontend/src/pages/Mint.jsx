@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { assignAppPath } from "../utils/appNavigation";
-import { useBalance, useDisconnect, useReadContract, useWriteContract, usePublicClient } from "wagmi";
+import { useBalance, useConfig, useDisconnect, useReadContract, useWriteContract, usePublicClient, useReconnect } from "wagmi";
 import { formatEther, formatUnits } from "viem";
 import { useAuth } from "../hooks/useAuth";
 import { useWalletConnect } from "../hooks/useWalletConnect";
@@ -13,6 +13,7 @@ import { canAccessTradingNav } from "../utils/tradingAccess";
 import { USDT_DECIMALS } from "../constants/usdtDecimals";
 import { BSC_CHAIN_ID } from "../constants/chain";
 import { formatUsdtTrim, readContractUint256 } from "../utils/formatUsdt";
+import { resolveSignerAddress } from "../utils/ensureConnectorAddress";
 
 const USDT_ABI = [
   { name: "balanceOf", type: "function", stateMutability: "view", inputs: [{ name: "account", type: "address" }], outputs: [{ type: "uint256" }] },
@@ -27,6 +28,8 @@ const NFT_ABI = [
 export default function Mint() {
   const { token, refreshUser, user } = useAuth();
   const { openModal, address } = useWalletConnect();
+  const wagmiConfig = useConfig();
+  const { reconnectAsync } = useReconnect();
   const balanceAddress = (address || (token && user?.wallet ? user.wallet : null)) ?? undefined;
   const { data: balanceData } = useBalance({
     address: balanceAddress,
@@ -172,15 +175,15 @@ export default function Mint() {
   };
 
   const handleMint = async () => {
-    if (!address) {
-      if (token && user?.wallet) {
-        setError(
-          "You’re signed in and we can read your balance, but this browser session isn’t linked to your wallet yet. Tap the button below to reconnect the same address, then approve again."
-        );
-      } else {
-        setError("Connect your wallet in the browser to approve USDT and mint (same address as your profile).");
-      }
+    setError("");
+    const txAddress = await resolveSignerAddress(wagmiConfig, address, reconnectAsync);
+    if (!txAddress) {
       openModal?.();
+      setError("Wallet session didn’t restore in this tab. Tap Connect and pick the same wallet you used to sign in.");
+      return;
+    }
+    if (user?.wallet && String(user.wallet).toLowerCase() !== String(txAddress).toLowerCase()) {
+      setError("Switch your wallet to the same address as your profile (shown in the header), then try again.");
       return;
     }
     const nftAddr = config.contractAddress || nftAddressNormalized;
@@ -221,6 +224,7 @@ export default function Mint() {
       }
       const hashApprove = await writeContractAsync({
         chainId: BSC_CHAIN_ID,
+        account: txAddress,
         address: usdtAddressNormalized,
         abi: USDT_ABI,
         functionName: "approve",
@@ -230,6 +234,7 @@ export default function Mint() {
       const tokenIdMinted = nextTokenId != null ? Number(nextTokenId) : null;
       const hashMint = await writeContractAsync({
         chainId: BSC_CHAIN_ID,
+        account: txAddress,
         address: nftAddr,
         abi: NFT_ABI,
         functionName: "mint",
@@ -396,11 +401,11 @@ export default function Mint() {
           >
             {loading
               ? (mintStep === "approve" ? "1/2 Approving USDT…" : "2/2 Minting…")
-              : !address
-                ? token && user?.wallet
-                  ? "Reconnect wallet to mint"
-                  : "Connect wallet to mint"
-                : `Mint Asset · ${displayPrice}`}
+              : !hasMintPrice
+                ? "Loading price…"
+                : !token || !user?.wallet
+                  ? "Connect wallet to mint"
+                  : `Mint Asset · ${displayPrice}`}
           </button>
         </div>
       </main>

@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { Link } from "react-router-dom";
 import { AppRouteLink } from "../components/AppRouteLink";
 import { assignAppPath } from "../utils/appNavigation";
-import { useBalance, useDisconnect, useWriteContract, usePublicClient, useWatchContractEvent, useReadContract, useAccount } from "wagmi";
+import { useBalance, useDisconnect, useWriteContract, usePublicClient, useWatchContractEvent, useReadContract, useConfig, useReconnect } from "wagmi";
 import { formatEther, formatUnits } from "viem";
 import { useAuth } from "../hooks/useAuth";
 import { useWalletConnect } from "../hooks/useWalletConnect";
@@ -25,6 +25,8 @@ import {
 import NFTMedia from "../components/NFTMedia";
 import InsufficientBalanceModal from "../components/InsufficientBalanceModal";
 import { NavbarBrandLink } from "../components/NavbarBrandLink";
+import { resolveSignerAddress } from "../utils/ensureConnectorAddress";
+import { BSC_CHAIN_ID } from "../constants/chain";
 
 const NFT_ABI = [
   { name: "approve", type: "function", stateMutability: "nonpayable", inputs: [{ name: "to", type: "address" }, { name: "tokenId", type: "uint256" }], outputs: [] },
@@ -50,8 +52,10 @@ const LIST_RESUME_TTL_MS = 45 * 60 * 1000;
 export default function Marketplace() {
   const { user, token, refreshUser } = useAuth();
   const { openModal, isConnected, address } = useWalletConnect();
-  const { chainId } = useAccount();
-  const { data: balanceData } = useBalance({ address: address ?? undefined });
+  const wagmiConfig = useConfig();
+  const { reconnectAsync } = useReconnect();
+  const balanceAddress = (address || (token && user?.wallet ? user.wallet : null)) ?? undefined;
+  const { data: balanceData } = useBalance({ address: balanceAddress, chainId: BSC_CHAIN_ID });
   const { disconnect: disconnectWallet } = useDisconnect();
   const [listings, setListings] = useState([]);
   const [myAssets, setMyAssets] = useState([]);
@@ -76,7 +80,7 @@ export default function Marketplace() {
   const sortDropdownRef = useRef(null);
   const menuRef = useRef(null);
   const cardMenuRef = useRef(null);
-  const publicClient = usePublicClient();
+  const publicClient = usePublicClient({ chainId: BSC_CHAIN_ID });
   const { writeContractAsync } = useWriteContract();
   const listingsReqIdRef = useRef(0);
   const assetsReqIdRef = useRef(0);
@@ -93,23 +97,26 @@ export default function Marketplace() {
     address: marketplaceAddressNormalized || undefined,
     abi: MARKETPLACE_ABI,
     functionName: "listPrice",
+    chainId: BSC_CHAIN_ID,
     query: { enabled: Boolean(marketplaceAddressNormalized) },
-    ...(chainId != null && { chainId }),
   });
   const chainListUsdt = marketplaceListPriceUsdtLabel(marketplaceListPriceWei);
   const chainListWeiStr = marketplaceListPriceWei != null ? String(marketplaceListPriceWei) : null;
 
+  const walletForReads = address || (token && user?.wallet ? user.wallet : null) || undefined;
   const { data: usdtBalanceRaw, refetch: refetchUsdtBalance } = useReadContract({
     address: usdtAddressNormalized || undefined,
     abi: USDT_ABI,
     functionName: "balanceOf",
-    args: address ? [address] : undefined,
-    ...(chainId != null && { chainId }),
+    args: walletForReads ? [walletForReads] : undefined,
+    chainId: BSC_CHAIN_ID,
+    query: { enabled: Boolean(usdtAddressNormalized && walletForReads) },
   });
   const usdtBalanceFormatted = usdtBalanceRaw != null ? Number(formatUnits(usdtBalanceRaw, USDT_DECIMALS)).toFixed(2) : null;
   const bnbBalanceFormatted = balanceData?.value != null ? Number(formatEther(balanceData.value)).toFixed(4) : null;
   const displayAddress = (token && (user?.wallet || address)) ? (user?.wallet || address) : (isConnected && address) ? address : null;
   const currentWallet = (displayAddress || user?.wallet || address || "").toString().toLowerCase();
+  const canAttemptWalletTx = Boolean(address || (token && user?.wallet));
 
   useEffect(() => setPortalReady(true), []);
   const fetchListingsLatest = () => {
@@ -203,18 +210,21 @@ export default function Marketplace() {
     address: marketplaceAddressNormalized || undefined,
     abi: MARKETPLACE_ABI,
     eventName: "Listed",
+    chainId: BSC_CHAIN_ID,
     onLogs: () => refetchDataRef.current?.(),
   });
   useWatchContractEvent({
     address: marketplaceAddressNormalized || undefined,
     abi: MARKETPLACE_ABI,
     eventName: "Sold",
+    chainId: BSC_CHAIN_ID,
     onLogs: () => refetchDataRef.current?.(),
   });
   useWatchContractEvent({
     address: marketplaceAddressNormalized || undefined,
     abi: MARKETPLACE_ABI,
     eventName: "ListingCancelled",
+    chainId: BSC_CHAIN_ID,
     onLogs: () => refetchDataRef.current?.(),
   });
 
@@ -240,12 +250,28 @@ export default function Marketplace() {
     return () => document.removeEventListener("click", handleCardMenuOutside);
   }, [openMenuTokenId]);
 
+  const prepareSigner = async () => {
+    const txAddress = await resolveSignerAddress(wagmiConfig, address, reconnectAsync);
+    if (!txAddress) {
+      openModal?.();
+      setError("Wallet session didn’t restore in this tab. Tap Connect and pick the same wallet you used to sign in.");
+      return null;
+    }
+    if (user?.wallet && String(user.wallet).toLowerCase() !== String(txAddress).toLowerCase()) {
+      setError("Switch your wallet to the same address as your profile (shown in the header), then try again.");
+      return null;
+    }
+    return txAddress;
+  };
+
   const handleDelist = async (tokenId) => {
-    if (!marketplaceAddressNormalized || !writeContractAsync || !publicClient || !address) {
+    if (!marketplaceAddressNormalized || !writeContractAsync || !publicClient) {
       setError("Wallet or contracts not ready.");
       return;
     }
     setError("");
+    const txAddress = await prepareSigner();
+    if (!txAddress) return;
     setOpenMenuTokenId(null);
     setLoadingDelist(tokenId);
     try {
@@ -256,11 +282,13 @@ export default function Marketplace() {
           abi: MARKETPLACE_ABI,
           functionName: "cancelListing",
           args: [BigInt(tokenId)],
-          account: address,
+          account: txAddress,
         },
         DEFAULT_MARKETPLACE_CANCEL_GAS
       );
       const hash = await writeContractAsync({
+        chainId: BSC_CHAIN_ID,
+        account: txAddress,
         address: marketplaceAddressNormalized,
         abi: MARKETPLACE_ABI,
         functionName: "cancelListing",
@@ -282,11 +310,13 @@ export default function Marketplace() {
   };
 
   const handleBuy = async (tokenId, priceWei, seller = null) => {
-    if (!marketplaceAddressNormalized || !usdtAddressNormalized || !publicClient || !writeContractAsync || !address) {
+    if (!marketplaceAddressNormalized || !usdtAddressNormalized || !publicClient || !writeContractAsync) {
       setError("Wallet or contracts not ready.");
       return;
     }
     setError("");
+    const txAddress = await prepareSigner();
+    if (!txAddress) return;
     if (tryOpenInsufficientUsdtModal(usdtBalanceRaw, priceWei, { setInsufficientBalanceType, refetchUsdt: refetchUsdtBalance })) {
       return;
     }
@@ -295,6 +325,8 @@ export default function Marketplace() {
     try {
       const tradeReferrerRoot = await resolveSellerReferrerRoot(publicClient, referralAddressNormalized, seller);
       const hashApprove = await writeContractAsync({
+        chainId: BSC_CHAIN_ID,
+        account: txAddress,
         address: usdtAddressNormalized,
         abi: USDT_ABI,
         functionName: "approve",
@@ -306,7 +338,7 @@ export default function Marketplace() {
             abi: USDT_ABI,
             functionName: "approve",
             args: [marketplaceAddressNormalized, BigInt(priceWei)],
-            account: address,
+            account: txAddress,
           },
           DEFAULT_APPROVE_GAS
         ),
@@ -314,6 +346,8 @@ export default function Marketplace() {
       await publicClient.waitForTransactionReceipt({ hash: hashApprove });
       setBuyStep("buy");
       const hashBuy = await writeContractAsync({
+        chainId: BSC_CHAIN_ID,
+        account: txAddress,
         address: marketplaceAddressNormalized,
         abi: MARKETPLACE_ABI,
         functionName: "buy",
@@ -325,7 +359,7 @@ export default function Marketplace() {
             abi: MARKETPLACE_ABI,
             functionName: "buy",
             args: [BigInt(tokenId), tradeReferrerRoot],
-            account: address,
+            account: txAddress,
           },
           DEFAULT_MARKETPLACE_BUY_GAS
         ),
@@ -357,15 +391,19 @@ export default function Marketplace() {
   };
 
   const handleList = async (tokenId, listPriceWei) => {
-    if (!nftAddressNormalized || !marketplaceAddressNormalized || !publicClient || !writeContractAsync || !address) {
+    if (!nftAddressNormalized || !marketplaceAddressNormalized || !publicClient || !writeContractAsync) {
       setError("Wallet or contracts not ready.");
       return;
     }
     setError("");
+    const txAddress = await prepareSigner();
+    if (!txAddress) return;
     setLoadingList(tokenId);
     setListStep("approve");
     try {
       const hashApprove = await writeContractAsync({
+        chainId: BSC_CHAIN_ID,
+        account: txAddress,
         address: nftAddressNormalized,
         abi: NFT_ABI,
         functionName: "approve",
@@ -377,7 +415,7 @@ export default function Marketplace() {
             abi: NFT_ABI,
             functionName: "approve",
             args: [marketplaceAddressNormalized, BigInt(tokenId)],
-            account: address,
+            account: txAddress,
           },
           DEFAULT_NFT_APPROVE_GAS
         ),
@@ -398,6 +436,8 @@ export default function Marketplace() {
       setListResume({ tokenId: String(tokenId), listPriceWei: String(listPriceWei) });
       setListStep("list");
       const hashList = await writeContractAsync({
+        chainId: BSC_CHAIN_ID,
+        account: txAddress,
         address: marketplaceAddressNormalized,
         abi: MARKETPLACE_ABI,
         functionName: "list",
@@ -409,7 +449,7 @@ export default function Marketplace() {
             abi: MARKETPLACE_ABI,
             functionName: "list",
             args: [BigInt(tokenId), BigInt(listPriceWei)],
-            account: address,
+            account: txAddress,
           },
           DEFAULT_MARKETPLACE_LIST_GAS
         ),
@@ -431,14 +471,18 @@ export default function Marketplace() {
   };
 
   const handleResumeListing = async () => {
-    if (!listResume || !marketplaceAddressNormalized || !publicClient || !writeContractAsync || !address) return;
+    if (!listResume || !marketplaceAddressNormalized || !publicClient || !writeContractAsync) return;
     const tokenId = listResume.tokenId;
     const listPriceWei = listResume.listPriceWei;
     setError("");
+    const txAddress = await prepareSigner();
+    if (!txAddress) return;
     setLoadingList(tokenId);
     setListStep("list");
     try {
       const hashList = await writeContractAsync({
+        chainId: BSC_CHAIN_ID,
+        account: txAddress,
         address: marketplaceAddressNormalized,
         abi: MARKETPLACE_ABI,
         functionName: "list",
@@ -450,7 +494,7 @@ export default function Marketplace() {
             abi: MARKETPLACE_ABI,
             functionName: "list",
             args: [BigInt(tokenId), BigInt(listPriceWei)],
-            account: address,
+            account: txAddress,
           },
           DEFAULT_MARKETPLACE_LIST_GAS
         ),
@@ -634,7 +678,7 @@ export default function Marketplace() {
                   type="button"
                   className="marketplace-page__connect"
                   onClick={handleResumeListing}
-                  disabled={Boolean(loadingList) || !address}
+                  disabled={Boolean(loadingList) || !canAttemptWalletTx}
                 >
                   {loadingList === listResume.tokenId && listStep === "list" ? "Confirm in wallet…" : "Complete listing"}
                 </button>

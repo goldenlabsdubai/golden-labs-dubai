@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { assignAppPath } from "../utils/appNavigation";
-import { useBalance, useDisconnect, useReadContract, useWriteContract, usePublicClient } from "wagmi";
+import { useBalance, useConfig, useDisconnect, useReadContract, useWriteContract, usePublicClient, useReconnect } from "wagmi";
 import { formatEther, formatUnits } from "viem";
 import { useAuth } from "../hooks/useAuth";
 import { useWalletConnect } from "../hooks/useWalletConnect";
@@ -17,6 +17,7 @@ import { NavbarBrandLink } from "../components/NavbarBrandLink";
 import { USDT_DECIMALS } from "../constants/usdtDecimals";
 import { BSC_CHAIN_ID } from "../constants/chain";
 import { formatUsdtTrim, readContractUint256 } from "../utils/formatUsdt";
+import { resolveSignerAddress } from "../utils/ensureConnectorAddress";
 
 // USDT (BEP20) – balance and approve. Use same chain as connected wallet.
 const USDT_ABI = [
@@ -32,6 +33,8 @@ export default function Subscription() {
   const { token, refreshUser, user } = useAuth();
   const isResubscribe = user?.state === "SUSPENDED";
   const { openModal, address } = useWalletConnect();
+  const wagmiConfig = useConfig();
+  const { reconnectAsync } = useReconnect();
   const balanceAddress = (address || (token && user?.wallet ? user.wallet : null)) ?? undefined;
   /** Reads must not depend on connector `chainId` — it is often undefined before reconnect, which broke balance & price RPC calls. */
   const { data: balanceData } = useBalance({
@@ -138,15 +141,15 @@ export default function Subscription() {
   }, [token, subContractAddressNormalized]);
 
   const handlePay = async () => {
-    if (!address) {
-      if (token && user?.wallet) {
-        setError(
-          "You’re signed in and we can read your balance, but this browser session isn’t linked to your wallet yet. Tap below to reconnect the same address, then pay again."
-        );
-      } else {
-        setError("Connect your wallet in the browser (same address as your profile) to approve USDT and pay.");
-      }
+    setError("");
+    const txAddress = await resolveSignerAddress(wagmiConfig, address, reconnectAsync);
+    if (!txAddress) {
       openModal?.();
+      setError("Wallet session didn’t restore in this tab. Tap Connect and pick the same wallet you used to sign in.");
+      return;
+    }
+    if (user?.wallet && String(user.wallet).toLowerCase() !== String(txAddress).toLowerCase()) {
+      setError("Switch your wallet to the same address as your profile (shown in the header), then try again.");
       return;
     }
     if (!config.contractAddress) {
@@ -187,12 +190,13 @@ export default function Subscription() {
           abi: USDT_ABI,
           functionName: "approve",
           args: [config.contractAddress, amount],
-          account: address,
+          account: txAddress,
         },
         DEFAULT_APPROVE_GAS
       );
       const hashApprove = await writeContractAsync({
         chainId: BSC_CHAIN_ID,
+        account: txAddress,
         address: usdtAddressNormalized,
         abi: USDT_ABI,
         functionName: "approve",
@@ -208,12 +212,13 @@ export default function Subscription() {
           address: config.contractAddress,
           abi: SUBSCRIPTION_ABI,
           functionName: "subscribe",
-          account: address,
+          account: txAddress,
         },
         DEFAULT_SUBSCRIBE_GAS
       );
       const hashSubscribe = await writeContractAsync({
         chainId: BSC_CHAIN_ID,
+        account: txAddress,
         address: config.contractAddress,
         abi: SUBSCRIPTION_ABI,
         functionName: "subscribe",
@@ -358,12 +363,10 @@ export default function Subscription() {
           >
             {loading
               ? (payStep === "approve" ? "1/2 Approving USDT…" : "2/2 Subscribing…")
-              : !address
-                ? token && user?.wallet
-                  ? "Reconnect wallet to pay"
-                  : "Connect wallet to pay"
-                : !approveAmountReady
-                  ? "Loading price…"
+              : !approveAmountReady
+                ? "Loading price…"
+                : !token || !user?.wallet
+                  ? "Connect wallet to pay"
                   : isResubscribe ? `Re-subscribe ${displayPrice}` : `Pay ${displayPrice}`}
           </button>
         </div>
