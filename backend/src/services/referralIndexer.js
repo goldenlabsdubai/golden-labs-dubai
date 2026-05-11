@@ -92,8 +92,14 @@ async function runReferralIndexerPoll(provider, contract) {
   const latest = await provider.getBlockNumber();
   if (lastBlock == null) {
     const fromEnv = process.env.REFERRAL_INDEXER_FROM_BLOCK;
-    const fromBlock = fromEnv != null && fromEnv !== "" ? Math.max(0, parseInt(String(fromEnv), 10) || 0) : null;
-    lastBlock = fromBlock != null && !Number.isNaN(fromBlock) ? fromBlock : Math.max(0, latest - 1);
+    const startInclusive =
+      fromEnv != null && fromEnv !== "" ? Math.max(0, parseInt(String(fromEnv), 10) || 0) : null;
+    if (startInclusive != null && !Number.isNaN(startInclusive)) {
+      // Env = first block to scan (inclusive). Internal cursor is last fully processed block.
+      lastBlock = startInclusive > 0 ? startInclusive - 1 : -1;
+    } else {
+      lastBlock = Math.max(0, latest - 1);
+    }
     await setLastProcessedBlock(lastBlock);
   }
   if (latest <= lastBlock) return;
