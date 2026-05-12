@@ -27,7 +27,8 @@ try {
 
 console.log("POST", url);
 console.log("HTTP", r.status);
-console.log("configured", data.configured);
+console.log("configured", data.configured, "fallback", data.fallback);
+if (data.model) console.log("model", data.model);
 if (typeof data.reply === "string") {
   console.log("reply preview:", data.reply.replace(/\n/g, " ").slice(0, 280) + (data.reply.length > 280 ? "…" : ""));
 }

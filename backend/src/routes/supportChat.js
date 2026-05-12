@@ -1,8 +1,11 @@
 /**
- * Public support chat — replies from live on-chain + env context on this server (no third-party LLM).
+ * Public support chat — POST /api/public/support/chat
+ * Optional Groq (OpenAI-compatible): grounded in live platformContext. Falls back to template reply if Groq fails or key missing.
  */
 import { Router } from "express";
 import { ethers } from "ethers";
+import { getSupportAiApiKey } from "../utils/supportAiKey.js";
+import { postHttpsJson } from "../utils/postHttpsJson.js";
 import { getDeployedContractsSnapshot } from "../config/contractsEnv.js";
 import { getSubscriptionPriceFromChain } from "../services/onChainUser.js";
 import { USDT_DECIMALS } from "../constants/usdtDecimals.js";
@@ -100,10 +103,25 @@ async function buildPlatformContext() {
     subscription,
     mint,
     community: communityFromEnv(),
+    safety:
+      "Only use the facts in platformContext. Do not invent numbers. Never ask for seed phrases or private keys.",
   };
 }
 
-function buildSupportReply(platformContext, userQuestion) {
+const SYSTEM_PROMPT = `You are the Golden Labs in-app support assistant.
+
+Rules:
+- Base every factual claim ONLY on the JSON labeled "platformContext" inside the user message. If something is missing, say you do not have it and point to the Subscribe / Mint / Marketplace pages or platformContext.community.
+- Tone: friendly, concise, clear.
+- No investment advice or profit guarantees.
+- Never ask for seed phrases, private keys, or wallet exports.
+- Never reveal API keys, JWT secrets, admin paths, or private RPC URLs.
+- Contract addresses in platformContext are public on-chain; you may name them when useful.
+- If platformContext.community has telegramUrl or supportEmail, you may share those for official community / email support.
+- Gas is paid in BNB; USDT payments are BEP20 on BSC unless context says otherwise.`;
+
+/** Template reply when Groq is off or errors (still uses real subscription/mint when known). */
+function buildSupportReply(platformContext, userQuestion, closingLine) {
   const c = platformContext?.community || {};
   const parts = [];
   const q = (userQuestion || "").toLowerCase();
@@ -136,16 +154,63 @@ function buildSupportReply(platformContext, userQuestion) {
     parts.push(`More help: ${contact.join(" | ")}.`);
   }
 
-  parts.push("Replies use live data from this API. For anything else, use Telegram or email above.");
+  parts.push(
+    closingLine ||
+      "Live summary from this API (assistant model unavailable). Contact Telegram or email above if needed."
+  );
   return parts.join("\n\n");
 }
 
+async function tryGroqCompletion({ apiKey, baseUrl, model, userPayload }) {
+  const TIMEOUT_MS = Math.min(
+    Math.max(Number(process.env.SUPPORT_AI_TIMEOUT_MS) || 28000, 5000),
+    120000
+  );
+  const url = `${baseUrl}/chat/completions`;
+  const bodyObj = {
+    model,
+    temperature: 0.35,
+    max_tokens: 600,
+    messages: [
+      { role: "system", content: SYSTEM_PROMPT },
+      {
+        role: "user",
+        content: `Answer using only platformContext + general safe wallet hygiene.\n\n${JSON.stringify(userPayload)}`,
+      },
+    ],
+  };
+
+  let statusCode = 0;
+  let raw = "";
+  try {
+    const out = await postHttpsJson(url, { Authorization: `Bearer ${apiKey}` }, bodyObj, TIMEOUT_MS);
+    statusCode = out.statusCode;
+    raw = out.text;
+  } catch (e) {
+    const msg = e?.message || String(e);
+    console.warn(`[support-chat] Groq POST failed model=${model}:`, msg);
+    return { reply: null, statusCode: 0, data: { error: { message: msg } } };
+  }
+
+  let data = {};
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    data = { error: { message: `non-JSON (${statusCode}): ${raw.slice(0, 180)}` } };
+  }
+  const reply = data?.choices?.[0]?.message?.content?.trim() || null;
+  if (statusCode >= 200 && statusCode < 300 && !reply) {
+    console.warn(`[support-chat] empty Groq content model=${model} snippet=${raw.slice(0, 400)}`);
+  }
+  return { reply, statusCode, data };
+}
+
 router.post("/chat", supportRateLimit, async (req, res) => {
-  const raw = req.body?.message;
-  if (raw == null || typeof raw !== "string") {
+  const rawMsg = req.body?.message;
+  if (rawMsg == null || typeof rawMsg !== "string") {
     return res.status(400).json({ error: "message is required" });
   }
-  const message = raw.trim().slice(0, 4000);
+  const message = rawMsg.trim().slice(0, 4000);
   if (!message) {
     return res.status(400).json({ error: "message is required" });
   }
@@ -158,8 +223,45 @@ router.post("/chat", supportRateLimit, async (req, res) => {
     return res.status(503).json({ error: "Could not load platform context. Try again later." });
   }
 
+  const userPayload = { platformContext, userQuestion: message };
+
+  const apiKey = getSupportAiApiKey();
+  const baseUrl = (process.env.SUPPORT_AI_BASE_URL || "https://api.groq.com/openai/v1").replace(/\/$/, "");
+  const primaryModel = (process.env.SUPPORT_AI_MODEL || "llama-3.1-8b-instant").trim();
+  const fallbackModel = (process.env.SUPPORT_AI_MODEL_FALLBACK || "llama-3.3-70b-versatile").trim();
+
+  if (!apiKey) {
+    return res.json({
+      configured: false,
+      reply: buildSupportReply(
+        platformContext,
+        message,
+        "Add SUPPORT_AI_API_KEY to this server for Groq AI replies (see backend/.env.example)."
+      ),
+      fallback: true,
+    });
+  }
+
+  const models = [primaryModel, fallbackModel].filter(Boolean);
+  const tried = new Set();
+  for (const model of models) {
+    if (tried.has(model)) continue;
+    tried.add(model);
+    const { reply, statusCode, data } = await tryGroqCompletion({
+      apiKey,
+      baseUrl,
+      model,
+      userPayload,
+    });
+    if (reply) {
+      return res.json({ configured: true, reply, model });
+    }
+    const errMsg = data?.error?.message || "unknown";
+    console.warn(`[support-chat] Groq model=${model} http=${statusCode}:`, errMsg);
+  }
+
   const reply = buildSupportReply(platformContext, message);
-  return res.json({ configured: true, reply });
+  return res.json({ configured: true, reply, fallback: true });
 });
 
 export default router;

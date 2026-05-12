@@ -116,7 +116,7 @@ app.get("/api/public/platform-maintenance", async (_, res) => {
 });
 /** Public: which contract addresses this API uses (compare to Vercel VITE_* so wallet only hits one deployment). */
 app.get("/api/health/contracts", (_, res) => res.json(getDeployedContractsSnapshot()));
-/** Public: support chat — GET shows usage; POST returns live-backed replies (see supportChat route). */
+/** Public: support chat — GET help; POST returns Groq-grounded replies when `SUPPORT_AI_API_KEY` is set. */
 app.get("/api/public/support/chat", (_req, res) => {
   res.setHeader("Cache-Control", "no-store");
   res.json({
