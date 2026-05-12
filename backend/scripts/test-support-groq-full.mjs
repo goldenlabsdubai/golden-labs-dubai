@@ -14,6 +14,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.resolve(__dirname, "..", ".env"), override: true });
 
 const { getSupportAiApiKey } = await import("../src/utils/supportAiKey.js");
+const { postHttpsJson } = await import("../src/utils/postHttpsJson.js");
 const { ethers } = await import("ethers");
 const { getDeployedContractsSnapshot } = await import("../src/config/contractsEnv.js");
 const { getSubscriptionPriceFromChain } = await import("../src/services/onChainUser.js");
@@ -126,18 +127,14 @@ async function main() {
     ],
   };
 
-  console.log("POST", `${baseUrl}/chat/completions`, "bytes", JSON.stringify(body).length);
+  console.log("POST", `${baseUrl}/chat/completions`, "bytes", JSON.stringify(body).length, "(node https)");
 
-  const resp = await fetch(`${baseUrl}/chat/completions`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify(body),
-  });
-
-  const raw = await resp.text();
+  const { statusCode, text: raw } = await postHttpsJson(
+    `${baseUrl}/chat/completions`,
+    { Authorization: `Bearer ${apiKey}` },
+    body,
+    120000
+  );
   let data = {};
   try {
     data = JSON.parse(raw);
@@ -146,8 +143,8 @@ async function main() {
     process.exit(1);
   }
 
-  console.log("HTTP", resp.status);
-  if (!resp.ok) {
+  console.log("HTTP", statusCode);
+  if (statusCode < 200 || statusCode >= 300) {
     console.error("Error:", data?.error || data);
     process.exit(1);
   }

@@ -5,6 +5,7 @@
 import { Router } from "express";
 import { ethers } from "ethers";
 import { getSupportAiApiKey } from "../utils/supportAiKey.js";
+import { postHttpsJson } from "../utils/postHttpsJson.js";
 import { getDeployedContractsSnapshot } from "../config/contractsEnv.js";
 import { getSubscriptionPriceFromChain } from "../services/onChainUser.js";
 import { USDT_DECIMALS } from "../constants/usdtDecimals.js";
@@ -163,46 +164,43 @@ async function tryGroqCompletion({ apiKey, baseUrl, model, userPayload }) {
     Math.max(Number(process.env.SUPPORT_AI_TIMEOUT_MS) || 28000, 5000),
     120000
   );
-  let resp;
+  const url = `${baseUrl}/chat/completions`;
+  const bodyObj = {
+    model,
+    temperature: 0.35,
+    max_tokens: 600,
+    messages: [
+      { role: "system", content: SYSTEM_PROMPT },
+      {
+        role: "user",
+        content: `Answer using only platformContext + general safe wallet hygiene.\n\n${JSON.stringify(userPayload)}`,
+      },
+    ],
+  };
+
+  let statusCode = 0;
   let raw = "";
   try {
-    resp = await fetch(`${baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model,
-        temperature: 0.35,
-        max_tokens: 600,
-        messages: [
-          { role: "system", content: SYSTEM_PROMPT },
-          {
-            role: "user",
-            content: `Answer using only platformContext + general safe wallet hygiene.\n\n${JSON.stringify(userPayload)}`,
-          },
-        ],
-      }),
-      signal: AbortSignal.timeout(TIMEOUT_MS),
-    });
-    raw = await resp.text();
+    const out = await postHttpsJson(url, { Authorization: `Bearer ${apiKey}` }, bodyObj, TIMEOUT_MS);
+    statusCode = out.statusCode;
+    raw = out.text;
   } catch (e) {
-    const name = e?.name || "";
     const msg = e?.message || String(e);
-    console.warn(`[support-chat] fetch failed model=${model}:`, name, msg);
+    console.warn(`[support-chat] https POST failed model=${model}:`, msg);
     return {
-      resp: { ok: false, status: 0, statusText: "fetch_failed" },
-      data: { error: { message: name === "AbortError" ? `timeout after ${TIMEOUT_MS}ms` : msg } },
+      resp: { ok: false, status: 0, statusText: "request_failed" },
+      data: { error: { message: msg.includes("timeout") ? msg : msg } },
       reply: null,
     };
   }
+
+  const resp = { ok: statusCode >= 200 && statusCode < 300, status: statusCode };
 
   let data = {};
   try {
     data = JSON.parse(raw);
   } catch {
-    data = { error: { message: `non-JSON response (${resp.status}): ${raw.slice(0, 180)}` } };
+    data = { error: { message: `non-JSON response (${statusCode}): ${raw.slice(0, 180)}` } };
   }
   const choice = data?.choices?.[0];
   const reply = choice?.message?.content?.trim();

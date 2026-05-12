@@ -1,9 +1,7 @@
 /**
  * Minimal Groq checks in **one process** after loading `backend/.env`:
  * 1) GET /openai/v1/models
- * 2) POST /openai/v1/chat/completions (tiny body)
- *
- * If (1) is 200 but (2) is 401, the key works for listing but not chat (rare — contact Groq / new key).
+ * 2) POST /openai/v1/chat/completions via **node https** (same transport as production support chat; avoids undici fetch POST auth bugs)
  * Uses `src/utils/supportAiKey.js` for the same normalization as the Express route.
  */
 import dotenv from "dotenv";
@@ -50,26 +48,26 @@ const chatBody = {
   temperature: 0,
 };
 const chatUrl = `${base}/chat/completions`;
-const cr = await fetch(chatUrl, {
-  method: "POST",
-  headers: {
-    "Content-Type": "application/json",
-    Authorization: `Bearer ${key}`,
-  },
-  body: JSON.stringify(chatBody),
-});
-const ctext = await cr.text();
+const { postHttpsJson } = await import("../src/utils/postHttpsJson.js");
+const cr = await postHttpsJson(
+  chatUrl,
+  { Authorization: `Bearer ${key}` },
+  chatBody,
+  30000
+);
+const ctext = cr.text;
 let cj;
 try {
   cj = JSON.parse(ctext);
 } catch {
   cj = { raw: ctext.slice(0, 200) };
 }
-console.log("POST", chatUrl, "(minimal chat)");
-console.log("HTTP", cr.status);
-if (!cr.ok) {
+console.log("POST", chatUrl, "(minimal chat, node https)");
+const status = cr.statusCode;
+console.log("HTTP", status);
+if (status < 200 || status >= 300) {
   console.log("Chat error:", cj.error || cj.message || cj);
-  console.log("\nModels work but chat returns an error — key or account may lack inference; try a new key at https://console.groq.com/keys");
+  console.log("\nIf this persists, open a ticket with Groq or switch SUPPORT_AI_BASE_URL to another OpenAI-compatible provider.");
   process.exit(1);
 }
 const reply = cj?.choices?.[0]?.message?.content?.trim();
