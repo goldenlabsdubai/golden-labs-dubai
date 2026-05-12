@@ -114,6 +114,19 @@ app.get("/api/public/platform-maintenance", async (_, res) => {
 /** Public: which contract addresses this API uses (compare to Vercel VITE_* so wallet only hits one deployment). */
 app.get("/api/health/contracts", (_, res) => res.json(getDeployedContractsSnapshot()));
 /** Public: AI support chat (optional SUPPORT_AI_API_KEY — see .env.example). */
+app.get("/api/public/support/chat", (_req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  res.json({
+    ok: true,
+    service: "support-chat",
+    detail:
+      "Open in a browser only shows this message. The web app sends POST with JSON — that is how you get an answer.",
+    method: "POST",
+    path: "/api/public/support/chat",
+    headers: { "Content-Type": "application/json" },
+    body: { message: "string (your question, required)" },
+  });
+});
 app.use("/api/public/support", supportChatRoutes);
 // Root (and /api for Vercel rewrite of "/" -> "/api") – so visiting base URL returns something
 app.get("/", (_, res) => res.json({ api: "goldenlabs", health: "/api/health" }));
