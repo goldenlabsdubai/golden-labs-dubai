@@ -1,6 +1,5 @@
 /**
- * POSTs to your **deployed** support chat URL (same path the web app uses).
- * Does not use SUPPORT_AI_API_KEY from .env — exercises nginx + Express + whatever Groq key the **server** has.
+ * POSTs to the public support chat URL (same as the web app default).
  *
  * Usage:
  *   npm run test-support-chat-url
@@ -28,16 +27,14 @@ try {
 
 console.log("POST", url);
 console.log("HTTP", r.status);
-console.log("configured", data.configured, "fallback", data.fallback);
-if (data.model) console.log("model", data.model);
+console.log("configured", data.configured);
 if (typeof data.reply === "string") {
   console.log("reply preview:", data.reply.replace(/\n/g, " ").slice(0, 280) + (data.reply.length > 280 ? "…" : ""));
 }
 if (data.error) console.log("error", data.error);
-if (data.debug) console.log("debug", JSON.stringify(data.debug));
 
 if (!r.ok) process.exit(1);
-if (data.fallback) {
-  console.log("\nNote: fallback=true means Groq failed on the **server**; fix SUPPORT_AI_API_KEY there and pm2 restart.");
-  process.exit(2);
+if (!(typeof data.reply === "string" && data.reply.trim())) {
+  console.error("Missing reply in JSON");
+  process.exit(1);
 }

@@ -1,11 +1,8 @@
 /**
- * Public support chat — answers from an LLM grounded in server-side platform facts (no secrets).
- * Configure SUPPORT_AI_API_KEY (e.g. Groq free tier — OpenAI-compatible HTTP).
+ * Public support chat — replies from live on-chain + env context on this server (no third-party LLM).
  */
 import { Router } from "express";
 import { ethers } from "ethers";
-import { getSupportAiApiKey } from "../utils/supportAiKey.js";
-import { postHttpsJson } from "../utils/postHttpsJson.js";
 import { getDeployedContractsSnapshot } from "../config/contractsEnv.js";
 import { getSubscriptionPriceFromChain } from "../services/onChainUser.js";
 import { USDT_DECIMALS } from "../constants/usdtDecimals.js";
@@ -22,7 +19,6 @@ function communityFromEnv() {
   return {
     telegramUrl: telegramUrl || undefined,
     supportEmail: supportEmail || undefined,
-    /** For the model / copy — safe mailto without validation beyond trim */
     mailtoHref: supportEmail ? `mailto:${supportEmail}` : undefined,
   };
 }
@@ -104,25 +100,10 @@ async function buildPlatformContext() {
     subscription,
     mint,
     community: communityFromEnv(),
-    safety:
-      "Only use the facts above. Do not invent numbers. Never ask for seed phrases or private keys. Never output RPC URLs that contain API keys, JWTs, or server environment values.",
   };
 }
 
-const SYSTEM_PROMPT = `You are the Golden Labs in-app support assistant.
-
-Rules:
-- Base every factual claim ONLY on the JSON object the user message labels as "platformContext". If a detail is missing there, say you don't have it and suggest using the app (Subscribe / Mint / Marketplace pages) or official community channels.
-- Tone: friendly, concise, clear; you may paraphrase but must not contradict the JSON.
-- Never give investment advice. No guarantees about profit.
-- Never ask for or accept seed phrases, private keys, or full wallet exports.
-- Never reveal or guess API keys, JWT secrets, admin paths, or private RPC URLs.
-- Contract addresses in platformContext are public on-chain; you may mention them when relevant.
-- If platformContext.community includes telegramUrl and/or supportEmail, you may share those for the official Telegram community and email support. Do not invent other emails, links, or “official” accounts.
-- Gas is paid in BNB; in-app USDT payments use BEP20 USDT on BSC unless context says otherwise.`;
-
-/** When Groq/network fails, still answer from the same facts we send to the model (no LLM). */
-function buildFallbackReply(platformContext, userQuestion) {
+function buildSupportReply(platformContext, userQuestion) {
   const c = platformContext?.community || {};
   const parts = [];
   const q = (userQuestion || "").toLowerCase();
@@ -155,61 +136,8 @@ function buildFallbackReply(platformContext, userQuestion) {
     parts.push(`More help: ${contact.join(" | ")}.`);
   }
 
-  parts.push("Quick summary from live platform data (full AI could not answer). Try again soon or use Telegram / email above.");
+  parts.push("Replies use live data from this API. For anything else, use Telegram or email above.");
   return parts.join("\n\n");
-}
-
-async function tryGroqCompletion({ apiKey, baseUrl, model, userPayload }) {
-  const TIMEOUT_MS = Math.min(
-    Math.max(Number(process.env.SUPPORT_AI_TIMEOUT_MS) || 28000, 5000),
-    120000
-  );
-  const url = `${baseUrl}/chat/completions`;
-  const bodyObj = {
-    model,
-    temperature: 0.35,
-    max_tokens: 600,
-    messages: [
-      { role: "system", content: SYSTEM_PROMPT },
-      {
-        role: "user",
-        content: `Answer using only platformContext + general safe wallet hygiene.\n\n${JSON.stringify(userPayload)}`,
-      },
-    ],
-  };
-
-  let statusCode = 0;
-  let raw = "";
-  try {
-    const out = await postHttpsJson(url, { Authorization: `Bearer ${apiKey}` }, bodyObj, TIMEOUT_MS);
-    statusCode = out.statusCode;
-    raw = out.text;
-  } catch (e) {
-    const msg = e?.message || String(e);
-    console.warn(`[support-chat] https POST failed model=${model}:`, msg);
-    return {
-      resp: { ok: false, status: 0, statusText: "request_failed" },
-      data: { error: { message: msg.includes("timeout") ? msg : msg } },
-      reply: null,
-    };
-  }
-
-  const resp = { ok: statusCode >= 200 && statusCode < 300, status: statusCode };
-
-  let data = {};
-  try {
-    data = JSON.parse(raw);
-  } catch {
-    data = { error: { message: `non-JSON response (${statusCode}): ${raw.slice(0, 180)}` } };
-  }
-  const choice = data?.choices?.[0];
-  const reply = choice?.message?.content?.trim();
-  if (resp.ok && !reply) {
-    console.warn(
-      `[support-chat] empty content model=${model} finish=${choice?.finish_reason || "?"} snippet=${raw.slice(0, 400)}`
-    );
-  }
-  return { resp, data, reply };
 }
 
 router.post("/chat", supportRateLimit, async (req, res) => {
@@ -222,11 +150,6 @@ router.post("/chat", supportRateLimit, async (req, res) => {
     return res.status(400).json({ error: "message is required" });
   }
 
-  const apiKey = getSupportAiApiKey();
-  const baseUrl = (process.env.SUPPORT_AI_BASE_URL || "https://api.groq.com/openai/v1").replace(/\/$/, "");
-  const primaryModel = (process.env.SUPPORT_AI_MODEL || "llama-3.1-8b-instant").trim();
-  const fallbackModel = (process.env.SUPPORT_AI_MODEL_FALLBACK || "llama-3.3-70b-versatile").trim();
-
   let platformContext;
   try {
     platformContext = await buildPlatformContext();
@@ -235,73 +158,8 @@ router.post("/chat", supportRateLimit, async (req, res) => {
     return res.status(503).json({ error: "Could not load platform context. Try again later." });
   }
 
-  const userPayload = {
-    platformContext,
-    userQuestion: message,
-  };
-
-  if (!apiKey) {
-    const { telegramUrl, supportEmail } = communityFromEnv();
-    const tg = telegramUrl ? ` Telegram: ${telegramUrl}` : "";
-    const em = supportEmail ? ` Email: ${supportEmail}` : "";
-    return res.json({
-      configured: false,
-      reply: `Live AI isn’t enabled on this server yet (missing SUPPORT_AI_API_KEY). Use the Subscribe, Mint, and Marketplace pages for live on-chain prices. For the community or human support:${tg}${em}`,
-    });
-  }
-
-  try {
-    const models = [primaryModel, fallbackModel].filter(Boolean);
-    const tried = new Set();
-    const debugSupport = String(process.env.SUPPORT_AI_DEBUG || "").trim() === "1";
-    const attempts = [];
-    for (const model of models) {
-      if (tried.has(model)) continue;
-      tried.add(model);
-      const { resp, data, reply } = await tryGroqCompletion({
-        apiKey,
-        baseUrl,
-        model,
-        userPayload,
-      });
-      if (debugSupport) {
-        attempts.push({
-          model,
-          httpStatus: resp.status,
-          error: data?.error?.message || null,
-          finishReason: data?.choices?.[0]?.finish_reason ?? null,
-        });
-      }
-      if (reply) {
-        const out = { configured: true, reply, model };
-        if (debugSupport) out.debug = { attempts };
-        return res.json(out);
-      }
-      const errMsg = data?.error?.message || data?.message || resp.statusText || "unknown";
-      console.warn(`[support-chat] provider model=${model} status=${resp.status}:`, errMsg);
-    }
-
-    const fallbackReply = buildFallbackReply(platformContext, message);
-    const out = {
-      configured: true,
-      reply: fallbackReply,
-      fallback: true,
-    };
-    if (debugSupport) out.debug = { attempts };
-    return res.json(out);
-  } catch (e) {
-    console.warn("[support-chat]", e?.message || e);
-    const fallbackReply = buildFallbackReply(platformContext, message);
-    const out = {
-      configured: true,
-      reply: fallbackReply,
-      fallback: true,
-    };
-    if (String(process.env.SUPPORT_AI_DEBUG || "").trim() === "1") {
-      out.debug = { error: e?.message || String(e) };
-    }
-    return res.json(out);
-  }
+  const reply = buildSupportReply(platformContext, message);
+  return res.json({ configured: true, reply });
 });
 
 export default router;

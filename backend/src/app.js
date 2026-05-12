@@ -8,7 +8,7 @@ import express from "express";
 import cors from "cors";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-// Load `backend/.env` by path — PM2 often sets `cwd` to `$HOME`, so default dotenv would miss this file and SUPPORT_AI_* would be wrong/missing.
+// Load `backend/.env` by path — PM2 often sets `cwd` to `$HOME`, so default dotenv would miss this file.
 dotenv.config({ path: path.resolve(__dirname, "..", ".env"), override: true });
 
 // Backend public URL (for avatar/upload links). On Vercel use VERCEL_URL; else PLATFORM_URL or BACKEND_URL.
@@ -116,14 +116,13 @@ app.get("/api/public/platform-maintenance", async (_, res) => {
 });
 /** Public: which contract addresses this API uses (compare to Vercel VITE_* so wallet only hits one deployment). */
 app.get("/api/health/contracts", (_, res) => res.json(getDeployedContractsSnapshot()));
-/** Public: AI support chat (optional SUPPORT_AI_API_KEY — see .env.example). */
+/** Public: support chat — GET shows usage; POST returns live-backed replies (see supportChat route). */
 app.get("/api/public/support/chat", (_req, res) => {
   res.setHeader("Cache-Control", "no-store");
   res.json({
     ok: true,
     service: "support-chat",
-    detail:
-      "Open in a browser only shows this message. The web app sends POST with JSON — that is how you get an answer.",
+    detail: "Browser GET only shows this help. The app sends POST with JSON to receive a reply.",
     method: "POST",
     path: "/api/public/support/chat",
     headers: { "Content-Type": "application/json" },
