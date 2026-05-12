@@ -9,7 +9,8 @@
     "seed-admins": "node scripts/seed-admins.js",
     "seed-bot-profiles": "node scripts/seed-bot-profiles.js",
     "backfill-referral": "node scripts/backfill-referral-paid-once.js",
-    "test-support-ai": "node scripts/test-support-groq-full.mjs"
+    "test-support-ai": "node scripts/test-support-groq-full.mjs",
+    "test-support-chat-url": "node scripts/test-support-chat-endpoint.mjs"
   },
   "dependencies": {
     "cors": "^2.8.5",

@@ -1,6 +1,11 @@
 /**
- * Run on the same machine as production to verify Groq can complete with the full support-chat payload.
- * Usage (from backend/): node scripts/test-support-groq-full.mjs
+ * Calls Groq **directly** (https://api.groq.com) using SUPPORT_AI_API_KEY from this folder's `.env`.
+ *
+ * - HTTP **401 invalid_api_key** = that key is wrong, revoked, or not a Groq key → create a new one at
+ *   https://console.groq.com/keys and update SUPPORT_AI_API_KEY, then restart the backend.
+ * - This does **not** test https://api.goldenlabs.finance — for that run `npm run test-support-chat-url`.
+ *
+ * Usage (from backend/): npm run test-support-ai
  */
 import dotenv from "dotenv";
 dotenv.config({ override: true });
