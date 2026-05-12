@@ -119,6 +119,71 @@ Rules:
 - If platformContext.community includes telegramUrl and/or supportEmail, you may share those for the official Telegram community and email support. Do not invent other emails, links, or “official” accounts.
 - Gas is paid in BNB; in-app USDT payments use BEP20 USDT on BSC unless context says otherwise.`;
 
+/** When Groq/network fails, still answer from the same facts we send to the model (no LLM). */
+function buildFallbackReply(platformContext, userQuestion) {
+  const c = platformContext?.community || {};
+  const parts = [];
+  const q = (userQuestion || "").toLowerCase();
+
+  const isGreetingOrAbout =
+    /\b(hi|hello|hey)\b/.test(q) ||
+    /what.*(platform|golden|this|about)/.test(q) ||
+    /^what\s+is(\s+this)?\s*(\?)?$/i.test(q.trim());
+  if (isGreetingOrAbout) {
+    parts.push(
+      "Golden Labs is a BNB Smart Chain (mainnet) app: connect your wallet, subscribe with USDT, mint one NFT per wallet, then use the marketplace to list and buy assets. Referrals and earnings features are in the dashboard."
+    );
+  } else {
+    parts.push(
+      "Golden Labs runs on BNB Smart Chain: subscribe (USDT), mint (USDT + gas in BNB), then trade on the marketplace. Use the in-app pages for step-by-step flows."
+    );
+  }
+
+  if (platformContext?.subscription?.subscriptionKnown && platformContext.subscription.priceFormatted) {
+    parts.push(`Subscription price on-chain right now: ${platformContext.subscription.priceFormatted}.`);
+  }
+  if (platformContext?.mint?.mintPriceKnown) {
+    parts.push(`Mint price: ${platformContext.mint.mintPriceUsdt} USDT (${platformContext.mint.rule || "1 wallet = 1 NFT"}).`);
+  }
+
+  const contact = [];
+  if (c.telegramUrl) contact.push(`Telegram: ${c.telegramUrl}`);
+  if (c.supportEmail) contact.push(`Email: ${c.supportEmail}`);
+  if (contact.length) {
+    parts.push(`More help or community: ${contact.join(" · ")}.`);
+  }
+
+  parts.push(
+    "(Automated summary from live platform data. The full assistant could not respond just now — try again shortly, or use Telegram or email above.)"
+  );
+  return parts.join(" ");
+}
+
+async function tryGroqCompletion({ apiKey, baseUrl, model, userPayload }) {
+  const resp = await fetch(`${baseUrl}/chat/completions`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model,
+      temperature: 0.35,
+      max_tokens: 600,
+      messages: [
+        { role: "system", content: SYSTEM_PROMPT },
+        {
+          role: "user",
+          content: `Answer using only platformContext + general safe wallet hygiene.\n\n${JSON.stringify(userPayload)}`,
+        },
+      ],
+    }),
+  });
+  const data = await resp.json().catch(() => ({}));
+  const reply = data?.choices?.[0]?.message?.content?.trim();
+  return { resp, data, reply };
+}
+
 router.post("/chat", supportRateLimit, async (req, res) => {
   const raw = req.body?.message;
   if (raw == null || typeof raw !== "string") {
@@ -131,7 +196,8 @@ router.post("/chat", supportRateLimit, async (req, res) => {
 
   const apiKey = (process.env.SUPPORT_AI_API_KEY || "").trim();
   const baseUrl = (process.env.SUPPORT_AI_BASE_URL || "https://api.groq.com/openai/v1").replace(/\/$/, "");
-  const model = (process.env.SUPPORT_AI_MODEL || "llama-3.1-8b-instant").trim();
+  const primaryModel = (process.env.SUPPORT_AI_MODEL || "llama-3.1-8b-instant").trim();
+  const fallbackModel = (process.env.SUPPORT_AI_MODEL_FALLBACK || "llama-3.3-70b-versatile").trim();
 
   let platformContext;
   try {
@@ -157,42 +223,38 @@ router.post("/chat", supportRateLimit, async (req, res) => {
   }
 
   try {
-    const resp = await fetch(`${baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
+    const models = [primaryModel, fallbackModel].filter(Boolean);
+    const tried = new Set();
+    for (const model of models) {
+      if (tried.has(model)) continue;
+      tried.add(model);
+      const { resp, data, reply } = await tryGroqCompletion({
+        apiKey,
+        baseUrl,
         model,
-        temperature: 0.35,
-        max_tokens: 600,
-        messages: [
-          { role: "system", content: SYSTEM_PROMPT },
-          {
-            role: "user",
-            content: `Answer using only platformContext + general safe wallet hygiene.\n\n${JSON.stringify(userPayload)}`,
-          },
-        ],
-      }),
+        userPayload,
+      });
+      if (reply) {
+        return res.json({ configured: true, reply, model });
+      }
+      const errMsg = data?.error?.message || data?.message || resp.statusText || "unknown";
+      console.warn(`[support-chat] provider model=${model} status=${resp.status}:`, errMsg);
+    }
+
+    const fallbackReply = buildFallbackReply(platformContext, message);
+    return res.json({
+      configured: true,
+      reply: fallbackReply,
+      fallback: true,
     });
-
-    const data = await resp.json().catch(() => ({}));
-    if (!resp.ok) {
-      const msg = data?.error?.message || data?.message || resp.statusText || "AI provider error";
-      console.warn("[support-chat] provider:", msg);
-      return res.status(502).json({ error: "The assistant is temporarily unavailable. Please try again shortly." });
-    }
-
-    const reply = data?.choices?.[0]?.message?.content?.trim();
-    if (!reply) {
-      return res.status(502).json({ error: "Empty assistant response." });
-    }
-
-    return res.json({ configured: true, reply });
   } catch (e) {
     console.warn("[support-chat]", e?.message || e);
-    return res.status(502).json({ error: "Support chat request failed." });
+    const fallbackReply = buildFallbackReply(platformContext, message);
+    return res.json({
+      configured: true,
+      reply: fallbackReply,
+      fallback: true,
+    });
   }
 });
 
