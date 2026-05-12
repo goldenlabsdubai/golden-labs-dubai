@@ -8,7 +8,8 @@
     "upload-nft-pinata": "node scripts/upload-nft-pinata.js",
     "seed-admins": "node scripts/seed-admins.js",
     "seed-bot-profiles": "node scripts/seed-bot-profiles.js",
-    "backfill-referral": "node scripts/backfill-referral-paid-once.js"
+    "backfill-referral": "node scripts/backfill-referral-paid-once.js",
+    "test-support-ai": "node scripts/test-support-groq-full.mjs"
   },
   "dependencies": {
     "cors": "^2.8.5",

@@ -150,37 +150,66 @@ function buildFallbackReply(platformContext, userQuestion) {
   if (c.telegramUrl) contact.push(`Telegram: ${c.telegramUrl}`);
   if (c.supportEmail) contact.push(`Email: ${c.supportEmail}`);
   if (contact.length) {
-    parts.push(`More help or community: ${contact.join(" · ")}.`);
+    parts.push(`More help: ${contact.join(" | ")}.`);
   }
 
-  parts.push(
-    "(Automated summary from live platform data. The full assistant could not respond just now — try again shortly, or use Telegram or email above.)"
-  );
-  return parts.join(" ");
+  parts.push("Quick summary from live platform data (full AI could not answer). Try again soon or use Telegram / email above.");
+  return parts.join("\n\n");
 }
 
 async function tryGroqCompletion({ apiKey, baseUrl, model, userPayload }) {
-  const resp = await fetch(`${baseUrl}/chat/completions`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model,
-      temperature: 0.35,
-      max_tokens: 600,
-      messages: [
-        { role: "system", content: SYSTEM_PROMPT },
-        {
-          role: "user",
-          content: `Answer using only platformContext + general safe wallet hygiene.\n\n${JSON.stringify(userPayload)}`,
-        },
-      ],
-    }),
-  });
-  const data = await resp.json().catch(() => ({}));
-  const reply = data?.choices?.[0]?.message?.content?.trim();
+  const TIMEOUT_MS = Math.min(
+    Math.max(Number(process.env.SUPPORT_AI_TIMEOUT_MS) || 28000, 5000),
+    120000
+  );
+  let resp;
+  let raw = "";
+  try {
+    resp = await fetch(`${baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model,
+        temperature: 0.35,
+        max_tokens: 600,
+        messages: [
+          { role: "system", content: SYSTEM_PROMPT },
+          {
+            role: "user",
+            content: `Answer using only platformContext + general safe wallet hygiene.\n\n${JSON.stringify(userPayload)}`,
+          },
+        ],
+      }),
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
+    raw = await resp.text();
+  } catch (e) {
+    const name = e?.name || "";
+    const msg = e?.message || String(e);
+    console.warn(`[support-chat] fetch failed model=${model}:`, name, msg);
+    return {
+      resp: { ok: false, status: 0, statusText: "fetch_failed" },
+      data: { error: { message: name === "AbortError" ? `timeout after ${TIMEOUT_MS}ms` : msg } },
+      reply: null,
+    };
+  }
+
+  let data = {};
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    data = { error: { message: `non-JSON response (${resp.status}): ${raw.slice(0, 180)}` } };
+  }
+  const choice = data?.choices?.[0];
+  const reply = choice?.message?.content?.trim();
+  if (resp.ok && !reply) {
+    console.warn(
+      `[support-chat] empty content model=${model} finish=${choice?.finish_reason || "?"} snippet=${raw.slice(0, 400)}`
+    );
+  }
   return { resp, data, reply };
 }
 
@@ -225,6 +254,8 @@ router.post("/chat", supportRateLimit, async (req, res) => {
   try {
     const models = [primaryModel, fallbackModel].filter(Boolean);
     const tried = new Set();
+    const debugSupport = String(process.env.SUPPORT_AI_DEBUG || "").trim() === "1";
+    const attempts = [];
     for (const model of models) {
       if (tried.has(model)) continue;
       tried.add(model);
@@ -234,27 +265,43 @@ router.post("/chat", supportRateLimit, async (req, res) => {
         model,
         userPayload,
       });
+      if (debugSupport) {
+        attempts.push({
+          model,
+          httpStatus: resp.status,
+          error: data?.error?.message || null,
+          finishReason: data?.choices?.[0]?.finish_reason ?? null,
+        });
+      }
       if (reply) {
-        return res.json({ configured: true, reply, model });
+        const out = { configured: true, reply, model };
+        if (debugSupport) out.debug = { attempts };
+        return res.json(out);
       }
       const errMsg = data?.error?.message || data?.message || resp.statusText || "unknown";
       console.warn(`[support-chat] provider model=${model} status=${resp.status}:`, errMsg);
     }
 
     const fallbackReply = buildFallbackReply(platformContext, message);
-    return res.json({
+    const out = {
       configured: true,
       reply: fallbackReply,
       fallback: true,
-    });
+    };
+    if (debugSupport) out.debug = { attempts };
+    return res.json(out);
   } catch (e) {
     console.warn("[support-chat]", e?.message || e);
     const fallbackReply = buildFallbackReply(platformContext, message);
-    return res.json({
+    const out = {
       configured: true,
       reply: fallbackReply,
       fallback: true,
-    });
+    };
+    if (String(process.env.SUPPORT_AI_DEBUG || "").trim() === "1") {
+      out.debug = { error: e?.message || String(e) };
+    }
+    return res.json(out);
   }
 });
 
