@@ -4,6 +4,7 @@
  */
 import { Router } from "express";
 import { ethers } from "ethers";
+import { getSupportAiApiKey } from "../utils/supportAiKey.js";
 import { getDeployedContractsSnapshot } from "../config/contractsEnv.js";
 import { getSubscriptionPriceFromChain } from "../services/onChainUser.js";
 import { USDT_DECIMALS } from "../constants/usdtDecimals.js";
@@ -223,7 +224,7 @@ router.post("/chat", supportRateLimit, async (req, res) => {
     return res.status(400).json({ error: "message is required" });
   }
 
-  const apiKey = (process.env.SUPPORT_AI_API_KEY || "").trim();
+  const apiKey = getSupportAiApiKey();
   const baseUrl = (process.env.SUPPORT_AI_BASE_URL || "https://api.groq.com/openai/v1").replace(/\/$/, "");
   const primaryModel = (process.env.SUPPORT_AI_MODEL || "llama-3.1-8b-instant").trim();
   const fallbackModel = (process.env.SUPPORT_AI_MODEL_FALLBACK || "llama-3.3-70b-versatile").trim();

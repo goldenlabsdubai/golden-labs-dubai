@@ -17,7 +17,8 @@ if (r.error && r.error.code !== "ENOENT") {
   console.warn("dotenv:", r.error.message);
 }
 
-const k = (process.env.SUPPORT_AI_API_KEY || "").trim();
+const { getSupportAiApiKey } = await import("../src/utils/supportAiKey.js");
+const k = getSupportAiApiKey();
 const base = (process.env.SUPPORT_AI_BASE_URL || "").trim();
 console.log("SUPPORT_AI_BASE_URL =", base || "(default groq)");
 console.log(
@@ -27,6 +28,5 @@ console.log(
     : "(empty / missing)"
 );
 
-const dup = "grep -n ^SUPPORT_AI_API_KEY= .env (run on server to ensure a single line)";
 console.log("If len=0 here but `cat .env` shows a key, PM2 cwd was wrong (fixed in app.js) or you're not in backend/.");
-console.log("If len>0 but test-support-ai returns 401, Groq rejects that string — new key from https://console.groq.com/keys");
+console.log("Run `npm run groq-auth-check` — GET 200 + minimal chat 200 means the key is fine for support chat.");

@@ -1,9 +1,8 @@
 /**
- * Calls Groq **directly** (https://api.groq.com) using SUPPORT_AI_API_KEY from this folder's `.env`.
+ * Calls Groq **directly** using SUPPORT_AI_API_KEY from `backend/.env`.
  *
- * - HTTP **401 invalid_api_key** = that key is wrong, revoked, or not a Groq key → create a new one at
- *   https://console.groq.com/keys and update SUPPORT_AI_API_KEY, then restart the backend.
- * - This does **not** test https://api.goldenlabs.finance — for that run `npm run test-support-chat-url`.
+ * Important: static `import` of project modules is deferred until **after** `dotenv.config`
+ * (ESM would otherwise hoist imports and load code before `.env` exists).
  *
  * Usage (from backend/): npm run test-support-ai
  */
@@ -14,10 +13,11 @@ import { fileURLToPath } from "url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.resolve(__dirname, "..", ".env"), override: true });
 
-import { ethers } from "ethers";
-import { getDeployedContractsSnapshot } from "../src/config/contractsEnv.js";
-import { getSubscriptionPriceFromChain } from "../src/services/onChainUser.js";
-import { USDT_DECIMALS } from "../src/constants/usdtDecimals.js";
+const { getSupportAiApiKey } = await import("../src/utils/supportAiKey.js");
+const { ethers } = await import("ethers");
+const { getDeployedContractsSnapshot } = await import("../src/config/contractsEnv.js");
+const { getSubscriptionPriceFromChain } = await import("../src/services/onChainUser.js");
+const { USDT_DECIMALS } = await import("../src/constants/usdtDecimals.js");
 
 const DEFAULT_COMMUNITY_TELEGRAM = "https://t.me/goldenlabschannel";
 const DEFAULT_SUPPORT_EMAIL = "goldenlabssupport@gmail.com";
@@ -104,7 +104,7 @@ Rules:
 - Gas is paid in BNB; in-app USDT payments use BEP20 USDT on BSC unless context says otherwise.`;
 
 async function main() {
-  const apiKey = (process.env.SUPPORT_AI_API_KEY || "").trim();
+  const apiKey = getSupportAiApiKey();
   const baseUrl = (process.env.SUPPORT_AI_BASE_URL || "https://api.groq.com/openai/v1").replace(/\/$/, "");
   const model = (process.env.SUPPORT_AI_MODEL || "llama-3.1-8b-instant").trim();
   if (!apiKey) {
@@ -159,7 +159,7 @@ async function main() {
   console.log("Reply preview:\n", reply.slice(0, 600));
 }
 
-main().catch((e) => {
+await main().catch((e) => {
   console.error(e);
   process.exit(1);
 });
