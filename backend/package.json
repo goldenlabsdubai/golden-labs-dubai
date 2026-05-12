@@ -11,7 +11,8 @@
     "backfill-referral": "node scripts/backfill-referral-paid-once.js",
     "test-support-ai": "node scripts/test-support-groq-full.mjs",
     "test-support-chat-url": "node scripts/test-support-chat-endpoint.mjs",
-    "verify-support-env": "node scripts/verify-support-ai-env.mjs"
+    "verify-support-env": "node scripts/verify-support-ai-env.mjs",
+    "groq-auth-check": "node scripts/groq-auth-check.mjs"
   },
   "dependencies": {
     "cors": "^2.8.5",
