@@ -8,7 +8,11 @@
  * Usage (from backend/): npm run test-support-ai
  */
 import dotenv from "dotenv";
-dotenv.config({ override: true });
+import path from "path";
+import { fileURLToPath } from "url";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+dotenv.config({ path: path.resolve(__dirname, "..", ".env"), override: true });
 
 import { ethers } from "ethers";
 import { getDeployedContractsSnapshot } from "../src/config/contractsEnv.js";
