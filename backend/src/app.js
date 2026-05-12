@@ -75,6 +75,7 @@ import topSellersRoutes from "./routes/topSellers.js";
 import adminRoutes from "./routes/admin.js";
 import botControlRoutes from "./routes/botControl.js";
 import cronRoutes from "./routes/cron.js";
+import supportChatRoutes from "./routes/supportChat.js";
 import { authMiddleware, optionalAuthMiddleware } from "./middleware/auth.js";
 import { getPool, requirePostgres } from "./config/postgres.js";
 import { getDeployedContractsSnapshot } from "./config/contractsEnv.js";
@@ -112,6 +113,8 @@ app.get("/api/public/platform-maintenance", async (_, res) => {
 });
 /** Public: which contract addresses this API uses (compare to Vercel VITE_* so wallet only hits one deployment). */
 app.get("/api/health/contracts", (_, res) => res.json(getDeployedContractsSnapshot()));
+/** Public: AI support chat (optional SUPPORT_AI_API_KEY — see .env.example). */
+app.use("/api/public/support", supportChatRoutes);
 // Root (and /api for Vercel rewrite of "/" -> "/api") – so visiting base URL returns something
 app.get("/", (_, res) => res.json({ api: "goldenlabs", health: "/api/health" }));
 app.get("/api", (_, res) => res.json({ api: "goldenlabs", health: "/api/health" }));
