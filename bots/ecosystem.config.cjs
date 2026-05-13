@@ -13,6 +13,11 @@
  * After editing bots/.env:
  *   cd ~/golden-labs-dubai/bots && pm2 restart bot1 bot2 --update-env
  *
+ * IMPORTANT: The CLI args below must stay "1" and "2". Never run
+ *   pm2 restart bot1 -- update-env
+ * (space before update-env) — PM2 will pass update-env to Node and the bot will crash.
+ * Correct: pm2 restart bot1 --update-env
+ *
  * Logs: pm2 logs bot1 --lines 100
  * Errors: tail -n 80 ~/.pm2/logs/bot1-error.log
  */

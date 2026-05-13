@@ -179,12 +179,18 @@ const PENDING_USER_LISTINGS_FILE = path.join(__dirname, ".bot-pending-user-listi
 const LISTENER_CURSOR_FILE = path.join(__dirname, ".bot-listener-cursor.json");
 
 function resolveBotId() {
-  const argId = (process.argv[2] || "").trim();
+  const argRaw = (process.argv[2] || "").trim();
   const envId = (process.env.BOT_ID || "").trim();
-  const raw = argId || envId || "1";
+  const argNum = Number(argRaw);
+  const fromArg =
+    argRaw !== "" && Number.isInteger(argNum) && argNum >= 1 && argNum <= 5 ? String(argNum) : "";
+  const raw = fromArg || envId || "1";
   const id = Number(raw);
   if (!Number.isInteger(id) || id < 1 || id > 5) {
-    throw new Error(`Invalid bot id "${raw}". Use 1..5.`);
+    throw new Error(
+      `Invalid bot id "${raw}". Pass 1..5 as first CLI arg (e.g. pm2 ecosystem args: "1") or set BOT_ID. ` +
+        `Do not pass "update-env" to the script — that is a PM2 flag: pm2 restart bot1 --update-env`
+    );
   }
   return String(id);
 }
