@@ -121,7 +121,7 @@ function getSupportReply(userText, ctx) {
     return `For support or other queries, please use “Support or Any Query” at the bottom of this chat. For our community, tap “Join now” next to Telegram Community.`;
 
   if (t.includes("telegram") || t.includes("community") || t.includes("channel") || t.includes("join"))
-    return `Please use “Join now” under Telegram Community at the bottom of this chat. For private enquiries, use Support or Any Query (email) on the same line.`;
+    return `Please use “Join now” under Telegram Community at the bottom of this chat. For private enquiries, use Support or Any Query (email) below.`;
 
   // Greetings
   if (/^(hi|hello|hey|hiya|good morning|good afternoon|good evening)\b/i.test(t))
@@ -441,8 +441,6 @@ export default function SupportChat() {
             {supportMessages.length === 0 && (
               <p className="landing-v2__support-placeholder">
                 Ask about Golden Labs, your wallet, subscription ({placeholderSub}), minting ({placeholderMint}), trading, Dashboard, or referrals.
-                {" "}
-                Official email and Telegram are on the same line below: Support or Any Query and Telegram Community.
               </p>
             )}
             {supportMessages.map((msg, i) => (

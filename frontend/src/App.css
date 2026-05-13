@@ -7942,6 +7942,35 @@ div.marketplace-page__nav-profile.marketplace-page__profile-icon-btn {
 .landing-v2__support-contact a:hover {
   text-decoration: underline;
 }
+
+/* Mobile: label line, then link line — for each block; desktop stays one inline row */
+@media (max-width: 768px) {
+  .landing-v2__support-contact {
+    padding: 0.5rem 0.85rem;
+  }
+  .landing-v2__support-contact-inline {
+    flex-direction: column;
+    align-items: stretch;
+    justify-content: flex-start;
+    gap: 0.65rem;
+  }
+  .landing-v2__support-contact-part {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    width: 100%;
+    gap: 0.2rem;
+  }
+  .landing-v2__support-contact-text {
+    white-space: normal;
+    flex-shrink: 0;
+    line-height: 1.3;
+  }
+  .landing-v2__support-contact-divider {
+    display: none;
+  }
+}
+
 .landing-v2__support-msg {
   max-width: 90%;
   padding: 0.6rem 0.9rem;
