@@ -1,24 +1,138 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import { useReadContract } from "wagmi";
+import { BSC_CHAIN_ID } from "../constants/chain";
+import { formatUsdtTrim, readContractUint256 } from "../utils/formatUsdt";
+
+const TELEGRAM_CHANNEL_URL = "https://t.me/goldenlabschannel";
+const SUPPORT_EMAIL = "goldenlabssupport@gmail.com";
+
+const SUBSCRIPTION_ABI = [
+  { name: "subscriptionPrice", type: "function", stateMutability: "view", inputs: [], outputs: [{ type: "uint256" }] },
+];
+const NFT_MINT_PRICE_ABI = [
+  { name: "mintPrice", type: "function", stateMutability: "view", inputs: [], outputs: [{ type: "uint256" }] },
+];
+const REFERRAL_CHUNK_ABI = [
+  { name: "referralWithdrawChunk", type: "function", stateMutability: "view", inputs: [], outputs: [{ type: "uint256" }] },
+];
+
+/** Default programme (matches ReferralContract constructor): min. direct referrals per level → USDT per qualifying marketplace trade. */
+const REFERRAL_LEVEL_ROWS = [
+  { level: 1, directs: 1, perTradeUsdt: "0.50" },
+  { level: 2, directs: 2, perTradeUsdt: "0.125" },
+  { level: 3, directs: 3, perTradeUsdt: "0.083" },
+  { level: 4, directs: 4, perTradeUsdt: "0.0625" },
+  { level: 5, directs: 5, perTradeUsdt: "0.03" },
+  { level: 6, directs: 6, perTradeUsdt: "0.025" },
+  { level: 7, directs: 6, perTradeUsdt: "0.025" },
+  { level: 8, directs: 6, perTradeUsdt: "0.0167" },
+  { level: 9, directs: 6, perTradeUsdt: "0.0167" },
+  { level: 10, directs: 6, perTradeUsdt: "0.0167" },
+];
 
 /** Golden Labs related keywords – if none match, may be off-topic */
-const GL_TOPICS = ["golden", "labs", "wallet", "connect", "mint", "nft", "subscribe", "referral", "refer", "marketplace", "dashboard", "profile", "usdt", "bnb", "list", "buy", "sell", "asset", "price", "cost", "gas", "withdraw", "claim", "leaderboard", "suspended", "blocked", "sign in", "login", "metamask", "network", "chain", "bsc", "project", "about", "fee", "profit", "loss", "owner", "creator"];
+const GL_TOPICS = [
+  "golden",
+  "labs",
+  "wallet",
+  "connect",
+  "mint",
+  "nft",
+  "subscribe",
+  "referral",
+  "refer",
+  "marketplace",
+  "dashboard",
+  "profile",
+  "usdt",
+  "bnb",
+  "list",
+  "buy",
+  "sell",
+  "trade",
+  "asset",
+  "price",
+  "cost",
+  "gas",
+  "withdraw",
+  "claim",
+  "leaderboard",
+  "suspended",
+  "blocked",
+  "sign in",
+  "login",
+  "metamask",
+  "network",
+  "chain",
+  "bsc",
+  "project",
+  "about",
+  "fee",
+  "profit",
+  "loss",
+  "owner",
+  "creator",
+  "contact",
+  "email",
+  "telegram",
+  "community",
+  "activity",
+  "owned",
+  "delist",
+  "level",
+  "how to",
+  "start",
+];
 
 /** Out-of-scope patterns – redirect to Golden Labs topics */
-const OFF_TOPIC_PATTERNS = /\b(weather|joke|recipe|cook|movie|football|sport|politics|bitcoin|ethereum price|crypto price|who won|what time|tell me about yourself|random|jokes?)\b|^(hi|hey|ok|okay|cool|nice|yes|no|test|asdf|123)$/i;
+const OFF_TOPIC_PATTERNS =
+  /\b(weather|joke|recipe|cook|movie|football|sport|politics|bitcoin|ethereum price|crypto price|who won|what time|tell me about yourself|random|jokes?)\b|^(hi|hey|ok|okay|cool|nice|yes|no|test|asdf|123)$/i;
 
-function getSupportReply(userText) {
+/**
+ * @param {object} ctx
+ * @param {string|null} ctx.subPriceLabel  e.g. "10 USDT"
+ * @param {string|null} ctx.mintPriceLabel
+ * @param {string} ctx.withdrawChunkLabel e.g. "10 USDT"
+ * @param {string} ctx.contactLine
+ * @param {string} ctx.startFundsLine
+ * @param {string} ctx.referralTableShort
+ */
+function getSupportReply(userText, ctx) {
+  const {
+    subPriceLabel,
+    mintPriceLabel,
+    withdrawChunkLabel,
+    contactLine,
+    startFundsLine,
+    referralTableShort,
+  } = ctx;
+
   const t = userText.toLowerCase().trim().replace(/\s+/g, " ");
-  if (!t) return "Hey! 👋 I'm here to help with anything Golden Labs — just drop your question and I'll get right to it.";
+  if (!t)
+    return `Hello. I am the Golden Labs assistant. I can explain the platform, getting started, wallet connection, subscription, minting, trading, referrals, and your Dashboard. ${contactLine}`;
 
-  // Greetings first
-  if (/^(hi|hello|hey|hiya|yo|sup|how are you)\b/i.test(t))
-    return "Hey! 👋 I'm your Golden Labs support assistant. I can help with wallet connection, minting, subscribing, trading, referrals — you name it. What's on your mind?";
+  // Contact / community
+  if (
+    t.includes("contact") ||
+    t.includes("email") ||
+    (t.includes("support") && (t.includes("human") || t.includes("staff") || t.includes("official"))) ||
+    /reach\s+(you|us|out)/i.test(userText)
+  )
+    return `For support or other queries, please use “Support or Any Query” at the bottom of this chat. For our community, tap “Join now” next to Telegram Community.`;
 
-  if (t.includes("help") || t.includes("support") || /what can you do|who are you|what you do/i.test(t))
-    return "I'm your Golden Labs support assistant! I can answer questions about connecting your wallet, signing in, subscribing (~10 USDT), minting (1 NFT per wallet), marketplace trading, referrals, pricing, and more. What do you need help with?";
+  if (t.includes("telegram") || t.includes("community") || t.includes("channel") || t.includes("join"))
+    return `Please use “Join now” under Telegram Community at the bottom of this chat. For private enquiries, use Support or Any Query (email) on the same line.`;
 
-  // Project intro – BEFORE other handlers (catches "what is golden labs", "what is this project", "what you do", typos like "porject")
-  const hasProjectQ = (t.includes("what") && (t.includes("golden") || t.includes("labs") || t.includes("project") || t.includes("porject"))) ||
+  // Greetings
+  if (/^(hi|hello|hey|hiya|good morning|good afternoon|good evening)\b/i.test(t))
+    return `Hello, and thank you for visiting Golden Labs. I can help with how the platform works, connecting your wallet, subscribing, minting, trading, and referrals. How may I assist you today?`;
+
+  if (t.includes("help") || /what can you do|who are you/i.test(t))
+    return `I can guide you through Golden Labs: starting out, wallet connection, subscription (${subPriceLabel}), minting (${mintPriceLabel}), marketplace trading, your Dashboard, Leaderboard, referrals, and rewards. ${contactLine}`;
+
+  // Project intro
+  const hasProjectQ =
+    (t.includes("what") && (t.includes("golden") || t.includes("labs") || t.includes("project") || t.includes("porject"))) ||
     (t.includes("about") && (t.includes("golden") || t.includes("labs") || t.includes("project"))) ||
     /what\s+(is|does)\s+(golden|labs|this)/i.test(t) ||
     /(this\s+)?project\s+about|about\s+this\s+project/i.test(t) ||
@@ -26,10 +140,20 @@ function getSupportReply(userText) {
     /explain\s+(golden|labs|project)/i.test(t) ||
     /tell\s+me\s+about\s+(golden|labs|this)/i.test(t);
   if (hasProjectQ)
-    return "Golden Labs is an NFT subscription trading platform on BSC Mainnet. You subscribe (~10 USDT), mint 1 NFT per wallet (10 USDT), then trade on the marketplace — list yours or buy others. You can also earn via referrals. Want to know more about any specific part?";
+    return `Golden Labs is a digital collectibles and trading experience on BNB Smart Chain. You complete a short profile, subscribe (${subPriceLabel}), mint your personal asset (${mintPriceLabel}, one per wallet), and may then use the Marketplace to list or buy. You can also grow a referral network and view rewards on your Dashboard. ${startFundsLine} ${contactLine}`;
 
-  // No listings / empty marketplace – MUST be before marketplace "list" check (listings contains "list")
-  const noListings = /\b(no|zero|empty|nothing|none)\b.*(list|lisit|listing)/i.test(t) ||
+  // Getting started / funds
+  if (
+    t.includes("how to start") ||
+    t.includes("get started") ||
+    t.includes("begin") ||
+    (t.includes("start") && t.includes("platform")) ||
+    (t.includes("need") && (t.includes("money") || t.includes("fund") || t.includes("usdt") || t.includes("pay")))
+  )
+    return `${startFundsLine} After subscribing and minting, keep a small amount of BNB in your wallet for network fees whenever you list, buy, or withdraw referral rewards. ${contactLine}`;
+
+  const noListings =
+    /\b(no|zero|empty|nothing|none)\b.*(list|lisit|listing)/i.test(t) ||
     /(list|lisit|listing)s?\s*(no|empty|zero|nothing|none|missing)/i.test(t) ||
     /theres?\s+no\s+(list|lisit|listing)/i.test(t) ||
     /there\s+are\s+no\s+(list|lisit|listing)/i.test(t) ||
@@ -37,120 +161,193 @@ function getSupportReply(userText) {
     /\b(no|zero)\s+(list|lisit|listing)/i.test(t) ||
     /(list|lisit|listing)s?\s*(bro|man|dude|why)\s*[?!.]?\s*$/i.test(t);
   if (noListings)
-    return "Listings come from users who mint and list their NFTs. If the Marketplace looks empty, it means nobody's listed yet — you could be one of the first! Mint your NFT, then list it from Dashboard or Marketplace. Listings refresh every few seconds.";
+    return "Listings are created by members who have minted and chosen to sell. If the Marketplace appears quiet, you may be among the first in your circle to list. After minting, you may list your asset from the Dashboard or Marketplace. The list refreshes regularly.";
 
-  // Off-topic – redirect
   const isGlRelated = GL_TOPICS.some((kw) => t.includes(kw));
   if (!isGlRelated && (OFF_TOPIC_PATTERNS.test(t) || t.length < 4)) {
-    return "I'm your Golden Labs support assistant, so I can only help with questions about our platform — things like connecting your wallet, minting, subscribing, trading, referrals, or pricing. Anything else you'd like to know about Golden Labs?";
+    return `I specialise in Golden Labs only: the platform, wallet, subscription, minting, trading, referrals, and your account areas. ${contactLine}`;
   }
 
-  // Fees – before marketplace (fees, creator fee, creator)
   if (t.includes("creator") && (t.includes("fee") || t.includes("cut") || t.length < 20))
-    return "A 1% creator fee applies on each marketplace sale — the rest goes to the seller, referral payouts when applicable, and the reserve. List and buy at the fixed price shown on the Marketplace.";
+    return "A modest creator fee applies on Marketplace sales; the displayed sale price is the buyer’s price, and the fee is part of how the ecosystem operates. Sellers and eligible referrers receive their portions according to the platform rules.";
+
   if (t.includes("fee") || t.includes("fees"))
-    return "Subscribe ~10 USDT, Mint 10 USDT. Marketplace list/buy uses the fixed price shown on the Marketplace; a small creator fee applies on sales. Referral earnings go to referrers. Gas is paid in BNB.";
+    return `Typical costs: subscription ${subPriceLabel}, minting ${mintPriceLabel}, plus a little BNB for network fees. Marketplace trades use USDT at the price shown on each listing. Referral rewards can be withdrawn in steps (commonly ${withdrawChunkLabel} per withdrawal when your claimable balance allows).`;
 
-  // Owner / who runs / team
-  if (t.includes("owner") || t.includes("who run") || t.includes("who owns") || t.includes("who made") || t.includes("who create"))
-    return "For team or official inquiries, reach out through our official channels. I'm here to help with platform use — wallet, minting, subscribing, trading, referrals. What do you need?";
+  if (t.includes("owner") || t.includes("who run") || t.includes("who owns") || t.includes("who made"))
+    return "For ownership or partnership questions, please use Support or Any Query at the bottom of this chat. I am here to help you use the platform comfortably.";
 
-  // Profits / earnings
-  if (t.includes("profit") || (t.includes("earn") && !t.includes("referral")))
-    return "You can profit by selling your NFT on the marketplace (at the current fixed list price) and from referrals — up to 10 levels when your network trades (fixed 2 USDT level-income pool per trade split by level rules). Withdraw from Dashboard → Referral earnings.";
+  if ((t.includes("profit") || t.includes("earn")) && !t.includes("referral") && !t.includes("level"))
+    return "Members may sell assets on the Marketplace and may receive referral rewards when qualifying activity occurs in their network. Past results do not guarantee future outcomes. I can explain how each feature works if you tell me which area interests you.";
 
-  // Loss / risk
   if (t.includes("loss") || t.includes("lose") || t.includes("risk"))
-    return "NFT and trading involve risk — prices can go up or down. You pay to subscribe and mint; marketplace prices are set by sellers. I can't give financial advice, but I can help with how the platform works. Anything specific?";
+    return "Trading and digital collectibles carry risk. Prices and demand can change. Golden Labs does not provide investment advice. I can explain how the features work so you can decide what suits you.";
 
-  // Wallet & Connect
   if (t.includes("wallet") || t.includes("connect") || t.includes("metamask"))
-    return "Sure thing! Hit the 'Connect Wallet' button in the header — we're on BSC Mainnet, so the app will prompt you to switch if needed. Once connected, sign in and you're good to go for Subscribe, Mint, and Dashboard.";
+    return "Please use Connect Wallet in the header. The application works with BNB Smart Chain; your wallet may ask you to approve the network. After connecting, sign the message when prompted to access your profile and the rest of the journey.";
 
-  // Sign in / Login
   if (t.includes("sign in") || t.includes("login") || t.includes("log in"))
-    return "After connecting, you'll need to sign a message (SIWE) to prove you own the wallet. New users go to Profile Setup first; existing users get a sign-in popup. Quick and secure!";
+    return "After your wallet is connected, you confirm ownership with a short signed message. New members complete profile setup first; returning members sign in when prompted.";
 
-  // Profile
   if (t.includes("profile") || t.includes("username") || t.includes("avatar") || t.includes("bio"))
-    return "First time: head to Profile Setup and set your username (min 3 chars), bio, avatar (max 2MB), and socials. You can edit anytime from the Profile page — and add your referrer's username there if you have a referral code.";
+    return "On your first visit, set up your profile with a username, optional photo, and details. You may add a referrer’s username if someone invited you. You can update your profile later from the Profile page.";
 
-  // Subscribe
   if (t.includes("subscribe") || t.includes("subscription") || t.includes("resubscribe"))
-    return "Subscribe from the Subscribe page for ~10 USDT. You'll need USDT in your wallet plus some BNB for gas. If your account was SUSPENDED, just resubscribe from that same page to restore access.";
+    return `Open Subscribe to unlock minting and trading. The current subscription amount is ${subPriceLabel}. You pay in USDT and keep a little BNB for fees. If your access was paused for subscription rules, the same page allows you to continue again.`;
 
-  // Mint
   if (t.includes("mint") || t.includes("minting"))
-    return "After subscribing, go to Mint — each wallet can mint 1 NFT (lifetime) for 10 USDT. Make sure you've got USDT approved and BNB for gas. Already minted? You'll be redirected to the Dashboard.";
+    return `After you are subscribed, open Mint to create your asset. The mint price is ${mintPriceLabel}. One wallet may mint once. You need USDT plus BNB for fees. If you already minted, the app will guide you to your Dashboard.`;
 
-  // NFT / Asset
   if (t.includes("nft") || t.includes("asset") || t.includes("one per") || t.includes("1 wallet"))
-    return "Golden Labs is 1 wallet = 1 NFT. Mint costs 10 USDT after subscribing. Want more? Grab them from the Marketplace. You can also list your minted NFT there.";
+    return `Each wallet may mint one Golden Labs asset. The mint price is ${mintPriceLabel} after subscription (${subPriceLabel}). Additional pieces may be purchased from other members on the Marketplace.`;
 
-  // Marketplace
-  if (t.includes("marketplace") || t.includes("buy") || t.includes("list") || t.includes("sell"))
-    return "Head to the Marketplace to browse and buy NFTs — each sale uses the fixed list/buy price shown there. To list yours: approve the marketplace for your NFT, then list at that fixed price.";
+  if (
+    t.includes("marketplace") ||
+    (t.includes("buy") && !t.includes("referral")) ||
+    (t.includes("sell") && !t.includes("referral")) ||
+    (t.includes("trade") && !t.includes("referral"))
+  )
+    return "The Marketplace lists assets offered by members. To buy, choose a listing and follow the steps to pay in USDT. To list yours, approve the Marketplace if asked, then set your listing at the platform’s fixed listing terms. To remove a listing, use Delist from your listing card.";
 
   if (t.includes("delist") || t.includes("cancel listing"))
-    return "You can cancel your listing anytime from the Marketplace or Dashboard. Your NFT will go back to your wallet straight away.";
+    return "You may cancel a listing at any time from the Marketplace or your Dashboard. Your asset returns to your ownership in the usual way once the cancellation completes.";
 
-  // Referral
-  if (t.includes("referral") || t.includes("refer") || t.includes("ref="))
-    return "Share your link: yoursite.com/?ref=YOUR_USERNAME. New users enter your username in Profile before subscribing — that's key. You earn when people in your network trade on the marketplace (multi-level). View and withdraw in Dashboard → Referral earnings.";
-  if (t.includes("withdraw") || t.includes("claim") || t.includes("referral earnings"))
-    return "Go to Dashboard → Referral earnings and hit Withdraw. Your claimable USDT goes to your wallet — you'll sign an on-chain tx with a small gas fee.";
+  if (t.includes("list") && (t.includes("how") || t.includes("nft") || t.includes("asset")))
+    return "From the Dashboard or Marketplace, choose List on an asset you own, complete any approval step, and confirm. Your item appears for others to buy at the platform’s set listing price terms.";
 
-  // Listing not selling / why not selling (no bot mention)
-  if (t.includes("why not sell") || t.includes("not selling") || t.includes("listing not sold") || t.includes("cant sell"))
-    return "List and buy at the fixed price shown on the Marketplace. Listings can take time to sell depending on demand. Make sure your NFT is approved for the marketplace.";
+  // Referral link
+  if ((t.includes("referral") || t.includes("refer")) && (t.includes("link") || t.includes("code") || t.includes("share") || t.includes("ref=")))
+    return `Your personal link uses your username: add ?ref=YourUsername to the site address, or share your username so friends enter it on their profile before they subscribe. Rewards depend on programme rules and qualifying activity. ${referralTableShort}`;
 
-  // Pricing
-  if (t.includes("price") || t.includes("cost") || t.includes("how much") || t.includes("usdt"))
-    return "Quick rundown: Subscribe ~10 USDT, Mint 10 USDT, Marketplace list/buy is a fixed price (see Marketplace). You'll also need a bit of BNB for gas.";
+  // Referral levels deep dive
+  if (
+    t.includes("level") ||
+    (t.includes("l1") || t.includes("l2") || t.includes("l10") || t.includes("tier")) ||
+    (t.includes("referral") && (t.includes("how much") || t.includes("how many") || t.includes("income") || t.includes("earn")))
+  )
+    return referralTableShort;
+
+  if (t.includes("withdraw") || t.includes("claim") || (t.includes("referral") && t.includes("earning")))
+    return `Open Dashboard, then Referral earnings. When your claimable balance is sufficient, you may withdraw in steps of ${withdrawChunkLabel}. Each withdrawal uses a little BNB for the network fee.`;
+
+  if (t.includes("why not sell") || t.includes("not selling") || t.includes("listing not sold"))
+    return "Sales depend on buyers choosing your listing. Ensure your item is correctly listed and approved. Demand can vary; many members also share your Marketplace link with interested friends.";
+
+  if (t.includes("price") || t.includes("cost") || t.includes("how much") || (t.includes("usdt") && !t.includes("referral")))
+    return `At present, subscription is ${subPriceLabel} and minting is ${mintPriceLabel}. Marketplace listings use the standard list price shown in the app. Keep BNB for fees.`;
 
   if (t.includes("bnb") || t.includes("gas"))
-    return "We're on BSC Mainnet — gas is paid in BNB. Marketplace payments are in USDT, not BNB.";
+    return "Transactions on BNB Smart Chain use a small amount of BNB for network fees. Your purchases and subscription payments are in USDT as shown in the app.";
 
-  // User states
   if (t.includes("suspended") || t.includes("blocked") || t.includes("can't access") || t.includes("cannot access"))
-    return "If your account is SUSPENDED (inactivity or profit threshold hit), go to Subscribe and resubscribe (~10 USDT). That'll restore your access right away.";
+    return `If your account shows a subscription pause, please visit Subscribe and complete the step again (${subPriceLabel}) to restore full access where the rules allow.`;
 
-  if (t.includes("can't mint") || t.includes("cannot mint") || t.includes("mint not working"))
-    return "Make sure you've subscribed first (10 USDT). If you've already minted, remember it's 1 NFT per wallet — grab more from the Marketplace if you want.";
+  if (t.includes("can't mint") || t.includes("cannot mint"))
+    return `Please confirm subscription is complete first. Remember one mint per wallet (${mintPriceLabel}). Further pieces come from the Marketplace.`;
 
-  if (t.includes("insufficient") || t.includes("balance") || t.includes("not enough"))
-    return "You'll need enough USDT for the action (subscribe/mint/buy) plus some BNB for gas. Top up both and you should be good to go.";
+  if (t.includes("insufficient") || t.includes("not enough") || (t.includes("balance") && t.includes("wallet")))
+    return "Please ensure you hold enough USDT for the purchase or subscription step, and enough BNB for network fees. Small top-ups often resolve the message you saw.";
 
-  // Dashboard & Leaderboard
   if (t.includes("leaderboard") || t.includes("top seller"))
-    return "The Leaderboard shows top sellers by volume — accessible from the nav after you mint. Public page, no sign-in needed to check it out.";
+    return "The Leaderboard highlights members by trading activity. You can open it from the main navigation. It is a shared page for the community.";
 
   if (t.includes("dashboard"))
-    return "Your Dashboard has: Owned NFTs (list/buy from there too), Referral earnings (withdraw USDT), and Activity (full history). It unlocks after you mint.";
+    return "Your Dashboard brings together Owned assets (list or manage items), Referral earnings (review and withdraw when eligible), and Activity (your history). It becomes central after you mint.";
 
-  // Chain / Network
+  if (t.includes("owned") || (t.includes("asset") && t.includes("own")))
+    return "Under Dashboard → Owned you see assets linked to your wallet. From there you may list on the Marketplace or open items you hold.";
+
+  if (t.includes("activity") && !t.includes("trade"))
+    return "Dashboard → Activity summarises actions connected to your account so you can review your history at a glance.";
+
+  if (t.includes("referral earnings") || (t.includes("referral") && t.includes("tab")))
+    return `Referral earnings on your Dashboard show rewards credited through the programme. You may withdraw in ${withdrawChunkLabel} steps when eligible. ${referralTableShort}`;
+
   if (t.includes("chain") || t.includes("network") || t.includes("bsc"))
-    return "We run on BSC Mainnet. The app will auto-switch you to BSC if needed. Use USDT (BEP20) on BSC for all payments.";
+    return "Golden Labs uses BNB Smart Chain. Please use USDT on that network as indicated in the app, and keep BNB for fees.";
 
-  // Short GL-related (with optional punctuation)
-  const short = t.replace(/[?!.\s\/]+$/, "").trim();
+  const short = t.replace(/[?!.\s/]+$/, "").trim();
   if (short.length <= 12) {
-    if (/^(owner|creator|team)$/i.test(short))
-      return "For team or official inquiries, reach out through our official channels. I'm here to help with platform use. What do you need?";
     if (/^(fee|fees)$/i.test(short))
-      return "Subscribe ~10 USDT, Mint 10 USDT. Marketplace list/buy is a fixed price (see Marketplace); a small creator fee on sales. Gas in BNB.";
+      return `Subscription ${subPriceLabel}, mint ${mintPriceLabel}; Marketplace uses standard list pricing; referral withdrawals often in ${withdrawChunkLabel} steps.`;
     if (/^(profit|profits)$/i.test(short))
-      return "Sell your NFT on the marketplace or earn from referrals when people you refer subscribe, mint, or buy. Withdraw from Dashboard.";
+      return "Earnings may come from selling on the Marketplace and from referral rewards when rules are met. I can detail either path if you like.";
   }
 
-  // Fallback
-  return "I can help with wallet connection, signing in, subscribing, minting, marketplace trading, referrals, fees, or pricing. Which one do you need help with?";
+  return `I can explain the platform, wallet connection, subscribing (${subPriceLabel}), minting (${mintPriceLabel}), Marketplace trading, Dashboard sections, referrals, or how to reach us. ${contactLine}`;
 }
 
 const SCROLL_DEBOUNCE_MS = 3000;
-const TYPING_DELAY_MS = 600; // Simulate agent "typing" for more realistic feel
+const TYPING_DELAY_MS = 600;
+
+function buildReferralSummary(withdrawChunkLabel) {
+  const rows = REFERRAL_LEVEL_ROWS.map(
+    (r) => `Level ${r.level}: up to about ${r.perTradeUsdt} USDT per qualifying trade above you when you have at least ${r.directs} direct invitation${r.directs === 1 ? "" : "s"} (programme rules apply).`,
+  ).join(" ");
+  return (
+    "Referral rewards come from a shared pool on each qualifying Marketplace trade (up to about 2 USDT per trade across all levels combined, subject to eligibility). " +
+    rows +
+    ` Amounts are illustrative of the standard programme; your Dashboard shows your own totals. Withdrawals are usually in ${withdrawChunkLabel} steps once you have enough claimable balance.`
+  );
+}
 
 export default function SupportChat() {
+  const subAddr = (import.meta.env.VITE_SUBSCRIPTION_CONTRACT || "").trim();
+  const subNorm = subAddr.startsWith("0x") ? subAddr : subAddr ? `0x${subAddr}` : "";
+  const nftAddr = (import.meta.env.VITE_NFT_CONTRACT || "").trim();
+  const nftNorm = nftAddr.startsWith("0x") ? nftAddr : nftAddr ? `0x${nftAddr}` : "";
+  const refAddr = (import.meta.env.VITE_REFERRAL_CONTRACT || "").trim();
+  const refNorm = refAddr.startsWith("0x") ? refAddr : refAddr ? `0x${refAddr}` : "";
+
+  const { data: subPriceWei } = useReadContract({
+    address: subNorm || undefined,
+    abi: SUBSCRIPTION_ABI,
+    functionName: "subscriptionPrice",
+    chainId: BSC_CHAIN_ID,
+    query: { enabled: Boolean(subNorm) },
+  });
+  const { data: mintPriceWei } = useReadContract({
+    address: nftNorm || undefined,
+    abi: NFT_MINT_PRICE_ABI,
+    functionName: "mintPrice",
+    chainId: BSC_CHAIN_ID,
+    query: { enabled: Boolean(nftNorm) },
+  });
+  const { data: chunkWei } = useReadContract({
+    address: refNorm || undefined,
+    abi: REFERRAL_CHUNK_ABI,
+    functionName: "referralWithdrawChunk",
+    chainId: BSC_CHAIN_ID,
+    query: { enabled: Boolean(refNorm) },
+  });
+
+  const pricingCtx = useMemo(() => {
+    const subAmt = formatUsdtTrim(readContractUint256(subPriceWei) ?? subPriceWei);
+    const mintAmt = formatUsdtTrim(readContractUint256(mintPriceWei) ?? mintPriceWei);
+    const chunkAmt = formatUsdtTrim(readContractUint256(chunkWei) ?? chunkWei);
+
+    const subPriceLabel = subAmt != null ? `${subAmt} USDT` : "shown on the Subscribe page (read from the app)";
+    const mintPriceLabel = mintAmt != null ? `${mintAmt} USDT` : "shown on the Mint page (read from the app)";
+    const withdrawChunkLabel = chunkAmt != null ? `${chunkAmt} USDT` : "10 USDT";
+
+    const contactLine =
+      "For official contact, use Support or Any Query and Telegram Community at the bottom of this chat window.";
+    const startFundsLine = `To begin, plan for subscription (${subPriceLabel}), minting (${mintPriceLabel}), and a small extra amount of BNB for transaction fees.`;
+
+    const referralTableShort = buildReferralSummary(withdrawChunkLabel);
+
+    return {
+      subPriceLabel,
+      mintPriceLabel,
+      withdrawChunkLabel,
+      contactLine,
+      startFundsLine,
+      referralTableShort,
+    };
+  }, [subPriceWei, mintPriceWei, chunkWei]);
+
+  const replyFor = useCallback((text) => getSupportReply(text, pricingCtx), [pricingCtx]);
+
   const [supportOpen, setSupportOpen] = useState(false);
   const [supportClosing, setSupportClosing] = useState(false);
   const [supportMessages, setSupportMessages] = useState([]);
@@ -201,7 +398,7 @@ export default function SupportChat() {
     setSupportMessages((prev) => [...prev, { role: "user", text }]);
     setIsTyping(true);
     typingTimeoutRef.current = setTimeout(() => {
-      const reply = getSupportReply(text);
+      const reply = replyFor(text);
       setSupportMessages((prev) => [...prev, { role: "assistant", text: reply }]);
       setIsTyping(false);
       typingTimeoutRef.current = null;
@@ -211,6 +408,9 @@ export default function SupportChat() {
   useEffect(() => {
     supportMessagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [supportMessages]);
+
+  const placeholderSub = pricingCtx.subPriceLabel;
+  const placeholderMint = pricingCtx.mintPriceLabel;
 
   return (
     <>
@@ -230,8 +430,8 @@ export default function SupportChat() {
         <div className={`landing-v2__support-panel${supportOpen && !supportClosing ? " landing-v2__support-panel--open" : ""}${supportClosing ? " landing-v2__support-panel--closing" : ""}`}>
           <div className="landing-v2__support-header">
             <div>
-              <h3 className="landing-v2__support-title">Golden Labs Support Chat</h3>
-              <p className="landing-v2__support-sub">Ask your questions with our Golden Labs AI</p>
+              <h3 className="landing-v2__support-title">Golden Labs Support</h3>
+              <p className="landing-v2__support-sub">Guidance for the platform · Subscribe {placeholderSub} · Mint {placeholderMint}</p>
             </div>
             <button type="button" className="landing-v2__support-close" onClick={handleSupportClose} aria-label="Close support">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 6L6 18M6 6l12 12" /></svg>
@@ -239,7 +439,11 @@ export default function SupportChat() {
           </div>
           <div className="landing-v2__support-messages">
             {supportMessages.length === 0 && (
-              <p className="landing-v2__support-placeholder">Ask anything about Golden Labs: wallet, minting, subscribing, or trading.</p>
+              <p className="landing-v2__support-placeholder">
+                Ask about Golden Labs, your wallet, subscription ({placeholderSub}), minting ({placeholderMint}), trading, Dashboard, or referrals.
+                {" "}
+                Official email and Telegram are on the same line below: Support or Any Query and Telegram Community.
+              </p>
             )}
             {supportMessages.map((msg, i) => (
               <div key={i} className={`landing-v2__support-msg landing-v2__support-msg--${msg.role}`}>
@@ -254,6 +458,23 @@ export default function SupportChat() {
               </div>
             )}
             <div ref={supportMessagesEndRef} />
+          </div>
+          <div className="landing-v2__support-contact" aria-label="Contact and community">
+            <div className="landing-v2__support-contact-inline">
+              <span className="landing-v2__support-contact-part">
+                <span className="landing-v2__support-contact-text">Support or Any Query: </span>
+                <a href={`mailto:${SUPPORT_EMAIL}`} target="_blank" rel="noopener noreferrer">
+                  {SUPPORT_EMAIL}
+                </a>
+              </span>
+              <span className="landing-v2__support-contact-divider" aria-hidden="true" />
+              <span className="landing-v2__support-contact-part">
+                <span className="landing-v2__support-contact-text">Telegram Community: </span>
+                <a href={TELEGRAM_CHANNEL_URL} target="_blank" rel="noopener noreferrer">
+                  Join now
+                </a>
+              </span>
+            </div>
           </div>
           <div className="landing-v2__support-input-wrap">
             <input
