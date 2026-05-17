@@ -808,13 +808,9 @@ export default function Dashboard() {
                               const assetLabel =
                                 a.type === "subscription"
                                   ? "Subscription"
-                                  : a.type === "mint"
-                                    ? a.tokenId ? `GLFA #${a.tokenId}` : "GLFA"
-                                    : a.type === "buy"
-                                      ? a.tokenId ? `GLFA #${a.tokenId}` : "—"
-                                      : a.type === "sell"
-                                        ? a.tokenId ? `GLFA #${a.tokenId}` : "—"
-                                        : a.type;
+                                  : a.type === "mint" || a.type === "buy" || a.type === "sell"
+                                    ? "GLFA"
+                                    : a.type;
                               const actionLabel =
                                 a.type === "subscription"
                                   ? "Subscription"
@@ -898,7 +894,7 @@ export default function Dashboard() {
                     </div>
                     <div className="profile-hub__nft-card-details">
                       <div className="profile-hub__nft-card-row">
-                        <span className="profile-hub__nft-id">GLFA #{nft.tokenId}</span>
+                        <span className="profile-hub__nft-id">GLFA</span>
                         <span className="profile-hub__nft-price">
                           <span className="profile-hub__nft-price-label">
                             {nft.isListed

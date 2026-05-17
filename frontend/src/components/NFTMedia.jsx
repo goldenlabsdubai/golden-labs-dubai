@@ -137,7 +137,7 @@ export default function NFTMedia({ tokenURI, tokenId, className, alt: altProp, .
     };
   }, [mediaUrl]);
 
-  const alt = altProp ?? (tokenId != null ? `GLFA #${tokenId}` : "NFT");
+  const alt = altProp ?? "GLFA";
 
   // One canonical clip from API (uploads/nft-asset.mp4) — must render after all hooks.
   if (NFT_MEDIA_USE_UPLOAD_CLIP_ONLY && ASSET_VIDEO) {

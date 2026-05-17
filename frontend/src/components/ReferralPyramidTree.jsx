@@ -8,34 +8,12 @@ import { usePublicClient } from "wagmi";
 import { formatUnits } from "viem";
 import { getAvatarUrl } from "../config";
 import { USDT_DECIMALS } from "../constants/usdtDecimals";
+import { defaultTierPerTradeUsdMap } from "../utils/referralTierConfig";
 
 const REF_TIER_READ_ABI = [
   { name: "levelAmounts", type: "function", stateMutability: "view", inputs: [{ type: "uint256" }], outputs: [{ type: "uint256" }] },
   { name: "minDirectReferralsRequired", type: "function", stateMutability: "view", inputs: [{ type: "uint256" }], outputs: [{ type: "uint256" }] },
 ];
-
-/** Fallback if RPC/ABI read fails — matches default ReferralContract constructor. */
-function defaultTierPerTradeUsd() {
-  const grossWei = [
-    500000000000000000n,
-    250000000000000000n,
-    250000000000000000n,
-    250000000000000000n,
-    150000000000000000n,
-    150000000000000000n,
-    150000000000000000n,
-    100000000000000000n,
-    100000000000000000n,
-    100000000000000000n,
-  ];
-  const div = [1n, 2n, 3n, 4n, 5n, 6n, 6n, 6n, 6n, 6n];
-  const o = {};
-  for (let i = 0; i < 10; i++) {
-    const per = grossWei[i] / div[i];
-    o[i + 1] = formatUnits(per, USDT_DECIMALS).replace(/\.?0+$/, "") || "0";
-  }
-  return o;
-}
 
 function fmtRateFromChain(grossWei, divWei) {
   const d = divWei > 0n ? divWei : 1n;
@@ -311,7 +289,7 @@ function l1RowHasL2Visual(l1) {
 
 export default function ReferralPyramidTree({ referralStats, user, referralNetwork, formatUsdt, rootLabel = "You" }) {
   const publicClient = usePublicClient();
-  const [tierUsd, setTierUsd] = useState(() => defaultTierPerTradeUsd());
+  const [tierUsd, setTierUsd] = useState(() => defaultTierPerTradeUsdMap());
 
   useEffect(() => {
     let cancelled = false;
@@ -345,7 +323,7 @@ export default function ReferralPyramidTree({ referralStats, user, referralNetwo
         }
         if (!cancelled) setTierUsd(next);
       } catch {
-        if (!cancelled) setTierUsd(defaultTierPerTradeUsd());
+        if (!cancelled) setTierUsd(defaultTierPerTradeUsdMap());
       }
     })();
 

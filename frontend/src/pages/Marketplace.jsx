@@ -71,14 +71,11 @@ export default function Marketplace() {
   const [addressMenuOpen, setAddressMenuOpen] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const [avatarError, setAvatarError] = useState(false);
-  const [sortDropdownOpen, setSortDropdownOpen] = useState(false);
-  const [sortBy, setSortBy] = useState("Oldest Listed");
   const [listLayout, setListLayout] = useState("grid-3");
   const [portalReady, setPortalReady] = useState(false);
   const [insufficientBalanceType, setInsufficientBalanceType] = useState(null);
   /** { tokenId, listPriceWei } after on-chain approve, if list tx still pending */
   const [listResume, setListResume] = useState(null);
-  const sortDropdownRef = useRef(null);
   const menuRef = useRef(null);
   const cardMenuRef = useRef(null);
   const publicClient = usePublicClient();
@@ -502,45 +499,14 @@ export default function Marketplace() {
     if (aT !== bT) return aT - bT;
     return String(a.seller || "").localeCompare(String(b.seller || ""));
   };
-  const byListedTimeNewestFirst = (a, b) => {
-    const aT = Number(a.listedAt ?? 0);
-    const bT = Number(b.listedAt ?? 0);
-    const aBad = !Number.isFinite(aT) || aT <= 0;
-    const bBad = !Number.isFinite(bT) || bT <= 0;
-    if (aBad && bBad) return String(a.seller || "").localeCompare(String(b.seller || ""));
-    if (aBad) return 1;
-    if (bBad) return -1;
-    if (aT !== bT) return bT - aT;
-    return String(a.seller || "").localeCompare(String(b.seller || ""));
-  };
 
+  /** Tier: dynamic (0) → bots (1) → members (2). Within tier: oldest listed first (fixed; no user sort). */
   const sortedListings = [...filteredListings].sort((a, b) => {
     const trA = fallbackListingTierRank(a);
     const trB = fallbackListingTierRank(b);
     if (trA !== trB) return trA - trB;
-
-    const aPrice = Number(a.price || 0);
-    const bPrice = Number(b.price || 0);
-    if (sortBy === "Price: Low to High") {
-      if (aPrice !== bPrice) return aPrice - bPrice;
-      return byListedTimeOldestFirst(a, b);
-    }
-    if (sortBy === "Price: High to Low") {
-      if (aPrice !== bPrice) return bPrice - aPrice;
-      return byListedTimeOldestFirst(a, b);
-    }
-    if (sortBy === "Oldest Listed") return byListedTimeOldestFirst(a, b);
-    if (sortBy === "Recently Listed") return byListedTimeNewestFirst(a, b);
     return byListedTimeOldestFirst(a, b);
   });
-
-  useEffect(() => {
-    function handleSortDropdownOutside(e) {
-      if (sortDropdownRef.current && !sortDropdownRef.current.contains(e.target)) setSortDropdownOpen(false);
-    }
-    if (sortDropdownOpen) document.addEventListener("click", handleSortDropdownOutside);
-    return () => document.removeEventListener("click", handleSortDropdownOutside);
-  }, [sortDropdownOpen]);
 
   const subscriptionBg = (
     <div className="profile-modern__bg" aria-hidden="true">
@@ -634,7 +600,7 @@ export default function Marketplace() {
           {listResume && token && (
             <div className="marketplace-page__resume-list" role="status">
               <p>
-                <strong>Listing in progress:</strong> GLFA #{listResume.tokenId} — approve is on-chain. Complete the list step (no second approve needed).
+                <strong>Listing in progress:</strong> GLFA — approve is on-chain. Complete the list step (no second approve needed).
               </p>
               <div className="marketplace-page__resume-list-actions">
                 <button
@@ -666,7 +632,7 @@ export default function Marketplace() {
                     </div>
                     <div className="profile-hub__nft-card-details">
                       <div className="profile-hub__nft-card-row">
-                        <span className="profile-hub__nft-id">GLFA #{nft.tokenId}</span>
+                        <span className="profile-hub__nft-id">GLFA</span>
                         <span className="profile-hub__nft-price">
                           <span className="profile-hub__nft-price-label">{listUsdt} USDT <img src="/USDT_BEP20.png" alt="" className="usdt-logo-inline" aria-hidden="true" /></span>
                         </span>
@@ -692,34 +658,6 @@ export default function Marketplace() {
           <section className="marketplace-page__listings-section">
             <h2 className="marketplace-page__section-title">Marketplace</h2>
           <div className="marketplace-page__list-toolbar">
-            <div className="marketplace-page__sort-wrap" ref={sortDropdownRef}>
-              <button
-                type="button"
-                className="marketplace-page__sort-btn"
-                onClick={() => setSortDropdownOpen((o) => !o)}
-                aria-expanded={sortDropdownOpen}
-                aria-haspopup="listbox"
-              >
-                <span>{sortBy}</span>
-                <span className="marketplace-page__sort-chevron" aria-hidden="true">▼</span>
-              </button>
-              {sortDropdownOpen && (
-                <div className="marketplace-page__sort-dropdown" role="listbox">
-                  {["Oldest Listed", "Recently Listed", "Price: Low to High", "Price: High to Low"].map((opt) => (
-                    <button
-                      key={opt}
-                      type="button"
-                      role="option"
-                      aria-selected={sortBy === opt}
-                      className={`marketplace-page__sort-option ${sortBy === opt ? "marketplace-page__sort-option--active" : ""}`}
-                      onClick={() => { setSortBy(opt); setSortDropdownOpen(false); }}
-                    >
-                      {opt}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
             <div className="marketplace-page__layout-toggle">
               <button
                 type="button"
@@ -752,7 +690,7 @@ export default function Marketplace() {
             </div>
           ) : filteredListings.length === 0 ? (
             <div className="marketplace-page__empty">
-              <p className="marketplace-page__empty-text">Try changing your filters or sort order.</p>
+              <p className="marketplace-page__empty-text">No listings to show right now. Try refreshing, or list an asset from your Dashboard.</p>
               <button type="button" className="marketplace-page__refresh" onClick={refetchData}>Refresh</button>
             </div>
           ) : (
@@ -766,7 +704,7 @@ export default function Marketplace() {
                   </div>
                   <div className="profile-hub__nft-card-details">
                     <div className="profile-hub__nft-card-row">
-                      <span className="profile-hub__nft-id">GLFA #{l.tokenId}</span>
+                      <span className="profile-hub__nft-id">GLFA</span>
                       <span className="profile-hub__nft-price">
                       <span className="profile-hub__nft-price-label">{l.priceFormatted ? l.priceFormatted.replace(/\s*USDT$/i, "").trim() : Number(formatUnits(BigInt(String(l.price || 0)), USDT_DECIMALS)).toFixed(0)} USDT <img src="/USDT_BEP20.png" alt="" className="usdt-logo-inline" aria-hidden="true" /></span>
                     </span>

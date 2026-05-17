@@ -1,7 +1,15 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
-import { useReadContract } from "wagmi";
+import { useReadContract, usePublicClient } from "wagmi";
+import { formatUnits } from "viem";
 import { BSC_CHAIN_ID } from "../constants/chain";
+import { USDT_DECIMALS } from "../constants/usdtDecimals";
 import { formatUsdtTrim, readContractUint256 } from "../utils/formatUsdt";
+import {
+  REFERRAL_TIER_READ_ABI,
+  getDefaultReferralSupportRows,
+  perTradeUsdtStringFromTier,
+  trimUsdtAmountString,
+} from "../utils/referralTierConfig";
 
 const TELEGRAM_CHANNEL_URL = "https://t.me/goldenlabschannel";
 const SUPPORT_EMAIL = "goldenlabssupport@gmail.com";
@@ -14,20 +22,6 @@ const NFT_MINT_PRICE_ABI = [
 ];
 const REFERRAL_CHUNK_ABI = [
   { name: "referralWithdrawChunk", type: "function", stateMutability: "view", inputs: [], outputs: [{ type: "uint256" }] },
-];
-
-/** Default programme (matches ReferralContract constructor): min. direct referrals per level → USDT per qualifying marketplace trade. */
-const REFERRAL_LEVEL_ROWS = [
-  { level: 1, directs: 1, perTradeUsdt: "0.50" },
-  { level: 2, directs: 2, perTradeUsdt: "0.125" },
-  { level: 3, directs: 3, perTradeUsdt: "0.083" },
-  { level: 4, directs: 4, perTradeUsdt: "0.0625" },
-  { level: 5, directs: 5, perTradeUsdt: "0.03" },
-  { level: 6, directs: 6, perTradeUsdt: "0.025" },
-  { level: 7, directs: 6, perTradeUsdt: "0.025" },
-  { level: 8, directs: 6, perTradeUsdt: "0.0167" },
-  { level: 9, directs: 6, perTradeUsdt: "0.0167" },
-  { level: 10, directs: 6, perTradeUsdt: "0.0167" },
 ];
 
 /** Golden Labs related keywords – if none match, may be off-topic */
@@ -280,24 +274,82 @@ function getSupportReply(userText, ctx) {
 const SCROLL_DEBOUNCE_MS = 3000;
 const TYPING_DELAY_MS = 600;
 
-function buildReferralSummary(withdrawChunkLabel) {
-  const rows = REFERRAL_LEVEL_ROWS.map(
-    (r) => `Level ${r.level}: up to about ${r.perTradeUsdt} USDT per qualifying trade above you when you have at least ${r.directs} direct invitation${r.directs === 1 ? "" : "s"} (programme rules apply).`,
+function buildReferralSummary(withdrawChunkLabel, tierRows, referralTotalUsdtLabel) {
+  const rows = tierRows.map(
+    (r) =>
+      `Level ${r.level}: up to about ${r.perTradeUsdt} USDT per qualifying trade above you when you have at least ${r.directs} direct invitation${r.directs === 1 ? "" : "s"} (programme rules apply).`,
   ).join(" ");
   return (
-    "Referral rewards come from a shared pool on each qualifying Marketplace trade (up to about 2 USDT per trade across all levels combined, subject to eligibility). " +
+    `Referral rewards come from a shared pool on each qualifying Marketplace trade (up to about ${referralTotalUsdtLabel} USDT per trade across all levels combined on-chain, subject to eligibility). ` +
     rows +
-    ` Amounts are illustrative of the standard programme; your Dashboard shows your own totals. Withdrawals are usually in ${withdrawChunkLabel} steps once you have enough claimable balance.`
+    ` Amounts follow the current on-chain programme; your Dashboard shows your own totals. Withdrawals are usually in ${withdrawChunkLabel} steps once you have enough claimable balance.`
   );
 }
 
 export default function SupportChat() {
+  const publicClient = usePublicClient({ chainId: BSC_CHAIN_ID });
   const subAddr = (import.meta.env.VITE_SUBSCRIPTION_CONTRACT || "").trim();
   const subNorm = subAddr.startsWith("0x") ? subAddr : subAddr ? `0x${subAddr}` : "";
   const nftAddr = (import.meta.env.VITE_NFT_CONTRACT || "").trim();
   const nftNorm = nftAddr.startsWith("0x") ? nftAddr : nftAddr ? `0x${nftAddr}` : "";
   const refAddr = (import.meta.env.VITE_REFERRAL_CONTRACT || "").trim();
   const refNorm = refAddr.startsWith("0x") ? refAddr : refAddr ? `0x${refAddr}` : "";
+
+  const [referralTiers, setReferralTiers] = useState(getDefaultReferralSupportRows);
+
+  useEffect(() => {
+    let cancelled = false;
+    const addr = refNorm;
+    if (!publicClient || !addr) {
+      setReferralTiers(getDefaultReferralSupportRows());
+      return undefined;
+    }
+    (async () => {
+      try {
+        const totalWei = await publicClient.readContract({
+          address: addr,
+          abi: REFERRAL_TIER_READ_ABI,
+          functionName: "referralTotalAmount",
+        });
+        const levelReads = [];
+        for (let i = 0; i < 10; i++) {
+          levelReads.push(
+            publicClient.readContract({
+              address: addr,
+              abi: REFERRAL_TIER_READ_ABI,
+              functionName: "levelAmounts",
+              args: [BigInt(i)],
+            }),
+            publicClient.readContract({
+              address: addr,
+              abi: REFERRAL_TIER_READ_ABI,
+              functionName: "minDirectReferralsRequired",
+              args: [BigInt(i)],
+            })
+          );
+        }
+        const levelResults = await Promise.all(levelReads);
+        const rows = [];
+        for (let i = 0; i < 10; i++) {
+          const gross = levelResults[i * 2];
+          const minD = levelResults[i * 2 + 1];
+          const directs = minD > 0n ? Number(minD) : 1;
+          rows.push({
+            level: i + 1,
+            directs,
+            perTradeUsdt: perTradeUsdtStringFromTier(gross, minD, i),
+          });
+        }
+        const totalUsdt = trimUsdtAmountString(formatUnits(totalWei, USDT_DECIMALS));
+        if (!cancelled) setReferralTiers({ rows, totalUsdt });
+      } catch {
+        if (!cancelled) setReferralTiers(getDefaultReferralSupportRows());
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [publicClient, refNorm]);
 
   const { data: subPriceWei } = useReadContract({
     address: subNorm || undefined,
@@ -334,7 +386,11 @@ export default function SupportChat() {
       "For official contact, use Support or Any Query and Telegram Community at the bottom of this chat window.";
     const startFundsLine = `To begin, plan for subscription (${subPriceLabel}), minting (${mintPriceLabel}), and a small extra amount of BNB for transaction fees.`;
 
-    const referralTableShort = buildReferralSummary(withdrawChunkLabel);
+    const referralTableShort = buildReferralSummary(
+      withdrawChunkLabel,
+      referralTiers.rows,
+      referralTiers.totalUsdt
+    );
 
     return {
       subPriceLabel,
@@ -344,7 +400,7 @@ export default function SupportChat() {
       startFundsLine,
       referralTableShort,
     };
-  }, [subPriceWei, mintPriceWei, chunkWei]);
+  }, [subPriceWei, mintPriceWei, chunkWei, referralTiers]);
 
   const replyFor = useCallback((text) => getSupportReply(text, pricingCtx), [pricingCtx]);
 

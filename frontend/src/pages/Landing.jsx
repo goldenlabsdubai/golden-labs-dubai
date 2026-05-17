@@ -449,7 +449,7 @@ export default function Landing() {
                   return displayList.map((l, i) => (
                     <div key={`listing-${l.tokenId}-${i}`} className="landing-v2__nft-card">
                       <div className="landing-v2__nft-card-image" style={{ backgroundImage: 'url("/gldass.png")', backgroundSize: "cover", backgroundPosition: "center" }} />
-                      <h3 className="landing-v2__nft-card-title">GLFA #{l.tokenId}</h3>
+                      <h3 className="landing-v2__nft-card-title">GLFA</h3>
                       <p className="landing-v2__nft-card-price">{l.priceFormatted || `${Number(formatUnits(BigInt(String(l.price || 0)), USDT_DECIMALS)).toFixed(0)} USDT`}</p>
                       <button type="button" className="landing-v2__btn landing-v2__btn--primary landing-v2__btn--sm" onClick={() => assignAppPath("/marketplace")}>Buy Now</button>
                     </div>
@@ -581,7 +581,7 @@ export default function Landing() {
                         return displayList.map((l, i) => (
                           <div key={`listing-${l.tokenId}-${i}`} className="landing-v2__nft-card">
                             <div className="landing-v2__nft-card-image" style={{ backgroundImage: 'url("/gldass.png")', backgroundSize: "cover", backgroundPosition: "center" }} />
-                            <h3 className="landing-v2__nft-card-title">GLFA #{l.tokenId}</h3>
+                            <h3 className="landing-v2__nft-card-title">GLFA</h3>
                             <p className="landing-v2__nft-card-price">{l.priceFormatted || `${Number(formatUnits(BigInt(String(l.price || 0)), USDT_DECIMALS)).toFixed(0)} USDT`}</p>
                             <button type="button" className="landing-v2__btn landing-v2__btn--primary landing-v2__btn--sm" onClick={() => assignAppPath("/marketplace")}>Buy Now</button>
                           </div>

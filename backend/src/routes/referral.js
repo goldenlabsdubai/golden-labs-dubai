@@ -30,7 +30,7 @@ router.get("/network", async (req, res) => {
   }
 });
 
-router.get("/info", (_, res) => {
+router.get("/info", async (_req, res) => {
   const withdrawChunkWei = String(REFERRAL_WITHDRAW_CHUNK_WEI || "10000000000000000000");
   let withdrawChunkUsdt = 10;
   try {
@@ -38,13 +38,88 @@ router.get("/info", (_, res) => {
   } catch {
     withdrawChunkUsdt = 10;
   }
-  res.json({
-    rate: "fixed $2 / trade (marketplace referralTotalAmount; on-chain config)",
+
+  const contractAddress = (process.env.REFERRAL_CONTRACT_ADDRESS || "").trim();
+  const rpcUrl = getReferralRpcUrl();
+
+  const base = {
     levels: REFERRAL_LEVELS,
-    contractAddress: process.env.REFERRAL_CONTRACT_ADDRESS || "",
+    contractAddress,
     withdrawChunkWei,
     withdrawChunkUsdt,
-  });
+  };
+
+  if (!contractAddress || !rpcUrl) {
+    return res.json({
+      ...base,
+      rate: "Set REFERRAL_CONTRACT_ADDRESS and RPC (REFERRAL_RPC_URL or RPC_URL) to load referral totals from chain.",
+      referralTotalUsdt: null,
+      referralTotalAmountWei: null,
+      levelTiers: null,
+    });
+  }
+
+  const abi = [
+    "function referralTotalAmount() view returns (uint256)",
+    "function levelAmounts(uint256) view returns (uint256)",
+    "function minDirectReferralsRequired(uint256) view returns (uint256)",
+  ];
+
+  try {
+    const provider = createPinnedJsonRpcProvider(rpcUrl);
+    const c = new ethers.Contract(contractAddress, abi, provider);
+    const tierReads = [];
+    for (let i = 0; i < 10; i++) {
+      tierReads.push(c.levelAmounts(i), c.minDirectReferralsRequired(i));
+    }
+    const [totalAmt, ...flat] = await Promise.all([c.referralTotalAmount(), ...tierReads]);
+    const levelTiers = [];
+    for (let i = 0; i < 10; i++) {
+      const gross = flat[i * 2];
+      const minD = flat[i * 2 + 1];
+      const minBig = BigInt(minD.toString());
+      const grossBig = BigInt(gross.toString());
+      const div = i === 0 ? 1n : minBig > 0n ? minBig : 1n;
+      const perLevelWei = i === 0 ? grossBig : grossBig / div;
+      let perTradeUsdt = "0";
+      try {
+        perTradeUsdt = ethers.formatUnits(perLevelWei, USDT_DECIMALS).replace(/\.?0+$/, "") || "0";
+      } catch {
+        perTradeUsdt = "0";
+      }
+      levelTiers.push({
+        level: i + 1,
+        minDirectReferrals: Number(div),
+        levelAmountWei: grossBig.toString(),
+        perTradeUsdt,
+      });
+    }
+    let referralTotalUsdt = "0";
+    try {
+      referralTotalUsdt =
+        ethers.formatUnits(totalAmt, USDT_DECIMALS).replace(/\.?0+$/, "") || "0";
+    } catch {
+      referralTotalUsdt = "0";
+    }
+    const rate = `Up to ${referralTotalUsdt} USDT referral budget per trade (referralTotalAmount on-chain); see levelTiers for per-level amounts.`;
+    return res.json({
+      ...base,
+      rate,
+      referralTotalAmountWei: totalAmt.toString(),
+      referralTotalUsdt,
+      levelTiers,
+    });
+  } catch (e) {
+    console.warn("[referral/info] chain read failed:", e?.message || e);
+    return res.json({
+      ...base,
+      rate: "On-chain referral config unavailable (RPC or contract read failed).",
+      referralTotalUsdt: null,
+      referralTotalAmountWei: null,
+      levelTiers: null,
+      error: e?.message || String(e),
+    });
+  }
 });
 
 router.get("/stats", async (req, res) => {

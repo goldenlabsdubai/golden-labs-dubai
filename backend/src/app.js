@@ -2,14 +2,11 @@
  * Express app – shared by local server (index.js) and Vercel serverless (api/[[...path]].js)
  */
 import dotenv from "dotenv";
+// EC2/PM2 often exports stale contract addresses; `.env` in app cwd must win.
+dotenv.config({ override: true });
 import path from "path";
-import { fileURLToPath } from "url";
 import express from "express";
 import cors from "cors";
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-// Load `backend/.env` by path — PM2 often sets `cwd` to `$HOME`, so default dotenv would miss this file.
-dotenv.config({ path: path.resolve(__dirname, "..", ".env"), override: true });
 
 // Backend public URL (for avatar/upload links). On Vercel use VERCEL_URL; else PLATFORM_URL or BACKEND_URL.
 const isVercel = Boolean(process.env.VERCEL);
@@ -78,7 +75,6 @@ import topSellersRoutes from "./routes/topSellers.js";
 import adminRoutes from "./routes/admin.js";
 import botControlRoutes from "./routes/botControl.js";
 import cronRoutes from "./routes/cron.js";
-import supportChatRoutes from "./routes/supportChat.js";
 import { authMiddleware, optionalAuthMiddleware } from "./middleware/auth.js";
 import { getPool, requirePostgres } from "./config/postgres.js";
 import { getDeployedContractsSnapshot } from "./config/contractsEnv.js";
@@ -116,20 +112,6 @@ app.get("/api/public/platform-maintenance", async (_, res) => {
 });
 /** Public: which contract addresses this API uses (compare to Vercel VITE_* so wallet only hits one deployment). */
 app.get("/api/health/contracts", (_, res) => res.json(getDeployedContractsSnapshot()));
-/** Public: support chat — GET help; POST returns Groq-grounded replies when `SUPPORT_AI_API_KEY` is set. */
-app.get("/api/public/support/chat", (_req, res) => {
-  res.setHeader("Cache-Control", "no-store");
-  res.json({
-    ok: true,
-    service: "support-chat",
-    detail: "Browser GET only shows this help. The app sends POST with JSON to receive a reply.",
-    method: "POST",
-    path: "/api/public/support/chat",
-    headers: { "Content-Type": "application/json" },
-    body: { message: "string (your question, required)" },
-  });
-});
-app.use("/api/public/support", supportChatRoutes);
 // Root (and /api for Vercel rewrite of "/" -> "/api") – so visiting base URL returns something
 app.get("/", (_, res) => res.json({ api: "goldenlabs", health: "/api/health" }));
 app.get("/api", (_, res) => res.json({ api: "goldenlabs", health: "/api/health" }));
