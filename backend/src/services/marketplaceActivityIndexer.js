@@ -200,7 +200,9 @@ async function runMarketplaceActivityIndexerPoll(provider, contract) {
   let fromBlock = lastBlock + 1;
   const toBlock = latest;
   let processedUpTo = lastBlock;
-  let marketplaceListingsMutated = false;
+  const listingsCacheApi = await import("./marketplaceListingsCache.js");
+  const { removeListingFromCache, upsertListingFromChain } = listingsCacheApi;
+
   while (fromBlock <= toBlock) {
     const chunkTo = Math.min(fromBlock + MAX_BLOCKS_PER_QUERY - 1, toBlock);
     const [soldEvents, listedEvents, cancelledEvents] = await Promise.all([
@@ -208,9 +210,6 @@ async function runMarketplaceActivityIndexerPoll(provider, contract) {
       queryListedWithRetry(fromBlock, chunkTo),
       queryCancelledWithRetry(fromBlock, chunkTo),
     ]);
-    if (soldEvents.length > 0 || listedEvents.length > 0 || cancelledEvents.length > 0) {
-      marketplaceListingsMutated = true;
-    }
     for (const evt of soldEvents) {
       const tokenId = evt.args?.tokenId;
       const seller = evt.args?.seller ? String(evt.args.seller).toLowerCase() : "";
@@ -234,6 +233,12 @@ async function runMarketplaceActivityIndexerPoll(provider, contract) {
         blockNumber: Number(evt.blockNumber ?? 0),
       });
       await markProcessed(id, payload);
+      removeListingFromCache(String(tokenId));
+    }
+    for (const evt of cancelledEvents) {
+      const tokenId = evt.args?.tokenId != null ? String(evt.args.tokenId) : null;
+      if (!tokenId) continue;
+      removeListingFromCache(tokenId);
     }
     if (listedEvents.length > 0) {
       const uniqueBlocks = [...new Set(listedEvents.map((e) => e.blockNumber))];
@@ -267,6 +272,9 @@ async function runMarketplaceActivityIndexerPoll(provider, contract) {
           price: priceWei,
           blockNumber,
         });
+        await upsertListingFromChain(tokenId, { listedAtMs: blockTs[blockNumber] ?? 0 }).catch((e) =>
+          console.warn("listings cache upsert:", e?.message || e)
+        );
       }
     }
     processedUpTo = chunkTo;
@@ -277,10 +285,6 @@ async function runMarketplaceActivityIndexerPoll(provider, contract) {
     await setListingBlocksMap(listingBlocks);
   }
   await setLastProcessedBlock(processedUpTo);
-  if (marketplaceListingsMutated) {
-    const { markMarketplaceListingsStale } = await import("./marketplaceListingsCache.js");
-    markMarketplaceListingsStale();
-  }
 }
 
 /** Run marketplace activity indexer once – for Vercel Cron or external cron. */

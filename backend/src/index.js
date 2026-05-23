@@ -1,6 +1,7 @@
 import app from "./app.js";
 import { startReferralIndexer } from "./services/referralIndexer.js";
 import { startMarketplaceActivityIndexer } from "./services/marketplaceActivityIndexer.js";
+import { warmMarketplaceListingsCache } from "./services/marketplaceListingsCache.js";
 import { startTelegramActivityFromDbNotifier } from "./services/telegramActivityDbNotifier.js";
 import { startPlatformMaintenanceAutoEndScheduler } from "./services/platformMaintenanceAutoEnd.js";
 import { logTelegramAlertsStatus } from "./services/telegramNotify.js";
@@ -20,6 +21,9 @@ if (!process.env.VERCEL) {
 
   startReferralIndexer();
   startMarketplaceActivityIndexer();
+  warmMarketplaceListingsCache().catch((e) =>
+    console.warn("[marketplace] listings warm-up failed (will retry on first /listings):", e?.message || e)
+  );
   startTelegramActivityFromDbNotifier();
   startPlatformMaintenanceAutoEndScheduler();
 }

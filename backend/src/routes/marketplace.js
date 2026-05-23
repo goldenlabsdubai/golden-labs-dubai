@@ -3,7 +3,7 @@ import { ethers } from "ethers";
 import * as User from "../services/user.js";
 import {
   getMarketplaceListingsResponse,
-  markMarketplaceListingsStale,
+  removeListingFromCache,
 } from "../services/marketplaceListingsCache.js";
 import { getSharedMainRpcProvider } from "../config/ethersRpc.js";
 import {
@@ -183,14 +183,20 @@ async function discoverTokenIdsFromIncomingTransfers(provider, nftAddress, walle
 }
 
 // Listings: cached on-chain scan (TTL + stale on marketplace events). See marketplaceListingsCache.js.
-router.get("/listings", async (_, res) => {
+router.get("/listings", async (req, res) => {
   try {
-    const result = await getMarketplaceListingsResponse();
+    const forceRefresh =
+      req.query.refresh === "1" ||
+      String(req.query.refresh || "").toLowerCase() === "true";
+    const result = await getMarketplaceListingsResponse({ forceRefresh });
     const body = { listings: result.listings };
     if (result.fromCache) {
       body.fromCache = true;
       body.cacheAgeMs = result.cacheAgeMs ?? null;
     }
+    if (result.rpcScanFailed) body.rpcScanFailed = true;
+    if (result.configMissing) body.configMissing = true;
+    if (result.warming) body.warming = true;
     res.json(body);
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -565,7 +571,7 @@ router.post("/record-purchase", async (req, res) => {
       eventId: eventId || null,
       blockNumber: blockNumber ?? null,
     });
-    markMarketplaceListingsStale();
+    removeListingFromCache(String(tokenId));
     res.json({ ok: true });
   } catch (e) {
     console.error("record-purchase error:", e?.message || e);
