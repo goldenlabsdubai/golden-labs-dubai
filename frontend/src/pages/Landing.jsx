@@ -1,6 +1,7 @@
 import { useState, useEffect, useLayoutEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { assignAppPath } from "../utils/appNavigation";
+import { useAppNavigate } from "../hooks/useAppNavigate";
 import { useDisconnect } from "wagmi";
 import { useAuth } from "../hooks/useAuth";
 import { useWalletConnect } from "../hooks/useWalletConnect";
@@ -8,6 +9,7 @@ import { useSignInWithWallet } from "../hooks/useSignInWithWallet";
 import { API, getAvatarUrl } from "../config.js";
 import { getTransactionErrorMessage } from "../utils/transactionError";
 import { NavbarBrandLink } from "../components/NavbarBrandLink";
+import { AppRouteLink } from "../components/AppRouteLink";
 import { formatUnits } from "viem";
 import { USDT_DECIMALS } from "../constants/usdtDecimals";
 
@@ -91,6 +93,7 @@ function AboutGoldenLabsSection() {
 }
 
 export default function Landing() {
+  const appNavigate = useAppNavigate();
   const { connect, token, user, setSession, refreshUser, logout } = useAuth();
   const { openModal, isConnected, address } = useWalletConnect();
   const { signIn, loading: signInLoading } = useSignInWithWallet();
@@ -133,7 +136,7 @@ export default function Landing() {
       .then((data) => {
         if (cancelled) return;
         const exists = data.exists === true;
-        if (!exists) assignAppPath("/profile/setup");
+        if (!exists) appNavigate("/profile/setup");
         else setWalletCheckExists(true);
       })
       .catch(() => {
@@ -155,6 +158,15 @@ export default function Landing() {
   useEffect(() => {
     if (token) refreshUser();
   }, [token, refreshUser]);
+
+  /** After login, return to the page the user tried to refresh (e.g. /subscription). */
+  useEffect(() => {
+    if (!token || !user) return;
+    const params = new URLSearchParams(window.location.search);
+    const next = params.get("next");
+    if (!next || !next.startsWith("/") || next === "/") return;
+    appNavigate(next, { replace: true });
+  }, [token, user, appNavigate]);
 
   // Capture ?ref= (referral code) from URL and store for sign-in
   useEffect(() => {
@@ -251,7 +263,7 @@ export default function Landing() {
     try {
       const redirect = await connect();
       const seg = redirect && String(redirect).trim() ? String(redirect).replace(/^\/+/, "") : "profile";
-      assignAppPath(`/${seg}`);
+      appNavigate(`/${seg}`);
     } catch (e) {
       setError(getTransactionErrorMessage(e, "Connection failed"));
     } finally {
@@ -271,7 +283,7 @@ export default function Landing() {
       }
       setSession(data.token, data.user);
       const seg = data.redirect && String(data.redirect).trim() ? String(data.redirect).replace(/^\/+/, "") : "profile";
-      assignAppPath(`/${seg}`);
+      appNavigate(`/${seg}`);
     } catch (e) {
       setError(getTransactionErrorMessage(e, "Sign in failed"));
       setPopupContinueClicked(false);
@@ -292,23 +304,23 @@ export default function Landing() {
     if (!user.username) {
       ctaLabel = "Complete profile";
       ctaLoading = false;
-      ctaOnClick = () => assignAppPath("/profile");
+      ctaOnClick = () => appNavigate("/profile");
     } else if (user.state === "SUSPENDED") {
       ctaLabel = "Resubscribe";
       ctaLoading = false;
-      ctaOnClick = () => assignAppPath("/subscription");
+      ctaOnClick = () => appNavigate("/subscription");
     } else if (!["SUBSCRIBED", "MINTED", "ACTIVE_TRADER"].includes(user.state ?? "")) {
       ctaLabel = "Proceed to subscription";
       ctaLoading = false;
-      ctaOnClick = () => assignAppPath("/subscription");
+      ctaOnClick = () => appNavigate("/subscription");
     } else if (user.state === "SUBSCRIBED") {
       ctaLabel = "Mint asset";
       ctaLoading = false;
-      ctaOnClick = () => assignAppPath("/mint");
+      ctaOnClick = () => appNavigate("/mint");
     } else {
       ctaLabel = "Go to Marketplace";
       ctaLoading = false;
-      ctaOnClick = () => assignAppPath("/marketplace");
+      ctaOnClick = () => appNavigate("/marketplace");
     }
   } else if (isConnected && address && !token) {
     ctaLabel = "Wallet connected";
@@ -451,7 +463,7 @@ export default function Landing() {
                       <div className="landing-v2__nft-card-image" style={{ backgroundImage: 'url("/gldass.png")', backgroundSize: "cover", backgroundPosition: "center" }} />
                       <h3 className="landing-v2__nft-card-title">GLFA</h3>
                       <p className="landing-v2__nft-card-price">{l.priceFormatted || `${Number(formatUnits(BigInt(String(l.price || 0)), USDT_DECIMALS)).toFixed(0)} USDT`}</p>
-                      <button type="button" className="landing-v2__btn landing-v2__btn--primary landing-v2__btn--sm" onClick={() => assignAppPath("/marketplace")}>Buy Now</button>
+                      <AppRouteLink to="/marketplace" className="landing-v2__btn landing-v2__btn--primary landing-v2__btn--sm">Buy Now</AppRouteLink>
                     </div>
                   ));
                 })()}
@@ -583,7 +595,7 @@ export default function Landing() {
                             <div className="landing-v2__nft-card-image" style={{ backgroundImage: 'url("/gldass.png")', backgroundSize: "cover", backgroundPosition: "center" }} />
                             <h3 className="landing-v2__nft-card-title">GLFA</h3>
                             <p className="landing-v2__nft-card-price">{l.priceFormatted || `${Number(formatUnits(BigInt(String(l.price || 0)), USDT_DECIMALS)).toFixed(0)} USDT`}</p>
-                            <button type="button" className="landing-v2__btn landing-v2__btn--primary landing-v2__btn--sm" onClick={() => assignAppPath("/marketplace")}>Buy Now</button>
+                            <AppRouteLink to="/marketplace" className="landing-v2__btn landing-v2__btn--primary landing-v2__btn--sm">Buy Now</AppRouteLink>
                           </div>
                         ));
                       })()}

@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { Routes, Route, Navigate, useLocation, useNavigate } from "react-router-dom";
+import { Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { useAccount, useSwitchChain, useReconnect, useConnect, useConnectors, useConfig } from "wagmi";
 import { getConnection } from "@wagmi/core";
 import "./App.css";
@@ -10,7 +10,7 @@ import SupportChat from "./components/SupportChat";
 import MobileBottomNav from "./components/MobileBottomNav";
 import PlatformMaintenanceOverlay from "./components/PlatformMaintenanceOverlay";
 import { SeoHead } from "./components/SeoHead";
-import { registerSpaNavigate, restoreWalletTxReturnPathIfNeeded } from "./utils/appNavigation";
+import { restoreWalletTxReturnPathIfNeeded } from "./utils/appNavigation";
 import { BSC_CHAIN_ID } from "./constants/chain";
 import Landing from "./pages/Landing";
 import Profile from "./pages/Profile";
@@ -288,7 +288,12 @@ function ProtectedRoute({ children, require }) {
   if (loading) return <div className="app-loading">Loading...</div>;
   if (!effectiveToken) {
     if (lsToken) return <div className="app-loading">Loading...</div>;
-    return <Navigate to="/" replace />;
+    const returnPath = `${location.pathname || ""}${location.search || ""}`;
+    const next =
+      returnPath && returnPath !== "/"
+        ? `/?next=${encodeURIComponent(returnPath)}`
+        : "/";
+    return <Navigate to={next} replace />;
   }
 
   // Raw suspension always wins — never use optimistic overlay.
@@ -350,7 +355,6 @@ export default function App() {
 
   return (
     <div className={`app${showMobileBottomNav ? " app--mobile-nav" : ""}`}>
-      <SpaNavigateRegistration />
       <WalletTxReturnRestore />
       <SeoHead />
       <ReconnectOnLoad />

@@ -4,6 +4,7 @@ import { BrowserRouter } from "react-router-dom";
 import { Buffer } from "buffer";
 import { AppKitProvider } from "./config/appkit";
 import { AuthProvider } from "./hooks/useAuth";
+import { AppNavigateProvider } from "./components/AppNavigateProvider";
 import App from "./App";
 import "./index.css";
 
@@ -57,9 +58,11 @@ ReactDOM.createRoot(document.getElementById("root")).render(
     <AppKitProvider>
       <ErrorBoundary>
         <BrowserRouter>
-          <AuthProvider>
-            <App />
-          </AuthProvider>
+          <AppNavigateProvider>
+            <AuthProvider>
+              <App />
+            </AuthProvider>
+          </AppNavigateProvider>
         </BrowserRouter>
       </ErrorBoundary>
     </AppKitProvider>
