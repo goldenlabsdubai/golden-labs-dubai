@@ -2,9 +2,13 @@ import { useState, useEffect, useCallback } from "react";
 import { useAppKit } from "@reown/appkit/react";
 import { useAccount, useSignMessage } from "wagmi";
 import { SiweMessage } from "siwe";
+import AdminLogin from "./components/AdminLogin";
+import AdminShell from "./components/AdminShell";
+import { GOLDEN_LABS_LOGO } from "./constants/brand";
 import BotsPage from "./pages/BotsPage";
 import ContractsPage from "./pages/ContractsPage";
 import MaintenancePage from "./pages/MaintenancePage";
+import UsersPage from "./pages/UsersPage";
 
 function normalizeApiBase(url) {
   return String(url || "")
@@ -259,34 +263,29 @@ export default function App() {
 
   if (!token) {
     return (
-      <div className="login">
-        <div className="login__card">
-          <h1 className="login__title">Golden Labs Admin</h1>
-          <p className="login__hint">Connect your admin wallet to manage bots and settings.</p>
-          <button
-            type="button"
-            className="login__btn"
-            onClick={openWalletModal}
-            disabled={signingIn}
-          >
-            {signingIn ? "Signing in..." : isConnected ? "Sign in" : "Connect wallet"}
-          </button>
-          {error && <p className="login__error">{error}</p>}
-        </div>
-      </div>
+      <AdminLogin
+        error={error}
+        signingIn={signingIn}
+        isConnected={isConnected}
+        onConnect={openWalletModal}
+      />
     );
   }
 
   if (!API) {
     return (
       <div className="login">
+        <div className="login__bg" aria-hidden="true" />
         <div className="login__card">
+          <div className="login__brand login__brand--center">
+            <img className="login__brand-logo" src={GOLDEN_LABS_LOGO} alt="Golden Labs" width={56} height={56} />
+          </div>
           <h1 className="login__title">Missing API URL</h1>
           <p className="login__hint">
             Set <code>VITE_API_URL</code> when building the admin app (for example <code>https://your-api.example.com/api</code>),
             then rebuild. Relative requests would hit the admin host, not the backend.
           </p>
-          <button type="button" className="login__btn" onClick={logout}>
+          <button type="button" className="login__btn btn--gold" onClick={logout}>
             Disconnect
           </button>
         </div>
@@ -294,42 +293,16 @@ export default function App() {
     );
   }
 
+  const wideLayout = activeTab.startsWith("users");
+
   return (
-    <div className="admin">
-      <header className="admin__header">
-        <h1 className="admin__title">Golden Labs Admin</h1>
-        <div style={{ display: "flex", alignItems: "center", gap: "1rem" }}>
-          <span className="admin__wallet" title={wallet}>
-            {wallet ? `${wallet.slice(0, 6)}...${wallet.slice(-4)}` : ""}
-          </span>
-          <button type="button" className="admin__disconnect" onClick={logout}>Disconnect</button>
-        </div>
-      </header>
-
-      <nav className="admin__nav">
-        <button
-          type="button"
-          className={`nav__link ${activeTab === "bots" ? "nav__link--active" : ""}`}
-          onClick={() => setActiveTab("bots")}
-        >
-          Bots Page
-        </button>
-        <button
-          type="button"
-          className={`nav__link ${activeTab === "maintenance" ? "nav__link--active" : ""}`}
-          onClick={() => setActiveTab("maintenance")}
-        >
-          Maintenance
-        </button>
-        <button
-          type="button"
-          className={`nav__link ${activeTab === "contracts" ? "nav__link--active" : ""}`}
-          onClick={() => setActiveTab("contracts")}
-        >
-          Contracts Setup Page
-        </button>
-      </nav>
-
+    <AdminShell
+      activeTab={activeTab}
+      onNavigate={setActiveTab}
+      wallet={wallet}
+      onLogout={logout}
+      wide={wideLayout}
+    >
       {activeTab === "bots" ? (
         <BotsPage
           bots={bots}
@@ -345,11 +318,13 @@ export default function App() {
           onStop={handleStop}
           onSaveSettings={handleSaveBotSettings}
         />
+      ) : activeTab === "users" || activeTab === "users-active" || activeTab === "users-suspended" ? (
+        <UsersPage token={token} tabId={activeTab} />
       ) : activeTab === "maintenance" ? (
         <MaintenancePage token={token} />
       ) : (
         <ContractsPage connectedWallet={address} />
       )}
-    </div>
+    </AdminShell>
   );
 }
