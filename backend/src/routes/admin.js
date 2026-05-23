@@ -10,6 +10,7 @@ import {
 } from "../services/platformMaintenance.js";
 import { authMiddleware } from "../middleware/auth.js";
 import * as BotService from "../services/botService.js";
+import * as UserPg from "../services/userPostgres.js";
 import { getMarketplaceAndReservePoolAddress } from "../config/contractsEnv.js";
 import { notifyActivity } from "../services/telegramNotify.js";
 
@@ -77,6 +78,18 @@ async function getStoredContracts() {
   } catch (_) {}
   return {};
 }
+
+/** GET /api/admin/users/platform?filter=all|active|suspended – platform users for admin panel. */
+router.get("/users/platform", async (req, res) => {
+  try {
+    const raw = String(req.query.filter || "all").toLowerCase();
+    const filter = raw === "active" || raw === "suspended" ? raw : "all";
+    const report = await UserPg.getAdminPlatformUsersReport(filter);
+    res.json(report);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
 
 /** GET /api/admin/bots – list bots with config, running state (Postgres), and on-chain stats. */
 router.get("/bots", async (req, res) => {

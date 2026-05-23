@@ -1,7 +1,9 @@
 /**
  * User data in PostgreSQL (AWS RDS) — requires PGHOST, PGDATABASE, PGUSER in .env.
  */
+import { ethers } from "ethers";
 import { query, getPool, getClient } from "../config/postgres.js";
+import { USDT_DECIMALS } from "../constants/usdtDecimals.js";
 import { resolveTradingIncomePerSellWeiFromChain } from "../utils/tradingIncomeWei.js";
 import { enrichActivitiesWithReceiptStatus, getTxReceiptStatusMap } from "./txReceiptStatus.js";
 
@@ -809,4 +811,169 @@ export async function getOwnedTokenIds(wallet) {
   const { rows } = await query("SELECT owned_token_ids FROM users WHERE id = $1", [id]);
   const arr = rows[0]?.owned_token_ids ?? [];
   return (Array.isArray(arr) ? arr : []).map((x) => String(x));
+}
+
+function weiToUsdtString(wei) {
+  try {
+    return ethers.formatUnits(String(wei ?? "0").split(".")[0] || "0", USDT_DECIMALS);
+  } catch {
+    return "0";
+  }
+}
+
+/** Batch trade profit by wallet (same rules as leaderboard / dashboard). */
+async function batchTradeProfitByWallet() {
+  const incomePerSellWei = await resolveTradingIncomePerSellWeiFromChain();
+  const maxRowsPerWallet = 10000;
+  const { rows: activityRows } = await query(`
+    SELECT LOWER(TRIM(a.wallet)) AS wlt, a.type, a.tx_hash, a.token_id
+    FROM user_activities a
+    INNER JOIN users u ON LOWER(TRIM(a.wallet)) = LOWER(TRIM(u.wallet))
+    WHERE a.type IN ('buy', 'sell')
+      AND u.wallet IS NOT NULL AND BTRIM(u.wallet) <> ''
+    ORDER BY LOWER(TRIM(a.wallet)), a.created_at DESC
+    LIMIT 500000
+  `);
+  const byWallet = new Map();
+  for (const row of activityRows) {
+    const w = String(row.wlt || "").toLowerCase();
+    if (!w.startsWith("0x")) continue;
+    if (!byWallet.has(w)) byWallet.set(w, []);
+    const arr = byWallet.get(w);
+    if (arr.length < maxRowsPerWallet) arr.push(row);
+  }
+  const allHashes = new Set();
+  for (const arr of byWallet.values()) {
+    for (const r of dedupeTradeActivityRows(arr)) {
+      const th = String(r.tx_hash || "").trim().toLowerCase();
+      if (th) allHashes.add(th);
+    }
+  }
+  const statusMap = await getTxReceiptStatusMap([...allHashes]);
+  const tradeProfitByWallet = new Map();
+  for (const [w, arr] of byWallet) {
+    const deduped = dedupeTradeActivityRows(arr);
+    const stats = tradeStatsFromDedupedRows(deduped, statusMap, incomePerSellWei);
+    tradeProfitByWallet.set(w, stats);
+  }
+  return tradeProfitByWallet;
+}
+
+function buildReferralLevelMaps(u) {
+  const referralCounts = {};
+  const referralEarningsWei = {};
+  let maxLevel = 0;
+  for (let lvl = 1; lvl <= 10; lvl++) {
+    const count = Number(u[`referralCountL${lvl}`] ?? 0) || 0;
+    const wei = String(u[`referralEarningsL${lvl}`] ?? "0");
+    referralCounts[`l${lvl}`] = count;
+    referralEarningsWei[`l${lvl}`] = wei;
+    let earnBi = 0n;
+    try {
+      earnBi = BigInt(wei.split(".")[0] || "0");
+    } catch {
+      earnBi = 0n;
+    }
+    if (count > 0 || earnBi > 0n) maxLevel = Math.max(maxLevel, lvl);
+  }
+  return { referralCounts, referralEarningsWei, maxLevel };
+}
+
+function isActiveTraderState(state) {
+  const s = String(state || "").toUpperCase();
+  return s === "MINTED" || s === "ACTIVE_TRADER";
+}
+
+/**
+ * Admin platform users report — deduped by wallet, trading income from activity, dynamic referral levels.
+ * @param {"all"|"active"|"suspended"} filter
+ */
+export async function getAdminPlatformUsersReport(filter = "all") {
+  const { rows } = await query(
+    `SELECT DISTINCT ON (LOWER(TRIM(wallet))) *
+     FROM users
+     WHERE wallet IS NOT NULL AND BTRIM(wallet) <> ''
+     ORDER BY LOWER(TRIM(wallet)),
+       (CASE WHEN firebase_uid IS NOT NULL AND BTRIM(firebase_uid) <> '' THEN 0 ELSE 1 END),
+       created_at ASC NULLS LAST`
+  );
+  const canonical = rows.map((r) => rowToUser(r));
+  const tradeProfitByWallet = await batchTradeProfitByWallet();
+
+  let platformMaxReferralLevel = 0;
+  const enriched = canonical.map((u) => {
+    const wallet = (u.wallet || "").toLowerCase();
+    const trade = tradeProfitByWallet.get(wallet) || {
+      buyTrades: 0,
+      sellTrades: 0,
+      totalTrades: 0,
+      totalProfit: "0",
+    };
+    const { referralCounts, referralEarningsWei, maxLevel } = buildReferralLevelMaps(u);
+    platformMaxReferralLevel = Math.max(platformMaxReferralLevel, maxLevel);
+
+    let refTotal = 0n;
+    const referralEarningsUsdt = {};
+    for (let lvl = 1; lvl <= 10; lvl++) {
+      const key = `l${lvl}`;
+      const wei = referralEarningsWei[key] || "0";
+      try {
+        refTotal += BigInt(wei.split(".")[0] || "0");
+      } catch {
+        /* ignore */
+      }
+      referralEarningsUsdt[key] = weiToUsdtString(wei);
+    }
+
+    const owned = Array.isArray(u.ownedTokenIds) ? u.ownedTokenIds.map(String) : [];
+    return {
+      id: u.id,
+      username: u.username || null,
+      wallet: u.wallet,
+      state: u.state || "CONNECTED",
+      referrer: u.referrer || null,
+      nftCount: owned.length,
+      nftHoldings: owned,
+      nftHoldingsLabel: owned.length ? owned.join(", ") : "—",
+      totalTrades: trade.totalTrades ?? u.totalTrades ?? 0,
+      buyTrades: trade.buyTrades ?? 0,
+      sellTrades: trade.sellTrades ?? 0,
+      tradingIncomeWei: trade.totalProfit || "0",
+      tradingIncomeUsdt: weiToUsdtString(trade.totalProfit || "0"),
+      totalReferrals: u.totalReferrals ?? 0,
+      referralCounts,
+      referralEarningsWei,
+      referralEarningsUsdt,
+      referralEarningsTotalWei: refTotal.toString(),
+      referralEarningsTotalUsdt: weiToUsdtString(refTotal.toString()),
+      createdAt: u.createdAt || null,
+      lastActivity: u.lastActivity || null,
+    };
+  });
+
+  if (platformMaxReferralLevel < 1) platformMaxReferralLevel = 1;
+
+  const summary = {
+    totalUsers: enriched.length,
+    activeTraders: enriched.filter((u) => isActiveTraderState(u.state)).length,
+    suspendedTraders: enriched.filter((u) => String(u.state || "").toUpperCase() === "SUSPENDED").length,
+  };
+
+  let users = enriched;
+  const f = String(filter || "all").toLowerCase();
+  if (f === "active") users = enriched.filter((u) => isActiveTraderState(u.state));
+  else if (f === "suspended") users = enriched.filter((u) => String(u.state || "").toUpperCase() === "SUSPENDED");
+
+  users.sort((a, b) => {
+    const ta = a.createdAt ? Date.parse(a.createdAt) : 0;
+    const tb = b.createdAt ? Date.parse(b.createdAt) : 0;
+    return tb - ta;
+  });
+
+  return {
+    summary,
+    referralLevels: platformMaxReferralLevel,
+    users,
+    serverTime: Date.now(),
+  };
 }
