@@ -10,7 +10,7 @@ import SupportChat from "./components/SupportChat";
 import MobileBottomNav from "./components/MobileBottomNav";
 import PlatformMaintenanceOverlay from "./components/PlatformMaintenanceOverlay";
 import { SeoHead } from "./components/SeoHead";
-import { registerSpaNavigate } from "./utils/appNavigation";
+import { registerSpaNavigate, restoreWalletTxReturnPathIfNeeded } from "./utils/appNavigation";
 import { BSC_CHAIN_ID } from "./constants/chain";
 import Landing from "./pages/Landing";
 import Profile from "./pages/Profile";
@@ -218,6 +218,27 @@ function SpaNavigateRegistration() {
   return null;
 }
 
+/** MetaMask / mobile wallets often reload to `/` after approve — send user back to subscription, marketplace, etc. */
+function WalletTxReturnRestore() {
+  const { pathname } = useLocation();
+  const { token } = useAuth();
+  const { lsToken } = readStoredAuth();
+  const hasSession = Boolean(token || lsToken);
+
+  useEffect(() => {
+    if (!hasSession) return;
+    restoreWalletTxReturnPathIfNeeded(pathname);
+    const onVis = () => {
+      if (document.visibilityState !== "visible") return;
+      restoreWalletTxReturnPathIfNeeded(pathname);
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => document.removeEventListener("visibilitychange", onVis);
+  }, [hasSession, pathname]);
+
+  return null;
+}
+
 /**
  * Onboarding funnel (matches SubscriptionContract + NFT gates):
  * 1) Wallet connect → profile (username + SIWE) → state PROFILE_SET
@@ -265,7 +286,10 @@ function ProtectedRoute({ children, require }) {
   }, [token, lsToken, setSession]);
 
   if (loading) return <div className="app-loading">Loading...</div>;
-  if (!effectiveToken) return <Navigate to="/" replace />;
+  if (!effectiveToken) {
+    if (lsToken) return <div className="app-loading">Loading...</div>;
+    return <Navigate to="/" replace />;
+  }
 
   // Raw suspension always wins — never use optimistic overlay.
   if (effectiveUser?.state === "SUSPENDED") {
@@ -327,6 +351,7 @@ export default function App() {
   return (
     <div className={`app${showMobileBottomNav ? " app--mobile-nav" : ""}`}>
       <SpaNavigateRegistration />
+      <WalletTxReturnRestore />
       <SeoHead />
       <ReconnectOnLoad />
       <ForceBscMainnet />

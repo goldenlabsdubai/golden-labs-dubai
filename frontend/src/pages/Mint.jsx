@@ -1,6 +1,12 @@
 import { useState, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
-import { assignAppPath } from "../utils/appNavigation";
+import {
+  assignAppPath,
+  rememberWalletTxReturnPath,
+  clearWalletTxReturnPath,
+  markWalletTxInFlight,
+  clearWalletTxInFlight,
+} from "../utils/appNavigation";
 import { useBalance, useDisconnect, useReadContract, useWriteContract, usePublicClient } from "wagmi";
 import { formatEther, formatUnits } from "viem";
 import { useAuth } from "../hooks/useAuth";
@@ -199,6 +205,8 @@ export default function Mint() {
     }
     setLoading(true);
     setError("");
+    rememberWalletTxReturnPath("/mint");
+    markWalletTxInFlight();
     try {
       const mintPriceWei =
         mintPriceOnChain != null
@@ -249,6 +257,8 @@ export default function Mint() {
       if (!res.ok) throw new Error(data.error || "Confirm failed");
       await refreshUser();
       refetchUsdtBalance?.();
+      clearWalletTxReturnPath();
+      clearWalletTxInFlight();
       assignAppPath("/dashboard");
     } catch (e) {
       applyWalletTxError(e, {
@@ -258,6 +268,7 @@ export default function Mint() {
         fallbackMessage: "Mint failed",
       });
     } finally {
+      clearWalletTxInFlight();
       setLoading(false);
       setMintStep(null);
     }

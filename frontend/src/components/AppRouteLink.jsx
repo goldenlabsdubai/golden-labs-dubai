@@ -1,8 +1,7 @@
 import { Link, useLocation } from "react-router-dom";
 
 /**
- * Same as NavLink styling hooks but forces a real document navigation so the browser URL
- * matches the page (critical for MetaMask in-app browser + bfcache).
+ * SPA navigation — keeps wagmi / JWT session warm (no full document reload).
  */
 export function AppRouteLink({ to, end, className, children, ...rest }) {
   const location = useLocation();
@@ -17,7 +16,7 @@ export function AppRouteLink({ to, end, className, children, ...rest }) {
   const cls = typeof className === "function" ? className({ isActive }) : className;
 
   return (
-    <Link to={to} reloadDocument className={cls} {...rest}>
+    <Link to={to} className={cls} {...rest}>
       {children}
     </Link>
   );

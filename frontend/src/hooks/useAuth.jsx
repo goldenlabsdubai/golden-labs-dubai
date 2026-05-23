@@ -5,6 +5,7 @@ import { ethers } from "ethers";
 import { SiweMessage } from "siwe";
 import { API } from "../config";
 import { recordTradingGateIfEligible, clearTradingRouteGate } from "../utils/tradingRouteGate";
+import { isWalletTxInFlight } from "../utils/appNavigation";
 
 const TOKEN_KEY = "gl_token";
 const USER_KEY = "gl_user";
@@ -113,6 +114,7 @@ export function AuthProvider({ children }) {
         if ((r.status === 401 || r.status === 404) && responseLooksLikeApiJson(r)) {
           if (gen !== refreshGenRef.current) return;
           if (readToken() !== t2) return;
+          if (isWalletTxInFlight()) return;
           clearSession();
         }
       }

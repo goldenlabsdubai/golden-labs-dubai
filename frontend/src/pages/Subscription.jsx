@@ -1,6 +1,12 @@
 import { useState, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
-import { assignAppPath } from "../utils/appNavigation";
+import {
+  assignAppPath,
+  rememberWalletTxReturnPath,
+  clearWalletTxReturnPath,
+  markWalletTxInFlight,
+  clearWalletTxInFlight,
+} from "../utils/appNavigation";
 import { useBalance, useDisconnect, useReadContract, useWriteContract, usePublicClient } from "wagmi";
 import { formatEther, formatUnits } from "viem";
 import { useAuth } from "../hooks/useAuth";
@@ -160,6 +166,8 @@ export default function Subscription() {
     setLoading(true);
     setPayStep("approve");
     setError("");
+    rememberWalletTxReturnPath("/subscription");
+    markWalletTxInFlight();
     try {
       const amount =
         readContractUint256(subscriptionPriceWei) ??
@@ -226,7 +234,13 @@ export default function Subscription() {
       if (!res.ok) throw new Error(data.error || "Confirm failed");
       await refreshUser();
       refetchUsdtBalance?.();
-      assignAppPath("/mint");
+      clearWalletTxReturnPath();
+      clearWalletTxInFlight();
+      if (isResubscribe && user?.hasMinted) {
+        assignAppPath("/marketplace");
+      } else {
+        assignAppPath("/mint");
+      }
     } catch (e) {
       applyWalletTxError(e, {
         setInsufficientBalanceType,
@@ -235,6 +249,7 @@ export default function Subscription() {
         fallbackMessage: "Payment failed",
       });
     } finally {
+      clearWalletTxInFlight();
       setLoading(false);
       setPayStep(null);
     }

@@ -2,7 +2,13 @@ import { useState, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { Link } from "react-router-dom";
 import { AppRouteLink } from "../components/AppRouteLink";
-import { assignAppPath } from "../utils/appNavigation";
+import {
+  assignAppPath,
+  rememberWalletTxReturnPath,
+  clearWalletTxReturnPath,
+  markWalletTxInFlight,
+  clearWalletTxInFlight,
+} from "../utils/appNavigation";
 import { useBalance, useDisconnect, useWriteContract, usePublicClient, useWatchContractEvent, useReadContract } from "wagmi";
 import { formatEther, formatUnits } from "viem";
 import { useAuth } from "../hooks/useAuth";
@@ -296,6 +302,8 @@ export default function Marketplace() {
     }
     setLoadingBuy(tokenId);
     setBuyStep("approve");
+    rememberWalletTxReturnPath("/marketplace");
+    markWalletTxInFlight();
     try {
       const tradeReferrerRoot = await resolveSellerReferrerRoot(publicClient, referralAddressNormalized, seller);
       const hashApprove = await writeContractAsync({
@@ -347,6 +355,8 @@ export default function Marketplace() {
       }
       refetchData();
       setTimeout(() => refetchData(), 1500);
+      clearWalletTxReturnPath();
+      clearWalletTxInFlight();
     } catch (e) {
       applyWalletTxError(e, {
         setInsufficientBalanceType,
@@ -355,6 +365,7 @@ export default function Marketplace() {
         fallbackMessage: "Buy failed",
       });
     } finally {
+      clearWalletTxInFlight();
       setLoadingBuy(null);
       setBuyStep(null);
     }
@@ -368,6 +379,8 @@ export default function Marketplace() {
     setError("");
     setLoadingList(tokenId);
     setListStep("approve");
+    rememberWalletTxReturnPath("/marketplace");
+    markWalletTxInFlight();
     try {
       const hashApprove = await writeContractAsync({
         address: nftAddressNormalized,
@@ -421,6 +434,8 @@ export default function Marketplace() {
       await publicClient.waitForTransactionReceipt({ hash: hashList });
       clearListResume();
       refetchData();
+      clearWalletTxReturnPath();
+      clearWalletTxInFlight();
     } catch (e) {
       applyWalletTxError(e, {
         setInsufficientBalanceType,
@@ -429,6 +444,7 @@ export default function Marketplace() {
         fallbackMessage: "List failed",
       });
     } finally {
+      clearWalletTxInFlight();
       setLoadingList(null);
       setListStep(null);
     }
@@ -436,6 +452,8 @@ export default function Marketplace() {
 
   const handleResumeListing = async () => {
     if (!listResume || !marketplaceAddressNormalized || !publicClient || !writeContractAsync || !address) return;
+    rememberWalletTxReturnPath("/marketplace");
+    markWalletTxInFlight();
     const tokenId = listResume.tokenId;
     const listPriceWei = listResume.listPriceWei;
     setError("");
@@ -462,6 +480,8 @@ export default function Marketplace() {
       await publicClient.waitForTransactionReceipt({ hash: hashList });
       clearListResume();
       refetchData();
+      clearWalletTxReturnPath();
+      clearWalletTxInFlight();
     } catch (e) {
       applyWalletTxError(e, {
         setInsufficientBalanceType,
@@ -470,6 +490,7 @@ export default function Marketplace() {
         fallbackMessage: "List failed",
       });
     } finally {
+      clearWalletTxInFlight();
       setLoadingList(null);
       setListStep(null);
     }
