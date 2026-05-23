@@ -167,7 +167,6 @@ export default function Subscription() {
     setPayStep("approve");
     setError("");
     rememberWalletTxReturnPath("/subscription");
-    markWalletTxInFlight();
     try {
       const amount =
         readContractUint256(subscriptionPriceWei) ??
@@ -183,6 +182,7 @@ export default function Subscription() {
         setPayStep(null);
         return;
       }
+      markWalletTxInFlight();
       // 1) Approve USDT – wallet will ask to approve spending
       const gasApprove = await safeGasLimit(
         publicClient,

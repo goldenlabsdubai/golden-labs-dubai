@@ -21,6 +21,7 @@ import { canAccessTradingNav } from "../utils/tradingAccess";
 import { marketplaceListPriceUsdtLabel } from "../utils/marketplaceListPriceLabel";
 import { USDT_DECIMALS } from "../constants/usdtDecimals";
 import { BSC_CHAIN_ID } from "../constants/chain";
+import { bscWriteParams } from "../utils/wagmiBscWrite";
 import {
   safeGasLimit,
   DEFAULT_APPROVE_GAS,
@@ -270,13 +271,15 @@ export default function Marketplace() {
         },
         DEFAULT_MARKETPLACE_CANCEL_GAS
       );
-      const hash = await writeContractAsync({
-        address: marketplaceAddressNormalized,
-        abi: MARKETPLACE_ABI,
-        functionName: "cancelListing",
-        args: [BigInt(tokenId)],
-        gas: gasCancel,
-      });
+      const hash = await writeContractAsync(
+        bscWriteParams({
+          address: marketplaceAddressNormalized,
+          abi: MARKETPLACE_ABI,
+          functionName: "cancelListing",
+          args: [BigInt(tokenId)],
+          gas: gasCancel,
+        })
+      );
       await publicClient.waitForTransactionReceipt({ hash });
       refetchData();
     } catch (e) {
@@ -306,42 +309,46 @@ export default function Marketplace() {
     markWalletTxInFlight();
     try {
       const tradeReferrerRoot = await resolveSellerReferrerRoot(publicClient, referralAddressNormalized, seller);
-      const hashApprove = await writeContractAsync({
-        address: usdtAddressNormalized,
-        abi: USDT_ABI,
-        functionName: "approve",
-        args: [marketplaceAddressNormalized, BigInt(priceWei)],
-        gas: await safeGasLimit(
-          publicClient,
-          {
-            address: usdtAddressNormalized,
-            abi: USDT_ABI,
-            functionName: "approve",
-            args: [marketplaceAddressNormalized, BigInt(priceWei)],
-            account: address,
-          },
-          DEFAULT_APPROVE_GAS
-        ),
-      });
+      const hashApprove = await writeContractAsync(
+        bscWriteParams({
+          address: usdtAddressNormalized,
+          abi: USDT_ABI,
+          functionName: "approve",
+          args: [marketplaceAddressNormalized, BigInt(priceWei)],
+          gas: await safeGasLimit(
+            publicClient,
+            {
+              address: usdtAddressNormalized,
+              abi: USDT_ABI,
+              functionName: "approve",
+              args: [marketplaceAddressNormalized, BigInt(priceWei)],
+              account: address,
+            },
+            DEFAULT_APPROVE_GAS
+          ),
+        })
+      );
       await publicClient.waitForTransactionReceipt({ hash: hashApprove });
       setBuyStep("buy");
-      const hashBuy = await writeContractAsync({
-        address: marketplaceAddressNormalized,
-        abi: MARKETPLACE_ABI,
-        functionName: "buy",
-        args: [BigInt(tokenId), tradeReferrerRoot],
-        gas: await safeGasLimit(
-          publicClient,
-          {
-            address: marketplaceAddressNormalized,
-            abi: MARKETPLACE_ABI,
-            functionName: "buy",
-            args: [BigInt(tokenId), tradeReferrerRoot],
-            account: address,
-          },
-          DEFAULT_MARKETPLACE_BUY_GAS
-        ),
-      });
+      const hashBuy = await writeContractAsync(
+        bscWriteParams({
+          address: marketplaceAddressNormalized,
+          abi: MARKETPLACE_ABI,
+          functionName: "buy",
+          args: [BigInt(tokenId), tradeReferrerRoot],
+          gas: await safeGasLimit(
+            publicClient,
+            {
+              address: marketplaceAddressNormalized,
+              abi: MARKETPLACE_ABI,
+              functionName: "buy",
+              args: [BigInt(tokenId), tradeReferrerRoot],
+              account: address,
+            },
+            DEFAULT_MARKETPLACE_BUY_GAS
+          ),
+        })
+      );
       await publicClient.waitForTransactionReceipt({ hash: hashBuy });
       setListings((prev) => prev.filter((l) => String(l.tokenId) !== String(tokenId)));
       if (token) {
@@ -382,23 +389,25 @@ export default function Marketplace() {
     rememberWalletTxReturnPath("/marketplace");
     markWalletTxInFlight();
     try {
-      const hashApprove = await writeContractAsync({
-        address: nftAddressNormalized,
-        abi: NFT_ABI,
-        functionName: "approve",
-        args: [marketplaceAddressNormalized, BigInt(tokenId)],
-        gas: await safeGasLimit(
-          publicClient,
-          {
-            address: nftAddressNormalized,
-            abi: NFT_ABI,
-            functionName: "approve",
-            args: [marketplaceAddressNormalized, BigInt(tokenId)],
-            account: address,
-          },
-          DEFAULT_NFT_APPROVE_GAS
-        ),
-      });
+      const hashApprove = await writeContractAsync(
+        bscWriteParams({
+          address: nftAddressNormalized,
+          abi: NFT_ABI,
+          functionName: "approve",
+          args: [marketplaceAddressNormalized, BigInt(tokenId)],
+          gas: await safeGasLimit(
+            publicClient,
+            {
+              address: nftAddressNormalized,
+              abi: NFT_ABI,
+              functionName: "approve",
+              args: [marketplaceAddressNormalized, BigInt(tokenId)],
+              account: address,
+            },
+            DEFAULT_NFT_APPROVE_GAS
+          ),
+        })
+      );
       await publicClient.waitForTransactionReceipt({ hash: hashApprove });
       try {
         sessionStorage.setItem(
@@ -414,23 +423,25 @@ export default function Marketplace() {
       }
       setListResume({ tokenId: String(tokenId), listPriceWei: String(listPriceWei) });
       setListStep("list");
-      const hashList = await writeContractAsync({
-        address: marketplaceAddressNormalized,
-        abi: MARKETPLACE_ABI,
-        functionName: "list",
-        args: [BigInt(tokenId), BigInt(listPriceWei)],
-        gas: await safeGasLimit(
-          publicClient,
-          {
-            address: marketplaceAddressNormalized,
-            abi: MARKETPLACE_ABI,
-            functionName: "list",
-            args: [BigInt(tokenId), BigInt(listPriceWei)],
-            account: address,
-          },
-          DEFAULT_MARKETPLACE_LIST_GAS
-        ),
-      });
+      const hashList = await writeContractAsync(
+        bscWriteParams({
+          address: marketplaceAddressNormalized,
+          abi: MARKETPLACE_ABI,
+          functionName: "list",
+          args: [BigInt(tokenId), BigInt(listPriceWei)],
+          gas: await safeGasLimit(
+            publicClient,
+            {
+              address: marketplaceAddressNormalized,
+              abi: MARKETPLACE_ABI,
+              functionName: "list",
+              args: [BigInt(tokenId), BigInt(listPriceWei)],
+              account: address,
+            },
+            DEFAULT_MARKETPLACE_LIST_GAS
+          ),
+        })
+      );
       await publicClient.waitForTransactionReceipt({ hash: hashList });
       clearListResume();
       refetchData();
@@ -460,23 +471,25 @@ export default function Marketplace() {
     setLoadingList(tokenId);
     setListStep("list");
     try {
-      const hashList = await writeContractAsync({
-        address: marketplaceAddressNormalized,
-        abi: MARKETPLACE_ABI,
-        functionName: "list",
-        args: [BigInt(tokenId), BigInt(listPriceWei)],
-        gas: await safeGasLimit(
-          publicClient,
-          {
-            address: marketplaceAddressNormalized,
-            abi: MARKETPLACE_ABI,
-            functionName: "list",
-            args: [BigInt(tokenId), BigInt(listPriceWei)],
-            account: address,
-          },
-          DEFAULT_MARKETPLACE_LIST_GAS
-        ),
-      });
+      const hashList = await writeContractAsync(
+        bscWriteParams({
+          address: marketplaceAddressNormalized,
+          abi: MARKETPLACE_ABI,
+          functionName: "list",
+          args: [BigInt(tokenId), BigInt(listPriceWei)],
+          gas: await safeGasLimit(
+            publicClient,
+            {
+              address: marketplaceAddressNormalized,
+              abi: MARKETPLACE_ABI,
+              functionName: "list",
+              args: [BigInt(tokenId), BigInt(listPriceWei)],
+              account: address,
+            },
+            DEFAULT_MARKETPLACE_LIST_GAS
+          ),
+        })
+      );
       await publicClient.waitForTransactionReceipt({ hash: hashList });
       clearListResume();
       refetchData();

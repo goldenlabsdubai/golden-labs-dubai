@@ -19,6 +19,11 @@ import { canAccessTradingNav } from "../utils/tradingAccess";
 import { USDT_DECIMALS } from "../constants/usdtDecimals";
 import { BSC_CHAIN_ID } from "../constants/chain";
 import { formatUsdtTrim, readContractUint256 } from "../utils/formatUsdt";
+import {
+  safeGasLimit,
+  DEFAULT_APPROVE_GAS,
+  DEFAULT_SUBSCRIBE_GAS,
+} from "../utils/safeContractGas";
 
 const USDT_ABI = [
   { name: "balanceOf", type: "function", stateMutability: "view", inputs: [{ name: "account", type: "address" }], outputs: [{ type: "uint256" }] },
@@ -206,7 +211,6 @@ export default function Mint() {
     setLoading(true);
     setError("");
     rememberWalletTxReturnPath("/mint");
-    markWalletTxInFlight();
     try {
       const mintPriceWei =
         mintPriceOnChain != null
@@ -223,21 +227,48 @@ export default function Mint() {
         setLoading(false);
         return;
       }
+      markWalletTxInFlight();
+      setMintStep("approve");
+      const gasApprove = await safeGasLimit(
+        publicClient,
+        {
+          address: usdtAddressNormalized,
+          abi: USDT_ABI,
+          functionName: "approve",
+          args: [nftAddr, mintPriceWei],
+          account: address,
+        },
+        DEFAULT_APPROVE_GAS
+      );
       const hashApprove = await writeContractAsync({
         chainId: BSC_CHAIN_ID,
         address: usdtAddressNormalized,
         abi: USDT_ABI,
         functionName: "approve",
         args: [nftAddr, mintPriceWei],
+        gas: gasApprove,
       });
       await publicClient.waitForTransactionReceipt({ hash: hashApprove });
+      setMintStep("mint");
       const tokenIdMinted = nextTokenId != null ? Number(nextTokenId) : null;
+      const gasMint = await safeGasLimit(
+        publicClient,
+        {
+          address: nftAddr,
+          abi: NFT_ABI,
+          functionName: "mint",
+          args: [uri],
+          account: address,
+        },
+        DEFAULT_SUBSCRIBE_GAS
+      );
       const hashMint = await writeContractAsync({
         chainId: BSC_CHAIN_ID,
         address: nftAddr,
         abi: NFT_ABI,
         functionName: "mint",
         args: [uri],
+        gas: gasMint,
       });
       await publicClient.waitForTransactionReceipt({ hash: hashMint });
 
