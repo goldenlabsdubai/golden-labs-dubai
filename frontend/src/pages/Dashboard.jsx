@@ -938,7 +938,9 @@ export default function Dashboard() {
                       <div className="profile-hub__nft-card-center">
                         {nft.isListed ? (
                           <div className="profile-hub__nft-card-center-row">
-                            <span className="profile-hub__nft-badge profile-hub__nft-badge--listed">Listed</span>
+                            <span className="profile-hub__nft-badge profile-hub__nft-badge--listed">
+                              <span className="profile-hub__nft-action-label">Listed</span>
+                            </span>
                             <div className="profile-hub__nft-card-menu profile-hub__nft-card-menu--beside" ref={openMenuTokenId === nft.tokenId ? cardMenuRef : null}>
                               <button
                                 type="button"
@@ -970,7 +972,13 @@ export default function Dashboard() {
                             onClick={() => handleList(nft.tokenId, listWei)}
                             disabled={loadingList != null || listWei == null || String(listWei) === ""}
                           >
-                            {loadingList === nft.tokenId ? (listStep === "approve" ? "1/2 Approving…" : "2/2 Listing…") : `List for $${unlistedPriceLabel}`}
+                            {loadingList === nft.tokenId ? (
+                              <span className="profile-hub__nft-action-label">
+                                {listStep === "approve" ? "1/2 Approving…" : "2/2 Listing…"}
+                              </span>
+                            ) : (
+                              <span className="profile-hub__nft-action-label">{`List for $${unlistedPriceLabel}`}</span>
+                            )}
                           </button>
                         )}
                       </div>

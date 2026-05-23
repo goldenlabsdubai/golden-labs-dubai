@@ -1,6 +1,5 @@
 import { useState, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
-import { Link } from "react-router-dom";
 import { AppRouteLink } from "../components/AppRouteLink";
 import {
   assignAppPath,
@@ -54,6 +53,31 @@ const USDT_ABI = [
 /** After approve confirms, persist so MetaMask / reload cannot strand the user without re-approving. */
 const LIST_RESUME_KEY = "gl_mp_list_resume";
 const LIST_RESUME_TTL_MS = 45 * 60 * 1000;
+const LISTINGS_PER_PAGE = 10;
+
+/** Page 2+ buy buttons show a lock — only page 1 tokens can be purchased. */
+function MarketplaceBuyLockIcon({ className = "" }) {
+  return (
+    <svg
+      className={className}
+      width="20"
+      height="20"
+      viewBox="0 0 24 24"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+      aria-hidden="true"
+    >
+      <path
+        d="M7 11V8a5 5 0 0 1 10 0v3"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <rect x="5" y="11" width="14" height="10" rx="2" stroke="currentColor" strokeWidth="2" />
+    </svg>
+  );
+}
 
 export default function Marketplace() {
   const { user, token, refreshUser } = useAuth();
@@ -78,7 +102,7 @@ export default function Marketplace() {
   const [addressMenuOpen, setAddressMenuOpen] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const [avatarError, setAvatarError] = useState(false);
-  const [listLayout, setListLayout] = useState("grid-3");
+  const [listingsPage, setListingsPage] = useState(1);
   const [portalReady, setPortalReady] = useState(false);
   const [insufficientBalanceType, setInsufficientBalanceType] = useState(null);
   /** { tokenId, listPriceWei } after on-chain approve, if list tx still pending */
@@ -295,6 +319,7 @@ export default function Marketplace() {
   };
 
   const handleBuy = async (tokenId, priceWei, seller = null) => {
+    if (listingsPage > 1) return;
     if (!marketplaceAddressNormalized || !usdtAddressNormalized || !publicClient || !writeContractAsync || !address) {
       setError("Wallet or contracts not ready.");
       return;
@@ -542,6 +567,27 @@ export default function Marketplace() {
     return byListedTimeOldestFirst(a, b);
   });
 
+  const totalListingsPages = Math.max(1, Math.ceil(sortedListings.length / LISTINGS_PER_PAGE));
+  const paginatedListings = sortedListings.slice(
+    (listingsPage - 1) * LISTINGS_PER_PAGE,
+    listingsPage * LISTINGS_PER_PAGE
+  );
+
+  useEffect(() => {
+    if (listingsPage > totalListingsPages) setListingsPage(totalListingsPages);
+  }, [listingsPage, totalListingsPages]);
+
+  const goToListingsPage = (nextPage) => {
+    const clamped = Math.min(Math.max(1, nextPage), totalListingsPages);
+    setListingsPage(clamped);
+    if (typeof document !== "undefined") {
+      document.querySelector(".marketplace-page__listings-section")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  };
+
+  /** Only the first page of marketplace listings can be bought; page 2+ show a lock. */
+  const buyLockedOnCurrentPage = listingsPage > 1;
+
   const subscriptionBg = (
     <div className="profile-modern__bg" aria-hidden="true">
       <div className="profile-modern__bg-image" />
@@ -679,7 +725,13 @@ export default function Marketplace() {
                           onClick={() => handleList(nft.tokenId, listWei)}
                           disabled={loadingList != null || listWei == null || String(listWei) === ""}
                         >
-                          {loadingList === nft.tokenId ? (listStep === "approve" ? "1/2 Approving…" : "2/2 Listing…") : `List for $${listUsdt}`}
+                          {loadingList === nft.tokenId ? (
+                            <span className="profile-hub__nft-action-label">
+                              {listStep === "approve" ? "1/2 Approving…" : "2/2 Listing…"}
+                            </span>
+                          ) : (
+                            <span className="profile-hub__nft-action-label">{`List for $${listUsdt}`}</span>
+                          )}
                         </button>
                       </div>
                     </div>
@@ -691,32 +743,6 @@ export default function Marketplace() {
           )}
           <section className="marketplace-page__listings-section">
             <h2 className="marketplace-page__section-title">Marketplace</h2>
-          <div className="marketplace-page__list-toolbar">
-            <div className="marketplace-page__layout-toggle">
-              <button
-                type="button"
-                className={`marketplace-page__layout-btn ${listLayout === "grid-2" ? "marketplace-page__layout-btn--active" : ""}`}
-                onClick={() => setListLayout("grid-2")}
-                aria-label="2 by 2 grid"
-                title="2 by 2 grid"
-              >
-                <span className="marketplace-page__layout-icon" aria-hidden="true">
-                  <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><rect width="6" height="6" x="1" y="1" rx="1" /><rect width="6" height="6" x="9" y="1" rx="1" /><rect width="6" height="6" x="1" y="9" rx="1" /><rect width="6" height="6" x="9" y="9" rx="1" /></svg>
-                </span>
-              </button>
-              <button
-                type="button"
-                className={`marketplace-page__layout-btn ${listLayout === "grid-3" ? "marketplace-page__layout-btn--active" : ""}`}
-                onClick={() => setListLayout("grid-3")}
-                aria-label="3 by 3 grid"
-                title="3 by 3 grid"
-              >
-                <span className="marketplace-page__layout-icon" aria-hidden="true">
-                  <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><rect width="3" height="3" x="1" y="1" rx="0.5" /><rect width="3" height="3" x="6" y="1" rx="0.5" /><rect width="3" height="3" x="11" y="1" rx="0.5" /><rect width="3" height="3" x="1" y="6" rx="0.5" /><rect width="3" height="3" x="6" y="6" rx="0.5" /><rect width="3" height="3" x="11" y="6" rx="0.5" /><rect width="3" height="3" x="1" y="11" rx="0.5" /><rect width="3" height="3" x="6" y="11" rx="0.5" /><rect width="3" height="3" x="11" y="11" rx="0.5" /></svg>
-                </span>
-              </button>
-            </div>
-          </div>
           {listingsLoading ? (
             <div className="marketplace-page__empty marketplace-page__empty--loading">
               <div className="marketplace-page__loading-spinner" aria-hidden="true" />
@@ -728,8 +754,9 @@ export default function Marketplace() {
               <button type="button" className="marketplace-page__refresh" onClick={refetchData}>Refresh</button>
             </div>
           ) : (
-            <div className={`profile-hub__grid marketplace-page__grid marketplace-page__grid--${listLayout}`}>
-              {sortedListings.map((l) => {
+            <>
+            <div className="profile-hub__grid marketplace-page__grid marketplace-page__grid--grid-5">
+              {paginatedListings.map((l) => {
                 const isMyListing = currentWallet && (String(l.seller || "").toLowerCase() === currentWallet);
                 return (
                 <div key={l.tokenId} className="profile-hub__nft-card">
@@ -746,7 +773,9 @@ export default function Marketplace() {
                     <div className="profile-hub__nft-card-center">
                       {isMyListing ? (
                         <div className="profile-hub__nft-card-center-row">
-                          <span className="profile-hub__nft-badge profile-hub__nft-badge--listed">Listed</span>
+                          <span className="profile-hub__nft-badge profile-hub__nft-badge--listed">
+                            <span className="profile-hub__nft-action-label">Listed</span>
+                          </span>
                           <div className="profile-hub__nft-card-menu profile-hub__nft-card-menu--beside" ref={openMenuTokenId === l.tokenId ? cardMenuRef : null}>
                             <button
                               type="button"
@@ -771,6 +800,16 @@ export default function Marketplace() {
                             )}
                           </div>
                         </div>
+                      ) : buyLockedOnCurrentPage ? (
+                        <button
+                          type="button"
+                          className="profile-hub__nft-btn profile-hub__nft-btn--locked"
+                          disabled
+                          aria-label="Locked — only page 1 listings can be purchased"
+                          title="Go to page 1 to buy"
+                        >
+                          <MarketplaceBuyLockIcon className="profile-hub__nft-lock-icon" />
+                        </button>
                       ) : (
                         <button
                           type="button"
@@ -778,7 +817,13 @@ export default function Marketplace() {
                           onClick={() => handleBuy(l.tokenId, l.price, l.seller)}
                           disabled={loadingBuy != null}
                         >
-                          {loadingBuy === l.tokenId ? (buyStep === "approve" ? "1/2 Approving…" : "2/2 Buying…") : "Buy Now"}
+                          {loadingBuy === l.tokenId ? (
+                            <span className="profile-hub__nft-action-label">
+                              {buyStep === "approve" ? "1/2 Approving…" : "2/2 Buying…"}
+                            </span>
+                          ) : (
+                            <span className="profile-hub__nft-action-label">Buy Now</span>
+                          )}
                         </button>
                       )}
                     </div>
@@ -787,6 +832,30 @@ export default function Marketplace() {
               );
               })}
             </div>
+            {totalListingsPages > 1 && (
+              <nav className="marketplace-page__pagination" aria-label="Marketplace pages">
+                <button
+                  type="button"
+                  className="marketplace-page__page-btn"
+                  onClick={() => goToListingsPage(listingsPage - 1)}
+                  disabled={listingsPage <= 1}
+                >
+                  Previous
+                </button>
+                <span className="marketplace-page__page-info">
+                  Page {listingsPage} of {totalListingsPages}
+                </span>
+                <button
+                  type="button"
+                  className="marketplace-page__page-btn"
+                  onClick={() => goToListingsPage(listingsPage + 1)}
+                  disabled={listingsPage >= totalListingsPages}
+                >
+                  Next
+                </button>
+              </nav>
+            )}
+            </>
           )}
           </section>
         </main>
