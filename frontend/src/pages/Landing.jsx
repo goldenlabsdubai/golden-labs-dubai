@@ -1,6 +1,5 @@
 import { useState, useEffect, useLayoutEffect, useRef } from "react";
 import { createPortal } from "react-dom";
-import { assignAppPath } from "../utils/appNavigation";
 import { useAppNavigate } from "../hooks/useAppNavigate";
 import { useDisconnect } from "wagmi";
 import { useAuth } from "../hooks/useAuth";
@@ -166,6 +165,9 @@ export default function Landing() {
     const next = params.get("next");
     if (!next || !next.startsWith("/") || next === "/") return;
     appNavigate(next, { replace: true });
+    if (window.location.search) {
+      window.history.replaceState(window.history.state, "", next);
+    }
   }, [token, user, appNavigate]);
 
   // Capture ?ref= (referral code) from URL and store for sign-in

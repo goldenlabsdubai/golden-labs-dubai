@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { registerSpaNavigate } from "../utils/appNavigation";
 
@@ -8,14 +8,16 @@ import { registerSpaNavigate } from "../utils/appNavigation";
  */
 export function AppNavigateProvider({ children }) {
   const navigate = useNavigate();
+  const navigateRef = useRef(navigate);
+  navigateRef.current = navigate;
   const { pathname, search } = useLocation();
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     registerSpaNavigate((to, opts) => {
-      navigate(to, { replace: Boolean(opts?.replace) });
+      navigateRef.current(to, { replace: Boolean(opts?.replace) });
     });
     return () => registerSpaNavigate(null);
-  }, [navigate]);
+  }, []);
 
   useEffect(() => {
     if (pathname && pathname !== "/") {

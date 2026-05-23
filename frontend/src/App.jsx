@@ -208,16 +208,6 @@ function AuthWalletReconnect() {
   return null;
 }
 
-/** Keeps client-side `assignAppPath` from doing full reloads (preserves wagmi session). */
-function SpaNavigateRegistration() {
-  const navigate = useNavigate();
-  useEffect(() => {
-    registerSpaNavigate(navigate);
-    return () => registerSpaNavigate(null);
-  }, [navigate]);
-  return null;
-}
-
 /** MetaMask / mobile wallets often reload to `/` after approve — send user back to subscription, marketplace, etc. */
 function WalletTxReturnRestore() {
   const { pathname } = useLocation();

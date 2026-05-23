@@ -14,14 +14,36 @@ export function registerSpaNavigate(navigate) {
 }
 
 /**
+ * Keep the address bar aligned with the SPA route (refresh must land on the same page).
+ * Used when React Router navigate lags or was not registered yet.
+ */
+export function syncBrowserPath(path, replace = false) {
+  if (typeof window === "undefined") return;
+  const p = path.startsWith("/") ? path : `/${path}`;
+  if (window.location.pathname === p) return;
+  const state = window.history.state;
+  if (replace) window.history.replaceState(state, "", p);
+  else window.history.pushState(state, "", p);
+  window.dispatchEvent(new PopStateEvent("popstate"));
+}
+
+/**
  * @param {string} path
- * @param {{ hard?: boolean }} [opts] — `hard: true` forces a full page load (rare)
+ * @param {{ hard?: boolean, replace?: boolean }} [opts] — `hard: true` forces a full page load (rare)
  */
 export function assignAppPath(path, opts = {}) {
   if (typeof window === "undefined") return;
   const p = path.startsWith("/") ? path : `/${path}`;
-  if (!opts.hard && spaNavigate) {
-    spaNavigate(p, { replace: Boolean(opts.replace) });
+  const replace = Boolean(opts.replace);
+  if (!opts.hard) {
+    if (spaNavigate) {
+      spaNavigate(p, { replace });
+      queueMicrotask(() => {
+        if (window.location.pathname !== p) syncBrowserPath(p, replace);
+      });
+      return;
+    }
+    syncBrowserPath(p, replace);
     return;
   }
   window.location.assign(`${window.location.origin}${p}`);
