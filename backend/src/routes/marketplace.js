@@ -1,7 +1,11 @@
 import { Router } from "express";
 import { ethers } from "ethers";
 import * as User from "../services/user.js";
-import { getListingBlocksMap } from "../services/marketplaceActivityIndexer.js";
+import {
+  getMarketplaceListingsResponse,
+  markMarketplaceListingsStale,
+} from "../services/marketplaceListingsCache.js";
+import { getSharedMainRpcProvider } from "../config/ethersRpc.js";
 import {
   getMarketplaceAndReservePoolAddress,
   getMarketplaceMyAssetsMaxTokensCeiling,
@@ -11,24 +15,6 @@ import { assertCanTradeOnConfiguredContracts } from "../services/marketplaceTrad
 import { USDT_DECIMALS } from "../constants/usdtDecimals.js";
 
 const router = Router();
-let listingsCache = [];
-let listingsCacheAt = 0;
-
-/**
- * Within the same queue tier: oldest listed first, recently listed last.
- * Missing listedAt (0) sorts last. Tie-break: seller address (not tokenId).
- */
-function sortByListedTimeOldestFirst(a, b) {
-  const ta = Number(a.listedAt ?? 0);
-  const tb = Number(b.listedAt ?? 0);
-  const aMissing = !Number.isFinite(ta) || ta <= 0;
-  const bMissing = !Number.isFinite(tb) || tb <= 0;
-  if (aMissing && bMissing) return String(a.seller || "").localeCompare(String(b.seller || ""));
-  if (aMissing) return 1;
-  if (bMissing) return -1;
-  if (ta !== tb) return ta - tb;
-  return String(a.seller || "").localeCompare(String(b.seller || ""));
-}
 
 function formatListPriceUsdtFromWei(weiStr) {
   try {
@@ -71,10 +57,7 @@ async function getConfiguredMarketplaceListPrice(marketContract) {
   return cachedMarketplaceListPrice;
 }
 
-const getProvider = () => {
-  const rpc = process.env.RPC_URL || "http://127.0.0.1:8545";
-  return new ethers.JsonRpcProvider(rpc);
-};
+const getProvider = () => getSharedMainRpcProvider();
 
 const MARKETPLACE_ABI = [
   "event Listed(uint256 indexed tokenId, address seller, uint256 price)",
@@ -199,151 +182,17 @@ async function discoverTokenIdsFromIncomingTransfers(provider, nftAddress, walle
   }
 }
 
-// Listings: loop 1..totalMinted, call marketplace.listings(tokenId), keep where active. No events.
+// Listings: cached on-chain scan (TTL + stale on marketplace events). See marketplaceListingsCache.js.
 router.get("/listings", async (_, res) => {
   try {
-    const marketAddr = (getMarketplaceAndReservePoolAddress() || "").trim();
-    const nftAddr = (process.env.NFT_CONTRACT_ADDRESS || "").trim();
-    if (!marketAddr || !nftAddr) return res.json({ listings: [] });
-
-    const provider = getProvider();
-    const nftContract = new ethers.Contract(nftAddr, ["function totalMinted() view returns (uint256)", "function tokenURI(uint256 tokenId) view returns (string)"], provider);
-    const marketContract = new ethers.Contract(marketAddr, MARKETPLACE_ABI, provider);
-
-    const totalMintedRaw = await readWithRetry(() => nftContract.totalMinted(), null, 2, 7000);
-    const totalMinted = totalMintedRaw != null ? Number(totalMintedRaw) : NaN;
-    if (!Number.isFinite(totalMinted)) {
-      return res.json({
-        listings: listingsCache,
-        fromCache: true,
-        cacheAgeMs: listingsCacheAt ? Date.now() - listingsCacheAt : null,
-      });
+    const result = await getMarketplaceListingsResponse();
+    const body = { listings: result.listings };
+    if (result.fromCache) {
+      body.fromCache = true;
+      body.cacheAgeMs = result.cacheAgeMs ?? null;
     }
-    if (totalMinted === 0) {
-      listingsCache = [];
-      listingsCacheAt = Date.now();
-      return res.json({ listings: [] });
-    }
-
-    const listings = [];
-    const BATCH = Math.max(10, Math.min(Number(process.env.MARKETPLACE_LISTINGS_BATCH || 25), 60));
-    for (let start = 1; start <= totalMinted; start += BATCH) {
-      const end = Math.min(start + BATCH - 1, totalMinted);
-      const promises = [];
-      for (let tokenId = start; tokenId <= end; tokenId++) {
-        promises.push(
-          Promise.all([
-            readWithRetry(() => marketContract.listings(tokenId), null, 2, 7000),
-            readWithRetry(() => nftContract.tokenURI(tokenId), "", 1, 5000),
-          ]).then(async ([listing, tokenURI]) => {
-            if (!listing) return null;
-            const active = listing?.[3];
-            const seller = listing?.[0];
-            const price = listing?.[2];
-            if (active && seller && price != null) {
-              let listedAtSec = 0;
-              try {
-                const la = await readWithRetry(() => marketContract.listingListedAt(tokenId), 0n, 1, 5000);
-                listedAtSec = la != null ? Number(la) : 0;
-              } catch (_) {
-                listedAtSec = 0;
-              }
-              let uri = (tokenURI && String(tokenURI).trim()) || "";
-              if (!uri) {
-                const base = getMetadataBaseForToken(tokenId);
-                if (base) uri = `ipfs://${base}/${tokenId}.json`;
-              }
-              uri = (uri || "").replace(/^(ipfs:\/\/)+/i, "ipfs://");
-              return { tokenId: String(tokenId), seller, price: String(price), tokenURI: uri, listedAtSec };
-            }
-            return null;
-          }, () => null)
-        );
-      }
-      const batch = await Promise.all(promises);
-      batch.forEach((r) => {
-        if (r) {
-          listings.push({
-            tokenId: r.tokenId,
-            seller: String(r.seller),
-            price: r.price,
-            priceFormatted: formatListingPriceUsdtLabel(r.price),
-            tokenURI: r.tokenURI || "",
-            listedAtSec: r.listedAtSec ?? 0,
-          });
-        }
-      });
-    }
-    const listingBlocks = await getListingBlocksMap().catch(() => ({}));
-    listings.forEach((l) => {
-      const fromChainMs = l.listedAtSec > 0 ? l.listedAtSec * 1000 : 0;
-      const entry = listingBlocks[String(l.tokenId)];
-      const fromIndexer = entry?.timestamp != null ? Number(entry.timestamp) : 0;
-      // Prefer on-chain listingListedAt (no indexer dependency); indexer only for legacy listings pre-contract field.
-      l.listedAt = fromChainMs > 0 ? fromChainMs : fromIndexer;
-      delete l.listedAtSec;
-    });
-
-    /** Queue priority: (0) dynamic mint = seller is marketplace, (1) bot wallets (isBotTrader), (2) members. */
-    const marketNorm = marketAddr.toLowerCase();
-    const uniqueForBotCheck = [...new Set(listings.map((l) => (l.seller || "").toLowerCase()))].filter(Boolean);
-    const botTraderCache = {};
-    await Promise.all(
-      uniqueForBotCheck.map(async (w) => {
-        if (w === marketNorm) {
-          botTraderCache[w] = false;
-          return;
-        }
-        botTraderCache[w] = !!(await readWithRetry(() => marketContract.isBotTrader(w), false, 1, 4000));
-      })
-    );
-    listings.forEach((l) => {
-      const s = (l.seller || "").toLowerCase();
-      if (s === marketNorm) {
-        l.listingTier = "dynamic";
-        l.listingTierRank = 0;
-        l.listingTierLabel = "Dynamic";
-      } else if (botTraderCache[s]) {
-        l.listingTier = "bot";
-        l.listingTierRank = 1;
-        l.listingTierLabel = "Bot";
-      } else {
-        l.listingTier = "user";
-        l.listingTierRank = 2;
-        l.listingTierLabel = "Member";
-      }
-    });
-    listings.sort((a, b) => {
-      if (a.listingTierRank !== b.listingTierRank) return a.listingTierRank - b.listingTierRank;
-      return sortByListedTimeOldestFirst(a, b);
-    });
-
-    // Resolve seller names (username/name) for "Owned by" display
-    const uniqueSellers = [...new Set(listings.map((l) => (l.seller || "").toLowerCase()))].filter(Boolean);
-    const sellerMap = {};
-    await Promise.all(
-      uniqueSellers.map(async (wallet) => {
-        const u = await User.getUserByWallet(wallet);
-        sellerMap[wallet] = { username: u?.username ?? null, name: u?.name ?? null };
-      })
-    );
-    listings.forEach((l) => {
-      const key = (l.seller || "").toLowerCase();
-      const info = sellerMap[key] || {};
-      l.sellerUsername = info.username ?? null;
-      l.sellerName = info.name ?? null;
-    });
-    listingsCache = listings;
-    listingsCacheAt = Date.now();
-    res.json({ listings });
+    res.json(body);
   } catch (e) {
-    if (listingsCacheAt) {
-      return res.json({
-        listings: listingsCache,
-        fromCache: true,
-        cacheAgeMs: Date.now() - listingsCacheAt,
-      });
-    }
     res.status(500).json({ error: e.message });
   }
 });
@@ -716,6 +565,7 @@ router.post("/record-purchase", async (req, res) => {
       eventId: eventId || null,
       blockNumber: blockNumber ?? null,
     });
+    markMarketplaceListingsStale();
     res.json({ ok: true });
   } catch (e) {
     console.error("record-purchase error:", e?.message || e);

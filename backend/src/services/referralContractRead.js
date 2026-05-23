@@ -2,7 +2,7 @@
  * Read ReferralContract.referrerOf(wallet) via RPC (source of truth for onboarding / profile save).
  */
 import { ethers } from "ethers";
-import { getReferralRpcUrl } from "../config/ethersRpc.js";
+import { getReferralRpcUrl, getSharedReferralRpcProvider } from "../config/ethersRpc.js";
 
 const REFERRAL_ABI = ["function referrerOf(address user) view returns (address)"];
 
@@ -15,7 +15,7 @@ export async function readReferrerOfOnChain(userWallet) {
   const rpcUrl = getReferralRpcUrl();
   if (!contractAddr || !rpcUrl || !userWallet) return null;
   try {
-    const provider = new ethers.JsonRpcProvider(rpcUrl);
+    const provider = getSharedReferralRpcProvider();
     const c = new ethers.Contract(contractAddr, REFERRAL_ABI, provider);
     const raw = userWallet.startsWith("0x") ? userWallet : `0x${userWallet}`;
     const addr = ethers.getAddress(raw);

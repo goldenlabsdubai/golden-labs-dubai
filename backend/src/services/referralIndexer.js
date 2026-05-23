@@ -1,6 +1,6 @@
 import { ethers } from "ethers";
 import { getPool } from "../config/postgres.js";
-import { getReferralRpcUrl } from "../config/ethersRpc.js";
+import { getReferralRpcUrl, getSharedReferralRpcProvider } from "../config/ethersRpc.js";
 import * as User from "./user.js";
 import * as MetaPg from "./metaPostgres.js";
 
@@ -39,7 +39,7 @@ export function startReferralIndexer() {
     return;
   }
 
-  const provider = new ethers.JsonRpcProvider(rpcUrl);
+  const provider = getSharedReferralRpcProvider();
   const contract = new ethers.Contract(contractAddress, ABI, provider);
 
   let running = false;
@@ -138,7 +138,7 @@ export async function runReferralIndexerOnce() {
     console.warn("Referral indexer: PostgreSQL required for indexer state.");
     return;
   }
-  const provider = new ethers.JsonRpcProvider(rpcUrl);
+  const provider = getSharedReferralRpcProvider();
   const contract = new ethers.Contract(contractAddress, ABI, provider);
   await runReferralIndexerPoll(provider, contract);
 }

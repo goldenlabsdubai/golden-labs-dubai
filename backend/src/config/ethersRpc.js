@@ -24,3 +24,44 @@ export function createPinnedJsonRpcProvider(rpcUrl) {
 
   return new ethers.JsonRpcProvider(url, safeId, { staticNetwork: true });
 }
+
+/** Primary BSC RPC for marketplace, subscription sync, mint config, etc. */
+export function getMainRpcUrl() {
+  return (process.env.RPC_URL || "http://127.0.0.1:8545").trim();
+}
+
+const providerByUrl = new Map();
+
+/** One pinned JsonRpcProvider per RPC URL (avoids eth_chainId / detect-network per request). */
+export function getSharedJsonRpcProvider(rpcUrl) {
+  const url = String(rpcUrl || "").trim();
+  if (!url) throw new Error("getSharedJsonRpcProvider: empty rpcUrl");
+  let provider = providerByUrl.get(url);
+  if (!provider) {
+    provider = createPinnedJsonRpcProvider(url);
+    providerByUrl.set(url, provider);
+  }
+  return provider;
+}
+
+export function getSharedMainRpcProvider() {
+  return getSharedJsonRpcProvider(getMainRpcUrl());
+}
+
+export function getSharedReferralRpcProvider() {
+  const url = getReferralRpcUrl();
+  if (!url) throw new Error("getSharedReferralRpcProvider: REFERRAL_RPC_URL or RPC_URL required");
+  return getSharedJsonRpcProvider(url);
+}
+
+export function isRpcRateLimitError(e) {
+  const msg = (e?.message || "") + JSON.stringify(e?.value || []);
+  return (
+    msg.includes("rate limit") ||
+    msg.includes("-32005") ||
+    msg.includes("403") ||
+    msg.includes("compute units per second") ||
+    e?.value?.[0]?.error?.code === -32005 ||
+    e?.code === 429
+  );
+}

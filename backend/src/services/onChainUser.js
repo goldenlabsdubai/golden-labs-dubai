@@ -4,11 +4,11 @@
  */
 import { ethers } from "ethers";
 import { getMarketplaceAndReservePoolAddress } from "../config/contractsEnv.js";
+import { getSharedMainRpcProvider } from "../config/ethersRpc.js";
 import { USDT_DECIMALS } from "../constants/usdtDecimals.js";
 
 function getProvider() {
-  const rpc = process.env.RPC_URL || "http://127.0.0.1:8545";
-  return new ethers.JsonRpcProvider(rpc);
+  return getSharedMainRpcProvider();
 }
 
 const SUBSCRIPTION_ABI = [

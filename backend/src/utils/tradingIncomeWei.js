@@ -1,5 +1,6 @@
 import { ethers } from "ethers";
 import { getMarketplaceAndReservePoolAddress } from "../config/contractsEnv.js";
+import { getSharedMainRpcProvider } from "../config/ethersRpc.js";
 
 /**
  * Default matches MarketplaceAndReservePoolContract.tradingIncomeAmount (0.75 USDT at USDT_DECIMALS).
@@ -38,7 +39,7 @@ export async function resolveTradingIncomePerSellWeiFromChain() {
     return fallback;
   }
   try {
-    const provider = new ethers.JsonRpcProvider(rpc);
+    const provider = getSharedMainRpcProvider();
     const c = new ethers.Contract(addr, MARKETPLACE_INCOME_ABI, provider);
     const raw = await c.tradingIncomeAmount();
     const w = BigInt(raw.toString());

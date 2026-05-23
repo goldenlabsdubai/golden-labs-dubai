@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { ethers } from "ethers";
+import { getSharedMainRpcProvider } from "../config/ethersRpc.js";
 import * as User from "../services/user.js";
 import { getOnChainUserStatus } from "../services/onChainUser.js";
 import { USDT_DECIMALS } from "../constants/usdtDecimals.js";
@@ -24,7 +25,7 @@ router.get("/config", async (_, res) => {
   }
 
   try {
-    const provider = new ethers.JsonRpcProvider(rpcUrl);
+    const provider = getSharedMainRpcProvider();
     const nft = new ethers.Contract(
       contractAddress,
       [
@@ -91,7 +92,7 @@ router.post("/confirm", async (req, res) => {
     }
     let mintPriceWei;
     try {
-      const provider = new ethers.JsonRpcProvider(rpcUrl);
+      const provider = getSharedMainRpcProvider();
       const nft = new ethers.Contract(contractAddress, ["function mintPrice() view returns (uint256)"], provider);
       mintPriceWei = (await nft.mintPrice()).toString();
       if (mintPriceWei === "0") {

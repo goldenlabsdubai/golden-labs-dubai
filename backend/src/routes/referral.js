@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { ethers } from "ethers";
-import { createPinnedJsonRpcProvider, getReferralRpcUrl } from "../config/ethersRpc.js";
+import { getReferralRpcUrl, getSharedReferralRpcProvider } from "../config/ethersRpc.js";
 import * as User from "../services/user.js";
 import { USDT_DECIMALS } from "../constants/usdtDecimals.js";
 
@@ -66,7 +66,7 @@ router.get("/info", async (_req, res) => {
   ];
 
   try {
-    const provider = createPinnedJsonRpcProvider(rpcUrl);
+    const provider = getSharedReferralRpcProvider();
     const c = new ethers.Contract(contractAddress, abi, provider);
     const tierReads = [];
     for (let i = 0; i < 10; i++) {
@@ -137,7 +137,7 @@ router.get("/stats", async (req, res) => {
     const rpcUrl = getReferralRpcUrl();
     if (wallet && contractAddress && rpcUrl) {
       try {
-        const provider = createPinnedJsonRpcProvider(rpcUrl);
+        const provider = getSharedReferralRpcProvider();
         const contract = new ethers.Contract(contractAddress, ["function referralEarnings(address) view returns (uint256)"], provider);
         const amount = await contract.referralEarnings(wallet);
         claimableWei = amount.toString();

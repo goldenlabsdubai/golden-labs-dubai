@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { ethers } from "ethers";
+import { getSharedMainRpcProvider } from "../config/ethersRpc.js";
 import * as AdminPg from "../services/adminPostgres.js";
 import {
   PLATFORM_MAINTENANCE_SETTINGS_ID,
@@ -317,7 +318,7 @@ router.get("/contracts/status", async (req, res) => {
       });
     }
 
-    const provider = new ethers.JsonRpcProvider(rpcUrl);
+    const provider = getSharedMainRpcProvider();
     const entries = Object.entries(contracts);
     const checks = await Promise.all(
       entries.map(async ([key, address]) => {

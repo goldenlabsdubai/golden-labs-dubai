@@ -1,12 +1,14 @@
 import { ethers } from "ethers";
 import { getPool } from "../config/postgres.js";
 import { getMarketplaceAndReservePoolAddress } from "../config/contractsEnv.js";
+import { getSharedMainRpcProvider } from "../config/ethersRpc.js";
 import * as User from "./user.js";
 import * as MetaPg from "./metaPostgres.js";
 
 const ABI = [
   "event Sold(uint256 indexed tokenId, address seller, address buyer, uint256 price)",
   "event Listed(uint256 indexed tokenId, address seller, uint256 price)",
+  "event ListingCancelled(uint256 indexed tokenId)",
 ];
 
 const MAX_BLOCKS_PER_QUERY = 10;
@@ -114,7 +116,7 @@ export function startMarketplaceActivityIndexer() {
     return;
   }
 
-  const provider = new ethers.JsonRpcProvider(rpcUrl);
+  const provider = getSharedMainRpcProvider();
   const contract = new ethers.Contract(contractAddress, ABI, provider);
 
   let running = false;
@@ -180,16 +182,35 @@ async function runMarketplaceActivityIndexerPoll(provider, contract) {
     }
     return [];
   };
+  const queryCancelledWithRetry = async (fromBlock, toBlock, retries = 3) => {
+    for (let i = 0; i < retries; i++) {
+      try {
+        return await contract.queryFilter(contract.filters.ListingCancelled(), fromBlock, toBlock);
+      } catch (e) {
+        if (isRateLimitError(e) && i < retries - 1) {
+          await new Promise((r) => setTimeout(r, 2000 * (i + 1)));
+          continue;
+        }
+        throw e;
+      }
+    }
+    return [];
+  };
   let listingBlocks = await loadListingBlocksMap();
   let fromBlock = lastBlock + 1;
   const toBlock = latest;
   let processedUpTo = lastBlock;
+  let marketplaceListingsMutated = false;
   while (fromBlock <= toBlock) {
     const chunkTo = Math.min(fromBlock + MAX_BLOCKS_PER_QUERY - 1, toBlock);
-    const [soldEvents, listedEvents] = await Promise.all([
+    const [soldEvents, listedEvents, cancelledEvents] = await Promise.all([
       querySoldWithRetry(fromBlock, chunkTo),
       queryListedWithRetry(fromBlock, chunkTo),
+      queryCancelledWithRetry(fromBlock, chunkTo),
     ]);
+    if (soldEvents.length > 0 || listedEvents.length > 0 || cancelledEvents.length > 0) {
+      marketplaceListingsMutated = true;
+    }
     for (const evt of soldEvents) {
       const tokenId = evt.args?.tokenId;
       const seller = evt.args?.seller ? String(evt.args.seller).toLowerCase() : "";
@@ -256,6 +277,10 @@ async function runMarketplaceActivityIndexerPoll(provider, contract) {
     await setListingBlocksMap(listingBlocks);
   }
   await setLastProcessedBlock(processedUpTo);
+  if (marketplaceListingsMutated) {
+    const { markMarketplaceListingsStale } = await import("./marketplaceListingsCache.js");
+    markMarketplaceListingsStale();
+  }
 }
 
 /** Run marketplace activity indexer once – for Vercel Cron or external cron. */
@@ -272,7 +297,7 @@ export async function runMarketplaceActivityIndexerOnce() {
     console.warn("Marketplace activity indexer: PostgreSQL required (PGHOST, PGDATABASE, PGUSER).");
     return;
   }
-  const provider = new ethers.JsonRpcProvider(rpcUrl);
+  const provider = getSharedMainRpcProvider();
   const contract = new ethers.Contract(contractAddress, ABI, provider);
   await runMarketplaceActivityIndexerPoll(provider, contract);
 }
