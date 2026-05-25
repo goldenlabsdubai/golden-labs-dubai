@@ -58,6 +58,10 @@ const LISTINGS_PER_PAGE = 10;
 /** Pagination state/logic stays; UI only shows the first page of listings (controls hidden). */
 const HIDE_MARKETPLACE_PAGINATION_UI = true;
 
+/** Server listings cache warm-up ~90s; countdown before prompting refresh. */
+const MARKETPLACE_CACHE_WARM_COUNTDOWN_SEC = 100;
+const MARKETPLACE_CACHE_POLL_MS = 12_000;
+
 /** Page 2+ buy buttons show a lock — only page 1 tokens can be purchased. */
 function MarketplaceBuyLockIcon({ className = "" }) {
   return (
@@ -95,6 +99,8 @@ export default function Marketplace() {
   const [listings, setListings] = useState([]);
   const [myAssets, setMyAssets] = useState([]);
   const [listingsLoading, setListingsLoading] = useState(true);
+  const [warmCountdown, setWarmCountdown] = useState(MARKETPLACE_CACHE_WARM_COUNTDOWN_SEC);
+  const [refreshingListings, setRefreshingListings] = useState(false);
   const [loadingBuy, setLoadingBuy] = useState(null);
   const [buyStep, setBuyStep] = useState(null);
   const [loadingList, setLoadingList] = useState(null);
@@ -150,15 +156,28 @@ export default function Marketplace() {
   const currentWallet = (displayAddress || user?.wallet || address || "").toString().toLowerCase();
 
   useEffect(() => setPortalReady(true), []);
-  const fetchListingsLatest = () => {
+
+  useEffect(() => {
+    setWarmCountdown(MARKETPLACE_CACHE_WARM_COUNTDOWN_SEC);
+    const id = window.setInterval(() => {
+      setWarmCountdown((prev) => (prev <= 1 ? 0 : prev - 1));
+    }, 1000);
+    return () => window.clearInterval(id);
+  }, []);
+
+  const fetchListingsLatest = (opts = {}) => {
     const reqId = ++listingsReqIdRef.current;
-    return fetch(`${API}/marketplace/listings`, { headers: token ? { Authorization: `Bearer ${token}` } : {} })
+    const qs = opts.forceRefresh ? "?refresh=1" : "";
+    return fetch(`${API}/marketplace/listings${qs}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    })
       .then((r) => r.json())
       .then((d) => {
         const incoming = d.listings || [];
         if (reqId === listingsReqIdRef.current) setListings(incoming);
+        return incoming;
       })
-      .catch(() => {});
+      .catch(() => []);
   };
 
   const fetchMyAssetsLatest = () => {
@@ -231,6 +250,13 @@ export default function Marketplace() {
       /* ignore */
     }
     setListResume(null);
+  };
+
+  const handleMarketplaceRefresh = () => {
+    setRefreshingListings(true);
+    Promise.all([fetchListingsLatest({ forceRefresh: true }), fetchMyAssetsLatest()])
+      .catch(() => {})
+      .finally(() => setRefreshingListings(false));
   };
 
   const refetchData = () => {
@@ -599,6 +625,17 @@ export default function Marketplace() {
   /** Only the first page of marketplace listings can be bought; page 2+ show a lock. */
   const buyLockedOnCurrentPage = listingsPage > 1;
 
+  const showCacheWarmCountdown = sortedListings.length === 0 && warmCountdown > 0;
+  const showCacheWarmRefresh = sortedListings.length === 0 && warmCountdown === 0;
+
+  useEffect(() => {
+    if (warmCountdown === 0 || sortedListings.length > 0) return undefined;
+    const id = window.setInterval(() => {
+      fetchListingsLatest();
+    }, MARKETPLACE_CACHE_POLL_MS);
+    return () => window.clearInterval(id);
+  }, [warmCountdown, sortedListings.length, token]);
+
   const subscriptionBg = (
     <div className="profile-modern__bg" aria-hidden="true">
       <div className="profile-modern__bg-image" />
@@ -754,15 +791,43 @@ export default function Marketplace() {
           )}
           <section className="marketplace-page__listings-section">
             <h2 className="marketplace-page__section-title">Marketplace</h2>
-          {listingsLoading ? (
-            <div className="marketplace-page__empty marketplace-page__empty--loading">
-              <div className="marketplace-page__loading-spinner" aria-hidden="true" />
-              <p>Loading listings…</p>
+          {showCacheWarmCountdown ? (
+            <div className="marketplace-page__cache-warm" role="status" aria-live="polite">
+              <p className="marketplace-page__cache-warm-title">Marketplace is loading listings</p>
+              <p className="marketplace-page__cache-warm-sub">
+                The server is building the listings cache (this can take about 90 seconds). Listings will appear
+                automatically when ready, or refresh after the timer ends.
+              </p>
+              <div className="marketplace-page__cache-warm-count" aria-label={`${warmCountdown} seconds remaining`}>
+                {warmCountdown}
+              </div>
+              <p className="marketplace-page__cache-warm-label">seconds remaining</p>
+              {listingsLoading ? (
+                <p className="marketplace-page__cache-warm-hint">Checking for listings…</p>
+              ) : null}
+            </div>
+          ) : showCacheWarmRefresh ? (
+            <div className="marketplace-page__empty marketplace-page__cache-warm-done">
+              <p className="marketplace-page__empty-text">
+                {listingsLoading || refreshingListings
+                  ? "Loading listings…"
+                  : "Cache should be ready. Refresh to load marketplace listings."}
+              </p>
+              <button
+                type="button"
+                className="marketplace-page__refresh marketplace-page__refresh--primary"
+                onClick={handleMarketplaceRefresh}
+                disabled={refreshingListings}
+              >
+                {refreshingListings ? "Refreshing…" : "Refresh listings"}
+              </button>
             </div>
           ) : filteredListings.length === 0 ? (
             <div className="marketplace-page__empty">
               <p className="marketplace-page__empty-text">No listings to show right now. Try refreshing, or list an asset from your Dashboard.</p>
-              <button type="button" className="marketplace-page__refresh" onClick={refetchData}>Refresh</button>
+              <button type="button" className="marketplace-page__refresh" onClick={handleMarketplaceRefresh}>
+                Refresh
+              </button>
             </div>
           ) : (
             <>
