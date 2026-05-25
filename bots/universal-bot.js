@@ -79,6 +79,15 @@ const RESOLVED_CHAIN_ID = (() => {
 const LOCK_TTL_MS = Number(process.env.BOT_LOCK_TTL_MS || 2 * 60 * 1000);
 const CONTROL_REFRESH_MS = Number(process.env.BOT_CONTROL_REFRESH_MS || 5000);
 const CONTROL_REQUEST_TIMEOUT_MS = Number(process.env.BOT_CONTROL_REQUEST_TIMEOUT_MS || 4000);
+/** Marketplace listings GET can be slower than bot-control; defaults to control timeout or 20s min. */
+const MARKETPLACE_LISTINGS_TIMEOUT_MS = Math.max(
+  5000,
+  Number(
+    process.env.BOT_MARKETPLACE_LISTINGS_TIMEOUT_MS ||
+      process.env.BOT_CONTROL_REQUEST_TIMEOUT_MS ||
+      20000
+  )
+);
 const BOT_CONTROL_BASE_URL = process.env.BOT_CONTROL_BASE_URL || "http://localhost:3001/api/bot-control";
 const BOT_CONTROL_API_KEY = process.env.BOT_CONTROL_API_KEY || "";
 const BOT_RECORD_PURCHASE_URL =
@@ -156,10 +165,22 @@ const POST_NFT_APPROVE_DELAY_MS =
 /** Block confirmations to wait on approve txs (1 = first receipt, 2+ = safer on reorgs). */
 const APPROVE_TX_CONFIRMATIONS = Math.max(1, Math.min(Number(process.env.BOT_APPROVE_TX_CONFIRMATIONS || 1), 32));
 const RPC_POLLING_INTERVAL_MS = Number(process.env.BOT_RPC_POLLING_INTERVAL_MS || 20000);
-const BOT_TX_GAS_GWEI = Number(process.env.BOT_TX_GAS_GWEI || 3);
+/** Only if set: fixed gwei (overrides network). Leave unset — bots use live BSC gas like the app. */
+const BOT_TX_GAS_GWEI_LEGACY = Number(process.env.BOT_TX_GAS_GWEI_LEGACY || 0);
+/** Safety cap on network gas price (gwei). Does not raise price above what the chain reports. */
+const BOT_TX_GAS_GWEI_MAX = Number(process.env.BOT_TX_GAS_GWEI_MAX || 0);
+/** Optional floor (gwei). 0 = use network only (recommended). */
+const BOT_TX_GAS_GWEI_MIN = Number(process.env.BOT_TX_GAS_GWEI_MIN || 0);
+const BOT_GAS_ESTIMATE_BUFFER_PCT = Math.max(100, Math.min(Number(process.env.BOT_GAS_ESTIMATE_BUFFER_PCT || 120), 200));
+const BOT_USDT_DECIMALS =
+  Number.parseInt(String(process.env.USDT_DECIMALS || process.env.BOT_USDT_DECIMALS || "18"), 10) || 18;
+/** Do not send approve/buy/list txs if wallet USDT is below this (platform list price is $30). */
+const BOT_MIN_USDT_BALANCE_USD = Number(process.env.BOT_MIN_USDT_BALANCE_USD || 30);
 const BOT_GAS_LIMIT_APPROVE = Number(process.env.BOT_GAS_LIMIT_APPROVE || 120000);
-const BOT_GAS_LIMIT_BUY = Number(process.env.BOT_GAS_LIMIT_BUY || 350000);
-const BOT_GAS_LIMIT_LIST = Number(process.env.BOT_GAS_LIMIT_LIST || 350000);
+const BOT_GAS_LIMIT_BUY = Number(process.env.BOT_GAS_LIMIT_BUY || 800000);
+const BOT_GAS_LIMIT_LIST = Number(process.env.BOT_GAS_LIMIT_LIST || 900000);
+const BOT_FEE_DATA_CACHE_MS = Number(process.env.BOT_FEE_DATA_CACHE_MS || 15000);
+const MAX_SAFE_TX_GAS = 12_000_000n;
 /** eth_call simulation before buy/list — avoids broadcasting txs that would revert (saves BNB). Default on. */
 const BOT_STATIC_SIMULATE =
   String(process.env.BOT_STATIC_SIMULATE ?? "true").toLowerCase() !== "false";
@@ -328,6 +349,13 @@ async function main() {
     process.exit(1);
   }
   console.log(`Bot ${botId}: marketplace listPrice=${listPriceWeiBn.toString()} wei (from chain)`);
+  const gasMode =
+    Number.isFinite(BOT_TX_GAS_GWEI_LEGACY) && BOT_TX_GAS_GWEI_LEGACY > 0
+      ? `fixed ${BOT_TX_GAS_GWEI_LEGACY} gwei (legacy)`
+      : "live network gas + estimateGas";
+  console.log(
+    `Bot ${botId}: gas=${gasMode}, min USDT=$${BOT_MIN_USDT_BALANCE_USD} before buyback txs, simulate=${BOT_STATIC_SIMULATE}`
+  );
 
   function pendingPriceMatchesRecord(meta) {
     try {
@@ -624,24 +652,136 @@ function rateLimitPauseMs(e) {
   }
 }
 
-function txOverrides(kind = "default") {
-  const base = {};
-  if (Number.isFinite(BOT_TX_GAS_GWEI) && BOT_TX_GAS_GWEI > 0) {
-    base.gasPrice = ethers.parseUnits(String(BOT_TX_GAS_GWEI), "gwei");
-  }
-  if (kind === "approve") return { ...base, gasLimit: BigInt(Math.max(50000, BOT_GAS_LIMIT_APPROVE)) };
-  if (kind === "buy") return { ...base, gasLimit: BigInt(Math.max(120000, BOT_GAS_LIMIT_BUY)) };
-  if (kind === "list") return { ...base, gasLimit: BigInt(Math.max(120000, BOT_GAS_LIMIT_LIST)) };
-  return base;
-}
+  const fallbackGasLimit = (kind) => {
+    if (kind === "approve") return BigInt(Math.max(50_000, BOT_GAS_LIMIT_APPROVE));
+    if (kind === "buy") return BigInt(Math.max(120_000, BOT_GAS_LIMIT_BUY));
+    if (kind === "list") return BigInt(Math.max(120_000, BOT_GAS_LIMIT_LIST));
+    return 200_000n;
+  };
 
-  /** eth_call — if this fails, broadcasting buy() would revert too (saves gas). */
-  async function simulateBuyCall(tokenId) {
+  let feeDataCache = { at: 0, gasPrice: null };
+
+  async function getBotGasPrice() {
+    if (Number.isFinite(BOT_TX_GAS_GWEI_LEGACY) && BOT_TX_GAS_GWEI_LEGACY > 0) {
+      return ethers.parseUnits(String(BOT_TX_GAS_GWEI_LEGACY), "gwei");
+    }
+    const now = Date.now();
+    if (feeDataCache.gasPrice != null && now - feeDataCache.at < BOT_FEE_DATA_CACHE_MS) {
+      return feeDataCache.gasPrice;
+    }
+    let gasPrice = 0n;
+    try {
+      const fd = await provider.getFeeData();
+      gasPrice = fd.gasPrice ?? 0n;
+    } catch (_) {
+      gasPrice = 0n;
+    }
+    if (gasPrice <= 0n) {
+      try {
+        gasPrice = await provider.getGasPrice();
+      } catch (_) {
+        gasPrice = 0n;
+      }
+    }
+    if (gasPrice <= 0n) gasPrice = ethers.parseUnits("0.05", "gwei");
+    gasPrice = (gasPrice * BigInt(BOT_GAS_ESTIMATE_BUFFER_PCT)) / 100n;
+    if (Number.isFinite(BOT_TX_GAS_GWEI_MAX) && BOT_TX_GAS_GWEI_MAX > 0) {
+      const maxP = ethers.parseUnits(String(BOT_TX_GAS_GWEI_MAX), "gwei");
+      if (gasPrice > maxP) gasPrice = maxP;
+    }
+    if (Number.isFinite(BOT_TX_GAS_GWEI_MIN) && BOT_TX_GAS_GWEI_MIN > 0) {
+      const minP = ethers.parseUnits(String(BOT_TX_GAS_GWEI_MIN), "gwei");
+      if (gasPrice < minP) gasPrice = minP;
+    }
+    feeDataCache = { at: now, gasPrice };
+    return gasPrice;
+  }
+
+  function botMinUsdtWei() {
+    const usd = Math.max(0, BOT_MIN_USDT_BALANCE_USD);
+    return ethers.parseUnits(String(usd), BOT_USDT_DECIMALS);
+  }
+
+  function formatUsdtWei(wei) {
+    try {
+      return Number(ethers.formatUnits(wei, BOT_USDT_DECIMALS)).toFixed(2);
+    } catch {
+      return "?";
+    }
+  }
+
+  /** View-only checks — no approve/buy/list gas if USDT below platform minimum or list price. */
+  async function canAffordBuybackTrade(priceBn) {
+    const bal = await usdt.balanceOf(wallet.address);
+    const minWei = botMinUsdtWei();
+    if (bal < minWei) {
+      console.log(
+        `Bot ${botId}: USDT $${formatUsdtWei(bal)} < $${BOT_MIN_USDT_BALANCE_USD} minimum — skip buyback (no txs, no gas)`
+      );
+      return false;
+    }
+    if (bal < priceBn) {
+      console.log(
+        `Bot ${botId}: USDT $${formatUsdtWei(bal)} < list price $${formatUsdtWei(priceBn)} — skip (no txs, no gas)`
+      );
+      return false;
+    }
+    return true;
+  }
+
+  async function estimateGasLimit(estimateFn, fallback) {
+    if (typeof estimateFn !== "function") return fallback;
+    try {
+      const est = await estimateFn();
+      if (est <= 0n || est > MAX_SAFE_TX_GAS) return fallback;
+      const buffered = (est * BigInt(BOT_GAS_ESTIMATE_BUFFER_PCT)) / 100n;
+      if (buffered > MAX_SAFE_TX_GAS) return fallback;
+      return buffered;
+    } catch {
+      return fallback;
+    }
+  }
+
+  /** Network gas price + estimateGas (same idea as frontend safeGasLimit). */
+  async function buildTxOverrides(kind, estimateFn) {
+    const gasPrice = await getBotGasPrice();
+    const gasLimit = await estimateGasLimit(estimateFn, fallbackGasLimit(kind));
+    return { gasPrice, gasLimit };
+  }
+
+  function isUsdtAllowanceRevert(e) {
+    const s = String(summarizeEthersError(e)).toLowerCase();
+    return s.includes("exceeds allowance") || s.includes("insufficient allowance");
+  }
+
+  async function nftMarketplaceCanTransfer(tokenId) {
+    try {
+      const cur = await nft.getApproved(tokenId);
+      if (String(cur).toLowerCase() === String(MARKETPLACE_ADDR).toLowerCase()) return true;
+    } catch (_) {}
+    try {
+      if (await nft.isApprovedForAll(wallet.address, MARKETPLACE_ADDR)) return true;
+    } catch (_) {}
+    return false;
+  }
+
+  /** eth_call — if this fails after USDT approve, broadcasting buy() would revert too (saves gas). */
+  async function simulateBuyCall(tokenId, priceBn) {
     if (!BOT_STATIC_SIMULATE) return true;
+    let allowance = 0n;
+    try {
+      allowance = await usdt.allowance(wallet.address, MARKETPLACE_ADDR);
+    } catch (_) {}
+    if (allowance < priceBn) {
+      return true;
+    }
     try {
       await marketplace.buy.staticCall(tokenId, ethers.ZeroAddress);
       return true;
     } catch (e) {
+      if (isUsdtAllowanceRevert(e)) {
+        return true;
+      }
       console.log(
         `Bot ${botId}: buy simulation would revert, skip token ${tokenId.toString()} — ${summarizeEthersError(e)}`
       );
@@ -651,6 +791,9 @@ function txOverrides(kind = "default") {
 
   async function simulateListCall(tokenId) {
     if (!BOT_STATIC_SIMULATE || BOT_SKIP_LIST_STATIC_SIMULATE) return true;
+    if (!(await nftMarketplaceCanTransfer(tokenId))) {
+      return true;
+    }
     try {
       await marketplace.list.staticCall(tokenId, listPriceWeiBn);
       return true;
@@ -736,13 +879,22 @@ function txOverrides(kind = "default") {
     return fetchControlGet("listing-queue");
   }
 
+  function formatFetchAbortError(e, timeoutMs) {
+    const msg = String(e?.message || e || "");
+    if (msg.toLowerCase().includes("abort")) {
+      return `timed out after ${timeoutMs}ms (increase BOT_MARKETPLACE_LISTINGS_TIMEOUT_MS or BOT_CONTROL_REQUEST_TIMEOUT_MS)`;
+    }
+    return msg;
+  }
+
   /** Public GET /api/marketplace/listings — same listedAt as dashboard (no bot-control auth). */
   async function fetchMarketplaceListingsResponse() {
     const url = resolveMarketplaceListingsUrl();
     if (!url) return null;
     const headers = { accept: "application/json" };
+    const timeoutMs = MARKETPLACE_LISTINGS_TIMEOUT_MS;
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), Math.max(1000, CONTROL_REQUEST_TIMEOUT_MS));
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
       return await fetch(url, { headers, signal: controller.signal });
     } finally {
@@ -1237,7 +1389,9 @@ function txOverrides(kind = "default") {
     try {
       res = await fetchMarketplaceListingsResponse();
     } catch (e) {
-      console.warn(`Bot ${botId}: marketplace listings fetch`, e?.message || e);
+      console.warn(
+        `Bot ${botId}: marketplace listings fetch — ${formatFetchAbortError(e, MARKETPLACE_LISTINGS_TIMEOUT_MS)}`
+      );
       return;
     }
     if (res == null) {
@@ -1452,13 +1606,9 @@ function txOverrides(kind = "default") {
       if ((listing.seller || "").toString().toLowerCase() !== sellerAddr) return;
       if (BigInt(listing.price.toString()) !== priceBn) return;
 
-      const balance = await usdt.balanceOf(wallet.address);
-      if (balance < priceBn) {
-        console.log(`Bot ${botId}: insufficient USDT, skip token ${tokenIdStr}`);
-        return;
-      }
+      if (!(await canAffordBuybackTrade(priceBn))) return;
 
-      // Re-check listing right before any tx (avoid spending gas on approve if listing is gone)
+      // Re-check listing right before any tx (view calls only)
       const listingPreApprove = await marketplace.listings(tokenId);
       if (!listingPreApprove?.active || (listingPreApprove.seller || "").toString().toLowerCase() !== sellerAddr || BigInt((listingPreApprove.price || 0).toString()) !== priceBn) {
         return;
@@ -1467,7 +1617,11 @@ function txOverrides(kind = "default") {
       let allowanceNow = await usdt.allowance(wallet.address, MARKETPLACE_ADDR);
       const needsUsdtApprove = !BOT_SKIP_USDT_APPROVE_IF_OK || allowanceNow < priceBn;
       if (needsUsdtApprove) {
-        const approveUsdtTx = await usdt.approve(MARKETPLACE_ADDR, priceBn, txOverrides("approve"));
+        const approveUsdtTx = await usdt.approve(
+          MARKETPLACE_ADDR,
+          priceBn,
+          await buildTxOverrides("approve", () => usdt.approve.estimateGas(MARKETPLACE_ADDR, priceBn))
+        );
         await approveUsdtTx.wait(APPROVE_TX_CONFIRMATIONS);
         await delayMs(POST_APPROVE_DELAY_MS);
         allowanceNow = await usdt.allowance(wallet.address, MARKETPLACE_ADDR);
@@ -1491,9 +1645,13 @@ function txOverrides(kind = "default") {
           return;
         }
         if (BigInt((live.price || 0).toString()) !== priceBn) return;
-        if (!(await simulateBuyCall(tokenId))) return;
+        if (!(await simulateBuyCall(tokenId, priceBn))) return;
         try {
-          buyTx = await marketplace.buy(tokenId, ethers.ZeroAddress, txOverrides("buy"));
+          buyTx = await marketplace.buy(
+            tokenId,
+            ethers.ZeroAddress,
+            await buildTxOverrides("buy", () => marketplace.buy.estimateGas(tokenId, ethers.ZeroAddress))
+          );
           buyReceipt = await buyTx.wait();
           break;
         } catch (e) {
@@ -1540,18 +1698,26 @@ function txOverrides(kind = "default") {
               }
             } catch (_) {}
           }
-          if (!skipNftApprove) {
-            const approveNftTx = await nft.approve(MARKETPLACE_ADDR, tokenId, txOverrides("approve"));
-            await approveNftTx.wait(APPROVE_TX_CONFIRMATIONS);
-            await delayMs(POST_NFT_APPROVE_DELAY_MS);
-          }
           if (!(await simulateListCall(tokenId))) {
             if (attempt < RELIST_AFTER_BUY_MAX_ATTEMPTS) {
               await new Promise((r) => setTimeout(r, relistRandomBackoffMs()));
             }
             continue;
           }
-          const listTx = await marketplace.list(tokenId, listPriceWeiBn, txOverrides("list"));
+          if (!skipNftApprove) {
+            const approveNftTx = await nft.approve(
+              MARKETPLACE_ADDR,
+              tokenId,
+              await buildTxOverrides("approve", () => nft.approve.estimateGas(MARKETPLACE_ADDR, tokenId))
+            );
+            await approveNftTx.wait(APPROVE_TX_CONFIRMATIONS);
+            await delayMs(POST_NFT_APPROVE_DELAY_MS);
+          }
+          const listTx = await marketplace.list(
+            tokenId,
+            listPriceWeiBn,
+            await buildTxOverrides("list", () => marketplace.list.estimateGas(tokenId, listPriceWeiBn))
+          );
           await listTx.wait();
           relistOk = true;
           console.log(`Bot ${botId}: relisted token ${tokenIdStr} at $30 (attempt ${attempt})`);
@@ -1616,14 +1782,23 @@ function txOverrides(kind = "default") {
           }
         } catch (_) {}
       }
+      if (!(await simulateListCall(tokenId))) return false;
+
       if (!skipNftApprove) {
-        const approveTx = await nft.approve(MARKETPLACE_ADDR, tokenId, txOverrides("approve"));
+        const approveTx = await nft.approve(
+          MARKETPLACE_ADDR,
+          tokenId,
+          await buildTxOverrides("approve", () => nft.approve.estimateGas(MARKETPLACE_ADDR, tokenId))
+        );
         await approveTx.wait(APPROVE_TX_CONFIRMATIONS);
         await delayMs(POST_NFT_APPROVE_DELAY_MS);
       }
-      if (!(await simulateListCall(tokenId))) return false;
 
-      const listTx = await marketplace.list(tokenId, listPriceWeiBn, txOverrides("list"));
+      const listTx = await marketplace.list(
+        tokenId,
+        listPriceWeiBn,
+        await buildTxOverrides("list", () => marketplace.list.estimateGas(tokenId, listPriceWeiBn))
+      );
       await listTx.wait();
       console.log(`Bot ${botId}: relisted held token ${tokenIdStr} (${source})`);
       return true;

@@ -37,6 +37,23 @@
 | `BOT_POST_APPROVE_DELAY_MS` | `2000` | Pause (ms) after USDT approve is confirmed, before `buy` |
 | `BOT_POST_NFT_APPROVE_DELAY_MS` | same as USDT | Pause (ms) after NFT approve is confirmed, before `list` |
 
+## Gas fees (why bots used more BNB than users)
+
+Users (MetaMask) pay **live BSC gas price** (~0.05–1 gwei) + **estimated gas used**. Bots previously used a **fixed 3 gwei** (`BOT_TX_GAS_GWEI=3`), which can be **10–60× higher** than the network — so the same `buy`/`list` cost much more in BNB.
+
+Bots also send **more transactions per buyback**: USDT approve (if needed) → buy → NFT approve → list (up to **4 txs** vs a user buy of approve + buy = **2 txs**).
+
+**Now (default):** `buildTxOverrides` uses `provider.getFeeData()` + `estimateGas` (capped by `BOT_TX_GAS_GWEI_MAX`, default **1 gwei**). To restore old behavior: `BOT_TX_GAS_GWEI_LEGACY=3`.
+
+| Var | Default | Purpose |
+|-----|---------|--------|
+| `BOT_TX_GAS_GWEI_LEGACY` | off | Fixed gwei; leave unset — use live network gas |
+| `BOT_TX_GAS_GWEI_MAX` | 0 | Optional cap (gwei); 0 = no cap, use RPC price only |
+| `BOT_TX_GAS_GWEI_MIN` | 0 | Optional floor; 0 = no floor |
+| `BOT_GAS_ESTIMATE_BUFFER_PCT` | 120 | Buffer on `estimateGas` (like frontend 120%) |
+| `BOT_MIN_USDT_BALANCE_USD` | 30 | No approve/buy/list if wallet USDT below this (no wasted gas) |
+| `BOT_STATIC_SIMULATE` | true | `staticCall` before real approve/buy/list txs |
+
 ## Saving BNB on gas (failed txs)
 
 1. **Simulation (default on)** — `BOT_STATIC_SIMULATE=true` runs `buy` / `list` as `staticCall` first. If it would revert (not subscribed, suspended, bad state), the bot **does not** send a real tx.
