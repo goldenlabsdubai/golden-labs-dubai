@@ -322,151 +322,226 @@ async function collectChainOwnedOrListedTokenIds(wallet, provider, nftAddr, mark
   return found;
 }
 
-// My assets: Postgres + transfer discover + on-chain scan; enrich with ownerOf/listing; strict — sold NFTs drop off.
+const NFT_BALANCE_ABI = ["function balanceOf(address owner) view returns (uint256)"];
+
+async function readWalletNftBalance(provider, nftAddr, wallet) {
+  try {
+    const bal = await readWithRetry(
+      () => new ethers.Contract(nftAddr, NFT_BALANCE_ABI, provider).balanceOf(wallet),
+      null,
+      2,
+      8000
+    );
+    if (bal == null) return null;
+    return Number(bal);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Enrich one tokenId for /my-assets. Returns null if sold; keeps row on RPC failure (do not purge DB).
+ */
+async function enrichWalletTokenAsset({
+  wallet,
+  tokenId,
+  nftContract,
+  marketContract,
+  listPriceWei,
+  listPriceUsdt,
+  ownerRetries,
+  ownerTimeoutMs,
+}) {
+  const [owner, listing, saleCount, tokenURI] = await Promise.all([
+    readWithRetry(
+      () =>
+        nftContract
+          .ownerOf(tokenId)
+          .then((o) => String(o || "").toLowerCase())
+          .catch(() => null),
+      null,
+      ownerRetries,
+      ownerTimeoutMs
+    ),
+    readWithRetry(
+      () =>
+        marketContract
+          .listings(tokenId)
+          .then((l) => ({
+            active: !!l?.[3],
+            seller: String(l?.[0] ?? "").toLowerCase(),
+            price: l?.[2],
+          })),
+      { active: false, seller: "", price: null },
+      3,
+      ownerTimeoutMs
+    ),
+    readWithRetry(
+      () => marketContract.saleCount(tokenId).then((c) => (c != null ? Number(c) : null)),
+      null,
+      2,
+      ownerTimeoutMs
+    ),
+    readWithRetry(() => nftContract.tokenURI(tokenId), "", 2, ownerTimeoutMs),
+  ]);
+
+  const ownerLower = owner == null ? "" : String(owner).toLowerCase();
+  const inWallet = ownerLower && ownerLower === wallet;
+  const isListedByMe = listing.active && listing.seller === wallet;
+
+  if (!inWallet && !isListedByMe) {
+    if (ownerLower) User.removeOwnedTokenId(wallet, tokenId).catch(() => {});
+    return null;
+  }
+  if (!inWallet && isListedByMe && owner == null) {
+    return {
+      tokenId: String(tokenId),
+      saleCount: saleCount == null ? undefined : saleCount,
+      listPriceUsdt,
+      listPriceWei,
+      isListed: true,
+      price: listing.price != null ? String(listing.price) : listPriceWei,
+      tokenURI: ensureMetadataUri(tokenURI, tokenId),
+    };
+  }
+
+  const uri = ensureMetadataUri(tokenURI, tokenId);
+  return {
+    tokenId: String(tokenId),
+    saleCount: saleCount == null ? undefined : saleCount,
+    listPriceUsdt,
+    listPriceWei,
+    isListed: isListedByMe,
+    price: listing.price != null ? String(listing.price) : listPriceWei,
+    tokenURI: uri,
+  };
+}
+
+// My assets: Postgres + Transfer logs + optional chain scan; enrich per token (RPC-safe).
 router.get("/my-assets", async (req, res) => {
   try {
     const wallet = await getWalletForRequest(req);
-    if (!wallet || !wallet.startsWith("0x")) return res.json({ assets: [] });
+    if (!wallet || !wallet.startsWith("0x")) return res.json({ assets: [], complete: true });
 
     const marketAddr = (getMarketplaceAndReservePoolAddress() || "").trim();
     const nftAddr = (process.env.NFT_CONTRACT_ADDRESS || "").trim();
-    if (!marketAddr || !nftAddr) return res.json({ assets: [] });
+    if (!marketAddr || !nftAddr) return res.json({ assets: [], complete: true });
 
     const provider = getProvider();
     let ownedTokenIds = await User.getOwnedTokenIds(wallet);
     if (!Array.isArray(ownedTokenIds)) ownedTokenIds = [];
 
-    const nftBalAbi = ["function balanceOf(address owner) view returns (uint256)"];
-    const alwaysDiscover = String(process.env.MY_ASSETS_ALWAYS_DISCOVER || "").toLowerCase() === "true";
-    const shouldRunTransferDiscover = ownedTokenIds.length === 0 || alwaysDiscover;
+    const walletNftBalance = await readWalletNftBalance(provider, nftAddr, wallet);
+    const alwaysDiscover = String(process.env.MY_ASSETS_ALWAYS_DISCOVER || "true").toLowerCase() !== "false";
+    const needsTransferDiscover =
+      alwaysDiscover ||
+      ownedTokenIds.length === 0 ||
+      (walletNftBalance != null && ownedTokenIds.length < walletNftBalance);
 
-    // Self-heal: mint confirm may have failed to write Postgres — discover Transfer→wallet and merge.
-    if (shouldRunTransferDiscover) {
-      let mightHaveNft = ownedTokenIds.length === 0 || alwaysDiscover;
-      if (ownedTokenIds.length === 0) {
+    if (needsTransferDiscover && (walletNftBalance == null || walletNftBalance > 0)) {
+      const discovered = await discoverTokenIdsFromIncomingTransfers(provider, nftAddr, wallet);
+      for (const tid of discovered) {
         try {
-          const bal = await readWithRetry(
-            () =>
-              new ethers.Contract(nftAddr, nftBalAbi, provider)
-                .balanceOf(wallet)
-                .then((b) => b),
-            0n,
-            2,
-            8000
-          );
-          if (bal === 0n) mightHaveNft = false;
-        } catch (_) {
-          mightHaveNft = true;
-        }
+          await User.addOwnedTokenId(wallet, tid);
+        } catch (_) {}
       }
-      if (mightHaveNft) {
-        const discovered = await discoverTokenIdsFromIncomingTransfers(provider, nftAddr, wallet);
-        for (const tid of discovered) {
+      if (discovered.length > 0) {
+        ownedTokenIds = await User.getOwnedTokenIds(wallet);
+      }
+    }
+
+    const tokenIdSet = new Set((ownedTokenIds || []).map((t) => String(t)));
+    const fullChainScan = String(process.env.MY_ASSETS_FULL_CHAIN_SCAN || "").toLowerCase() === "true";
+    const needChainScan =
+      fullChainScan || (walletNftBalance != null && tokenIdSet.size < walletNftBalance);
+
+    let totalMinted = 0;
+    if (needChainScan) {
+      try {
+        const nftMini = new ethers.Contract(nftAddr, ["function totalMinted() view returns (uint256)"], provider);
+        totalMinted = Number(await readWithRetry(() => nftMini.totalMinted(), 0, 2, 8000));
+      } catch (_) {}
+    }
+
+    if (needChainScan && Number.isFinite(totalMinted) && totalMinted > 0) {
+      try {
+        const chainIdSet = await collectChainOwnedOrListedTokenIds(
+          wallet,
+          provider,
+          nftAddr,
+          marketAddr,
+          totalMinted
+        );
+        for (const tid of chainIdSet) {
+          tokenIdSet.add(String(tid));
           try {
             await User.addOwnedTokenId(wallet, tid);
           } catch (_) {}
         }
-        if (discovered.length > 0) {
-          ownedTokenIds = await User.getOwnedTokenIds(wallet);
-        }
-      }
-    }
-
-    let totalMinted = 0;
-    try {
-      const nftMini = new ethers.Contract(nftAddr, ["function totalMinted() view returns (uint256)"], provider);
-      totalMinted = Number(await readWithRetry(() => nftMini.totalMinted(), 0, 2, 8000));
-    } catch (_) {}
-
-    let chainIdSet = new Set();
-    if (Number.isFinite(totalMinted) && totalMinted > 0) {
-      try {
-        chainIdSet = await collectChainOwnedOrListedTokenIds(wallet, provider, nftAddr, marketAddr, totalMinted);
       } catch (e) {
         console.warn("my-assets chain scan:", e?.message || e);
       }
     }
 
-    const tokens = [
-      ...new Set([...(ownedTokenIds || []).map((t) => String(t)), ...chainIdSet]),
-    ]
+    const tokens = [...tokenIdSet]
       .map((t) => Number(t))
       .filter((n) => Number.isFinite(n) && n > 0)
       .sort((a, b) => a - b);
 
-    if (tokens.length === 0) return res.json({ assets: [] });
+    if (tokens.length === 0) {
+      return res.json({
+        assets: [],
+        complete: walletNftBalance == null || walletNftBalance === 0,
+        walletNftBalance: walletNftBalance ?? undefined,
+      });
+    }
 
     const nftContract = new ethers.Contract(nftAddr, NFT_VIEW_ABI, provider);
     const marketContract = new ethers.Contract(marketAddr, MARKETPLACE_ABI, provider);
     const { listPriceWei, listPriceUsdt } = await getConfiguredMarketplaceListPrice(marketContract);
 
-    const BATCH = 25;
     const assets = [];
     const ownerRetries = Math.max(2, Math.min(Number(process.env.MY_ASSETS_OWNER_RETRY || 5), 8));
     const ownerTimeoutMs = Math.max(5000, Math.min(Number(process.env.MY_ASSETS_OWNER_TIMEOUT_MS || 12000), 45000));
+    const enrichConcurrency = Math.max(
+      1,
+      Math.min(Number(process.env.MY_ASSETS_ENRICH_CONCURRENCY || 3), 8)
+    );
+    const enrichGapMs = Math.max(0, Number(process.env.MY_ASSETS_ENRICH_GAP_MS || 40));
 
-    for (let start = 0; start < tokens.length; start += BATCH) {
-      const slice = tokens.slice(start, start + BATCH);
-      const promises = slice.map((tokenId) =>
-        Promise.all([
-          readWithRetry(
-            () =>
-              nftContract
-                .ownerOf(tokenId)
-                .then((o) => String(o || "").toLowerCase())
-                .catch(() => ""),
-            "",
-            ownerRetries,
-            ownerTimeoutMs
-          ),
-          readWithRetry(
-            () =>
-              marketContract
-                .listings(tokenId)
-                .then((l) => ({
-                  active: !!l?.[3],
-                  seller: String(l?.[0] ?? "").toLowerCase(),
-                  price: l?.[2],
-                })),
-            { active: false, seller: "", price: null },
-            3,
-            ownerTimeoutMs
-          ),
-          readWithRetry(
-            () => marketContract.saleCount(tokenId).then((c) => (c != null ? Number(c) : null)),
-            null,
-            2,
-            ownerTimeoutMs
-          ),
-          readWithRetry(() => nftContract.tokenURI(tokenId), "", 2, ownerTimeoutMs),
-        ]).then(([owner, listing, saleCount, tokenURI]) => {
-          const ownerLower = (owner || "").toLowerCase();
-          const inWallet = ownerLower && ownerLower === wallet;
-          const isListedByMe = listing.active && listing.seller === wallet;
-          // Strict: only show if we still hold the NFT or we are the active seller (escrow). No DB ghost rows.
-          if (!inWallet && !isListedByMe) {
-            if (ownerLower) User.removeOwnedTokenId(wallet, tokenId).catch(() => {});
-            return null;
-          }
-          const uri = ensureMetadataUri(tokenURI, tokenId);
-          return {
-            tokenId: String(tokenId),
-            saleCount: saleCount == null ? undefined : saleCount,
-            listPriceUsdt,
+    for (let start = 0; start < tokens.length; start += enrichConcurrency) {
+      const slice = tokens.slice(start, start + enrichConcurrency);
+      const batch = await Promise.all(
+        slice.map((tokenId) =>
+          enrichWalletTokenAsset({
+            wallet,
+            tokenId,
+            nftContract,
+            marketContract,
             listPriceWei,
-            isListed: isListedByMe,
-            price: listing.price != null ? String(listing.price) : listPriceWei,
-            tokenURI: uri,
-          };
-        })
+            listPriceUsdt,
+            ownerRetries,
+            ownerTimeoutMs,
+          })
+        )
       );
-      const batch = await Promise.all(promises);
       batch.forEach((a) => {
         if (a) assets.push(a);
       });
+      if (enrichGapMs > 0 && start + enrichConcurrency < tokens.length) {
+        await new Promise((r) => setTimeout(r, enrichGapMs));
+      }
     }
 
-    res.json({ assets });
+    const complete =
+      walletNftBalance == null || assets.length >= walletNftBalance || !needChainScan;
+
+    res.json({
+      assets,
+      complete,
+      walletNftBalance: walletNftBalance ?? undefined,
+      tokenIdsChecked: tokens.length,
+    });
   } catch (e) {
     console.error("my-assets error:", e?.message || e);
     res.status(500).json({ error: e?.message || "Failed to load your assets" });
