@@ -167,7 +167,11 @@ export default function Marketplace() {
       return Promise.resolve();
     }
     const reqId = ++assetsReqIdRef.current;
-    return fetchMyAssetsWithRetry(token, user?.state)
+    return fetchMyAssetsWithRetry(token, user?.state, {
+      onProgress: (assets) => {
+        if (reqId === assetsReqIdRef.current) setMyAssets(assets);
+      },
+    })
       .then((assets) => {
         if (reqId === assetsReqIdRef.current) setMyAssets(assets);
       })

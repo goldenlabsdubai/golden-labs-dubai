@@ -188,7 +188,11 @@ export default function Dashboard() {
     }
     let cancelled = false;
     setOwnedAssetsLoading(true);
-    fetchMyAssetsWithRetry(token, user?.state)
+    fetchMyAssetsWithRetry(token, user?.state, {
+      onProgress: (assets) => {
+        if (!cancelled) setMyAssets(assets);
+      },
+    })
       .then((assets) => {
         if (!cancelled) setMyAssets(assets);
       })
@@ -267,7 +271,9 @@ export default function Dashboard() {
       .then((r) => r.json())
       .then((d) => setListings(d.listings || []))
       .catch(() => {});
-    fetchMyAssetsWithRetry(token, user?.state)
+    fetchMyAssetsWithRetry(token, user?.state, {
+      onProgress: (assets) => setMyAssets(assets),
+    })
       .then((assets) => setMyAssets(assets))
       .catch(() => {})
       .finally(() => setOwnedAssetsLoading(false));
