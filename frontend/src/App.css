@@ -6154,6 +6154,10 @@ div.marketplace-page__nav-profile.marketplace-page__profile-icon-btn {
   gap: 1rem;
 }
 
+.marketplace-page__pagination--hidden {
+  display: none !important;
+}
+
 .marketplace-page__pagination {
   display: flex;
   align-items: center;

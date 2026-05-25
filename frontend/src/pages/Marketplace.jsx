@@ -55,6 +55,9 @@ const LIST_RESUME_KEY = "gl_mp_list_resume";
 const LIST_RESUME_TTL_MS = 45 * 60 * 1000;
 const LISTINGS_PER_PAGE = 10;
 
+/** Pagination state/logic stays; UI only shows the first page of listings (controls hidden). */
+const HIDE_MARKETPLACE_PAGINATION_UI = true;
+
 /** Page 2+ buy buttons show a lock — only page 1 tokens can be purchased. */
 function MarketplaceBuyLockIcon({ className = "" }) {
   return (
@@ -573,6 +576,10 @@ export default function Marketplace() {
     listingsPage * LISTINGS_PER_PAGE
   );
 
+  const displayListings = HIDE_MARKETPLACE_PAGINATION_UI
+    ? sortedListings.slice(0, LISTINGS_PER_PAGE)
+    : paginatedListings;
+
   useEffect(() => {
     if (listingsPage > totalListingsPages) setListingsPage(totalListingsPages);
   }, [listingsPage, totalListingsPages]);
@@ -756,7 +763,7 @@ export default function Marketplace() {
           ) : (
             <>
             <div className="profile-hub__grid marketplace-page__grid marketplace-page__grid--grid-5">
-              {paginatedListings.map((l) => {
+              {displayListings.map((l) => {
                 const isMyListing = currentWallet && (String(l.seller || "").toLowerCase() === currentWallet);
                 return (
                 <div key={l.tokenId} className="profile-hub__nft-card">
@@ -833,7 +840,11 @@ export default function Marketplace() {
               })}
             </div>
             {totalListingsPages > 1 && (
-              <nav className="marketplace-page__pagination" aria-label="Marketplace pages">
+              <nav
+                className={`marketplace-page__pagination${HIDE_MARKETPLACE_PAGINATION_UI ? " marketplace-page__pagination--hidden" : ""}`}
+                aria-label="Marketplace pages"
+                aria-hidden={HIDE_MARKETPLACE_PAGINATION_UI ? true : undefined}
+              >
                 <button
                   type="button"
                   className="marketplace-page__page-btn"
