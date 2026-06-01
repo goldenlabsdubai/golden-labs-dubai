@@ -93,6 +93,13 @@ const BOT_CONTROL_API_KEY = process.env.BOT_CONTROL_API_KEY || "";
 const BOT_RECORD_PURCHASE_URL =
   process.env.BOT_RECORD_PURCHASE_URL || "http://127.0.0.1:3001/api/marketplace/record-purchase";
 const USER_LISTINGS_CACHE_MS = Number(process.env.BOT_USER_LISTINGS_CACHE_MS || 10000);
+/** Pause member buyback while marketplace-listed dynamic mint supply is still for sale. */
+const PAUSE_USER_BUYBACK_WHILE_MARKET_SUPPLY =
+  String(process.env.BOT_PAUSE_USER_BUYBACK_WHILE_MARKET_SUPPLY ?? "true").toLowerCase() !== "false";
+const MARKET_SUPPLY_CHECK_MS = Math.max(
+  8000,
+  Number(process.env.BOT_MARKET_SUPPLY_CHECK_MS || USER_LISTINGS_CACHE_MS)
+);
 const ACTIVE_SCAN_BATCH_SIZE = Number(process.env.BOT_ACTIVE_SCAN_BATCH_SIZE || 40);
 /** Fallback full sweep interval (safety net if events missed). Default 5 min — primary timing uses oldest-list + internal wait. */
 const USER_BUYBACK_SAFETY_SWEEP_MS = Number(process.env.BOT_USER_BUYBACK_SAFETY_SWEEP_MS || 300000);
@@ -198,6 +205,8 @@ const LISTING_TIMESTAMPS_FILE = path.join(__dirname, ".bot-listing-timestamps.js
 const PENDING_USER_LISTINGS_FILE = path.join(__dirname, ".bot-pending-user-listings.json");
 /** Last block scanned for Listed/Sold/ListingCancelled — shared so listener handoff does not skip logs. */
 const LISTENER_CURSOR_FILE = path.join(__dirname, ".bot-listener-cursor.json");
+/** Shared: true while marketplace contract still has active dynamic-mint listings (pause user buyback). */
+const MARKETPLACE_SUPPLY_STATE_FILE = path.join(__dirname, ".bot-marketplace-supply-active.json");
 
 function resolveBotId() {
   const argRaw = (process.argv[2] || "").trim();
@@ -354,7 +363,8 @@ async function main() {
       ? `fixed ${BOT_TX_GAS_GWEI_LEGACY} gwei (legacy)`
       : "live network gas + estimateGas";
   console.log(
-    `Bot ${botId}: gas=${gasMode}, min USDT=$${BOT_MIN_USDT_BALANCE_USD} before buyback txs, simulate=${BOT_STATIC_SIMULATE}`
+    `Bot ${botId}: gas=${gasMode}, min USDT=$${BOT_MIN_USDT_BALANCE_USD} before buyback txs, simulate=${BOT_STATIC_SIMULATE}, ` +
+      `pauseUserBuybackWhileMarketSupply=${PAUSE_USER_BUYBACK_WHILE_MARKET_SUPPLY}`
   );
 
   function pendingPriceMatchesRecord(meta) {
@@ -393,6 +403,84 @@ async function main() {
   let userBuybackGeneration = 0;
   /** Last block fully scanned for Listed logs (getLogs polling; avoids contract.on filter RPC spam). */
   let lastListedBlockScanned = null;
+  let cachedMarketplaceSupplyActive = false;
+  let lastMarketSupplyCheckAt = 0;
+  let lastMarketSupplyPauseLogAt = 0;
+
+  function isMarketplaceSupplyListing(item) {
+    const seller = String(item?.seller ?? item ?? "").toLowerCase();
+    const tier = String(item?.listingTier ?? "").toLowerCase();
+    return !!(marketLc && (seller === marketLc || tier === "dynamic"));
+  }
+
+  function setMarketplaceSupplyActive(active) {
+    cachedMarketplaceSupplyActive = !!active;
+    lastMarketSupplyCheckAt = Date.now();
+    writeMarketplaceSupplyStateFile(cachedMarketplaceSupplyActive);
+  }
+
+  function invalidateMarketplaceSupplyCache() {
+    lastMarketSupplyCheckAt = 0;
+  }
+
+  async function scanChainForActiveMarketplaceListing() {
+    if (!marketLc) return false;
+    const totalMinted = await getTotalMintedSafe();
+    if (!Number.isFinite(totalMinted) || totalMinted <= 0) return false;
+    const batchSize = Math.max(1, Math.min(ACTIVE_SCAN_BATCH_SIZE, 200));
+    for (let start = 1; start <= totalMinted; start += batchSize) {
+      const end = Math.min(totalMinted, start + batchSize - 1);
+      const chunk = await Promise.all(
+        Array.from({ length: end - start + 1 }, (_, idx) => start + idx).map((tokenId) =>
+          marketplace
+            .listings(tokenId)
+            .then((l) => ({
+              active: Boolean(l?.active ?? l?.[3]),
+              seller: (l?.seller || l?.[0] || "").toString().toLowerCase(),
+            }))
+            .catch(() => null)
+        )
+      );
+      for (const row of chunk) {
+        if (row?.active && row.seller === marketLc) return true;
+      }
+    }
+    return false;
+  }
+
+  /** True when dynamic mint is listed by marketplace contract and not sold yet — bots wait before user buyback. */
+  async function hasActiveMarketplaceSupplyListings(force = false) {
+    if (!PAUSE_USER_BUYBACK_WHILE_MARKET_SUPPLY || !marketLc) return false;
+    const now = Date.now();
+    if (!force && now - lastMarketSupplyCheckAt < MARKET_SUPPLY_CHECK_MS) {
+      return cachedMarketplaceSupplyActive;
+    }
+    const disk = readMarketplaceSupplyStateFile();
+    if (!force && disk.at && now - disk.at < MARKET_SUPPLY_CHECK_MS) {
+      cachedMarketplaceSupplyActive = disk.active;
+      lastMarketSupplyCheckAt = now;
+      return disk.active;
+    }
+    lastMarketSupplyCheckAt = now;
+    try {
+      if (USE_MARKETPLACE_LISTINGS_API) {
+        const res = await fetchMarketplaceListingsResponse();
+        if (res?.ok) {
+          const data = await res.json();
+          const raw = Array.isArray(data?.listings) ? data.listings : [];
+          const active = raw.some((it) => isMarketplaceSupplyListing(it));
+          setMarketplaceSupplyActive(active);
+          return active;
+        }
+      }
+      const active = await scanChainForActiveMarketplaceListing();
+      setMarketplaceSupplyActive(active);
+      return active;
+    } catch (e) {
+      console.warn(`Bot ${botId}: marketplace supply check`, e?.message || e);
+      return cachedMarketplaceSupplyActive;
+    }
+  }
 
   async function getListingListedAtMs(tokenId) {
     try {
@@ -546,6 +634,22 @@ function writeListenerCursorBlock(blockNumber) {
     const n = Math.floor(Number(blockNumber));
     if (!Number.isFinite(n) || n < 0) return;
     fs.writeFileSync(LISTENER_CURSOR_FILE, JSON.stringify({ lastListedBlockScanned: n }, null, 2));
+  } catch (_) {}
+}
+
+function readMarketplaceSupplyStateFile() {
+  try {
+    if (!fs.existsSync(MARKETPLACE_SUPPLY_STATE_FILE)) return { active: false, at: 0 };
+    const j = JSON.parse(fs.readFileSync(MARKETPLACE_SUPPLY_STATE_FILE, "utf8"));
+    return { active: !!j.active, at: Number(j.at) || 0 };
+  } catch {
+    return { active: false, at: 0 };
+  }
+}
+
+function writeMarketplaceSupplyStateFile(active) {
+  try {
+    fs.writeFileSync(MARKETPLACE_SUPPLY_STATE_FILE, JSON.stringify({ active: !!active, at: Date.now() }));
   } catch (_) {}
 }
 
@@ -1191,6 +1295,18 @@ function rateLimitPauseMs(e) {
       if (!enabled) return;
       if (myGen !== userBuybackGeneration) return;
 
+      if (await hasActiveMarketplaceSupplyListings()) {
+        const now = Date.now();
+        if (now - lastMarketSupplyPauseLogAt >= 60_000) {
+          lastMarketSupplyPauseLogAt = now;
+          console.log(
+            `Bot ${botId}: marketplace dynamic supply still listed — pause user buyback until sold`
+          );
+        }
+        idleNoListings = true;
+        return;
+      }
+
       let runningForSlots = await getRunningBotIdsFromAdmin();
       if (!runningForSlots.length) {
         runningForSlots = [...configuredBotIdsWithKeys()].sort((a, b) => Number(a) - Number(b));
@@ -1296,7 +1412,12 @@ function rateLimitPauseMs(e) {
       if (!enabled) return;
       const sellerAddr = (seller || "").toString().toLowerCase();
       const isUserListing = sellerAddr && sellerAddr !== marketLc && !knownBotWallets.has(sellerAddr);
-      if (!isUserListing) return;
+      if (!isUserListing) {
+        if (marketLc && sellerAddr === marketLc) {
+          setMarketplaceSupplyActive(true);
+        }
+        return;
+      }
       const tid = tokenId.toString();
       let tsMs = Date.now();
       try {
@@ -1412,6 +1533,7 @@ function rateLimitPauseMs(e) {
       }
       const data = await res.json();
       const raw = Array.isArray(data?.listings) ? data.listings : [];
+      setMarketplaceSupplyActive(raw.some((it) => isMarketplaceSupplyListing(it)));
       const next = {};
       for (const it of raw) {
         const tier = String(it?.listingTier || "").toLowerCase();
@@ -1524,6 +1646,10 @@ function rateLimitPauseMs(e) {
               const st = ev.args?.tokenId ?? ev.args?.[0];
               if (st != null) prunePendingKey(st.toString());
             }
+            if (soldEvs.length > 0) {
+              invalidateMarketplaceSupplyCache();
+              kickUserBuybackRescan();
+            }
           } catch (e) {
             if (!isRateLimitError(e)) {
               console.warn(`Bot ${botId}: Sold getLogs [${chunkFrom}-${to}]`, formatEthersErrorForLog(e));
@@ -1571,6 +1697,10 @@ function rateLimitPauseMs(e) {
     // Buyback targets member listings only — not dynamic mint (seller = marketplace contract).
     if (marketLc && sellerAddr === marketLc) return;
     if (priceBn !== listPriceWeiBn) return;
+
+    if (!sellerIsBot && (await hasActiveMarketplaceSupplyListings())) {
+      return;
+    }
 
     const eligible = await ensureBotTraderEligibility();
     if (!eligible) return; // skip without logging every time; already logged at startup
