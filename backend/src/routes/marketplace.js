@@ -144,11 +144,45 @@ async function readWithRetry(fn, fallback, retries = 2, timeoutMs = 7000) {
   return fallback;
 }
 
-const NFT_TRANSFER_EVENT_ABI = ["event Transfer(address indexed from, address indexed to, uint256 indexed tokenId)"];
+const NFT_DISCOVERY_ABI = [
+  "event Minted(address indexed to, uint256 tokenId, uint256 amount)",
+  "event Transfer(address indexed from, address indexed to, uint256 indexed tokenId)",
+];
+
+function getTransferLookbackBlocks() {
+  return Math.max(
+    50_000,
+    Math.min(Number(process.env.MY_ASSETS_TRANSFER_LOOKBACK_BLOCKS || 6_000_000), 30_000_000)
+  );
+}
+
+function getLogChunkBlocks() {
+  return Math.max(25_000, Math.min(Number(process.env.MY_ASSETS_TRANSFER_LOG_CHUNK_BLOCKS || 400_000), 2_000_000));
+}
+
+/** Chunked eth_getLogs — avoids rate limits / truncated responses on free BSC RPC. */
+async function queryFilterChunked(contract, filter, fromBlock, latest, chunkBlocks) {
+  const ids = new Set();
+  const chunk = Math.max(10_000, chunkBlocks);
+  for (let from = fromBlock; from <= latest; from += chunk) {
+    const to = Math.min(from + chunk - 1, latest);
+    try {
+      const events = await contract.queryFilter(filter, from, to);
+      for (const e of events) {
+        const tid = e.args?.tokenId ?? e.args?.[1];
+        if (tid == null) continue;
+        ids.add(typeof tid === "bigint" ? tid.toString() : String(tid));
+      }
+    } catch (e) {
+      console.warn(`my-assets getLogs [${from}-${to}]:`, e?.message || e);
+    }
+    await new Promise((r) => setTimeout(r, Math.max(0, Number(process.env.MY_ASSETS_LOG_CHUNK_DELAY_MS || 60))));
+  }
+  return ids;
+}
 
 /**
- * Find token IDs ever transferred TO `wallet` (helps when `owned_token_ids` in Postgres was never set after mint).
- * Bounded lookback to avoid huge eth_getLogs on public RPCs.
+ * Token IDs minted or transferred TO `wallet` (Postgres + buy paths sometimes miss one id).
  */
 async function discoverTokenIdsFromIncomingTransfers(provider, nftAddress, wallet) {
   const w = (wallet || "").trim();
@@ -160,22 +194,25 @@ async function discoverTokenIdsFromIncomingTransfers(provider, nftAddress, walle
     return [];
   }
   try {
-    const c = new ethers.Contract(nftAddress, NFT_TRANSFER_EVENT_ABI, provider);
+    const c = new ethers.Contract(nftAddress, NFT_DISCOVERY_ABI, provider);
     const latest = await provider.getBlockNumber();
-    const lookback = Math.max(
-      50_000,
-      Math.min(Number(process.env.MY_ASSETS_TRANSFER_LOOKBACK_BLOCKS || 6_000_000), 30_000_000)
+    const fromBlock = Math.max(0, latest - getTransferLookbackBlocks());
+    const chunkBlocks = getLogChunkBlocks();
+    const transferIds = await queryFilterChunked(
+      c,
+      c.filters.Transfer(null, checksummed, null),
+      fromBlock,
+      latest,
+      chunkBlocks
     );
-    const fromBlock = Math.max(0, latest - lookback);
-    const filter = c.filters.Transfer(null, checksummed, null);
-    const events = await c.queryFilter(filter, fromBlock, latest);
-    const ids = new Set();
-    for (const e of events) {
-      const tid = e.args?.tokenId;
-      if (tid == null) continue;
-      ids.add(typeof tid === "bigint" ? tid.toString() : String(tid));
-    }
-    return [...ids];
+    const mintedIds = await queryFilterChunked(
+      c,
+      c.filters.Minted(checksummed, null),
+      fromBlock,
+      latest,
+      chunkBlocks
+    );
+    return [...new Set([...transferIds, ...mintedIds])];
   } catch (e) {
     console.warn("discoverTokenIdsFromIncomingTransfers:", e?.message || e);
     return [];
@@ -311,6 +348,7 @@ async function collectChainOwnedOrListedTokenIds(wallet, provider, nftAddr, mark
             8000
           ),
         ]).then(([owner, listing]) => {
+          if (owner == null) return;
           const inWallet = owner === wallet;
           const isListedByMe = listing.active && listing.seller === wallet;
           if (inWallet || isListedByMe) found.add(String(tokenId));
@@ -390,6 +428,19 @@ async function enrichWalletTokenAsset({
   const isListedByMe = listing.active && listing.seller === wallet;
 
   if (!inWallet && !isListedByMe) {
+    if (owner == null) {
+      const uri = ensureMetadataUri(tokenURI, tokenId);
+      return {
+        tokenId: String(tokenId),
+        saleCount: saleCount == null ? undefined : saleCount,
+        listPriceUsdt,
+        listPriceWei,
+        isListed: false,
+        price: listPriceWei,
+        tokenURI: uri,
+        ownerUnverified: true,
+      };
+    }
     if (ownerLower) User.removeOwnedTokenId(wallet, tokenId).catch(() => {});
     return null;
   }
@@ -505,42 +556,108 @@ router.get("/my-assets", async (req, res) => {
     const ownerTimeoutMs = Math.max(5000, Math.min(Number(process.env.MY_ASSETS_OWNER_TIMEOUT_MS || 12000), 45000));
     const enrichConcurrency = Math.max(
       1,
-      Math.min(Number(process.env.MY_ASSETS_ENRICH_CONCURRENCY || 3), 8)
+      Math.min(Number(process.env.MY_ASSETS_ENRICH_CONCURRENCY || 1), 8)
     );
     const enrichGapMs = Math.max(0, Number(process.env.MY_ASSETS_ENRICH_GAP_MS || 40));
 
-    for (let start = 0; start < tokens.length; start += enrichConcurrency) {
-      const slice = tokens.slice(start, start + enrichConcurrency);
-      const batch = await Promise.all(
-        slice.map((tokenId) =>
-          enrichWalletTokenAsset({
-            wallet,
-            tokenId,
-            nftContract,
-            marketContract,
-            listPriceWei,
-            listPriceUsdt,
-            ownerRetries,
-            ownerTimeoutMs,
-          })
-        )
-      );
-      batch.forEach((a) => {
-        if (a) assets.push(a);
+    const enrichOne = (tokenId, retries, timeoutMs) =>
+      enrichWalletTokenAsset({
+        wallet,
+        tokenId,
+        nftContract,
+        marketContract,
+        listPriceWei,
+        listPriceUsdt,
+        ownerRetries: retries,
+        ownerTimeoutMs: timeoutMs,
       });
-      if (enrichGapMs > 0 && start + enrichConcurrency < tokens.length) {
-        await new Promise((r) => setTimeout(r, enrichGapMs));
+
+    const useSequential =
+      String(process.env.MY_ASSETS_ENRICH_SEQUENTIAL || "").toLowerCase() === "true" ||
+      tokens.length <= Math.max(4, Number(process.env.MY_ASSETS_SEQUENTIAL_MAX_TOKENS || 12));
+
+    if (useSequential) {
+      for (const tokenId of tokens) {
+        const a = await enrichOne(tokenId, ownerRetries, ownerTimeoutMs);
+        if (a) assets.push(a);
+        if (enrichGapMs > 0) await new Promise((r) => setTimeout(r, enrichGapMs));
+      }
+    } else {
+      for (let start = 0; start < tokens.length; start += enrichConcurrency) {
+        const slice = tokens.slice(start, start + enrichConcurrency);
+        const batch = await Promise.all(slice.map((tokenId) => enrichOne(tokenId, ownerRetries, ownerTimeoutMs)));
+        batch.forEach((a) => {
+          if (a) assets.push(a);
+        });
+        if (enrichGapMs > 0 && start + enrichConcurrency < tokens.length) {
+          await new Promise((r) => setTimeout(r, enrichGapMs));
+        }
       }
     }
 
+    const missingRetry = Math.max(ownerRetries, Math.min(Number(process.env.MY_ASSETS_MISSING_OWNER_RETRY || 8), 12));
+    const missingTimeout = Math.max(ownerTimeoutMs, Number(process.env.MY_ASSETS_MISSING_OWNER_TIMEOUT_MS || 20000));
+    let assetIds = new Set(assets.map((a) => String(a.tokenId)));
+    for (const tokenId of tokens) {
+      if (assetIds.has(String(tokenId))) continue;
+      const a = await enrichOne(tokenId, missingRetry, missingTimeout);
+      if (a) {
+        assets.push(a);
+        assetIds.add(String(tokenId));
+      }
+      await new Promise((r) => setTimeout(r, enrichGapMs));
+    }
+
+    if (walletNftBalance != null && assetIds.size < walletNftBalance) {
+      if (!Number.isFinite(totalMinted) || totalMinted <= 0) {
+        try {
+          const nftMini = new ethers.Contract(nftAddr, ["function totalMinted() view returns (uint256)"], provider);
+          totalMinted = Number(await readWithRetry(() => nftMini.totalMinted(), 0, 2, 8000));
+        } catch (_) {}
+      }
+    }
+    if (walletNftBalance != null && assetIds.size < walletNftBalance && Number.isFinite(totalMinted) && totalMinted > 0) {
+      try {
+        const chainIdSet = await collectChainOwnedOrListedTokenIds(
+          wallet,
+          provider,
+          nftAddr,
+          marketAddr,
+          totalMinted
+        );
+        for (const tid of chainIdSet) {
+          const n = Number(tid);
+          if (!Number.isFinite(n) || n <= 0 || assetIds.has(String(tid))) continue;
+          tokenIdSet.add(String(tid));
+          try {
+            await User.addOwnedTokenId(wallet, tid);
+          } catch (_) {}
+          const a = await enrichOne(n, missingRetry, missingTimeout);
+          if (a) {
+            assets.push(a);
+            assetIds.add(String(tid));
+          }
+          if (assetIds.size >= walletNftBalance) break;
+          await new Promise((r) => setTimeout(r, enrichGapMs));
+        }
+      } catch (e) {
+        console.warn("my-assets gap-fill chain scan:", e?.message || e);
+      }
+    }
+
+    assets.sort((a, b) => Number(a.tokenId) - Number(b.tokenId));
+
     const complete =
-      walletNftBalance == null || assets.length >= walletNftBalance || !needChainScan;
+      walletNftBalance == null
+        ? assetIds.size >= tokens.length
+        : assetIds.size >= walletNftBalance;
 
     res.json({
       assets,
       complete,
       walletNftBalance: walletNftBalance ?? undefined,
       tokenIdsChecked: tokens.length,
+      tokenIdsFound: assetIds.size,
     });
   } catch (e) {
     console.error("my-assets error:", e?.message || e);

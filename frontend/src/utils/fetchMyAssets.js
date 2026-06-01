@@ -44,7 +44,9 @@ export async function fetchMyAssetsWithRetry(token, _userState, options = {}) {
         lastLen = merged.length;
         onProgress?.(merged, { complete, walletNftBalance });
       }
-      if (complete || poll === maxPolls - 1) {
+      const balanceOk =
+        walletNftBalance == null || merged.length >= walletNftBalance;
+      if ((complete && balanceOk) || poll === maxPolls - 1) {
         return merged;
       }
       await sleep(pollMs);
