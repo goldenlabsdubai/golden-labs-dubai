@@ -54,6 +54,8 @@ const USDT_ABI = [
 const LIST_RESUME_KEY = "gl_mp_list_resume";
 const LIST_RESUME_TTL_MS = 45 * 60 * 1000;
 const LISTINGS_PER_PAGE = 10;
+/** Page 1: only this many rows show Buy Now; rest show lock until a buy advances the window. */
+const MARKETPLACE_PAGE1_BUYABLE_COUNT = 4;
 
 /** Pagination state/logic stays; UI only shows the first page of listings (controls hidden). */
 const HIDE_MARKETPLACE_PAGINATION_UI = true;
@@ -101,6 +103,8 @@ export default function Marketplace() {
   const [listingsLoading, setListingsLoading] = useState(true);
   const [warmCountdown, setWarmCountdown] = useState(MARKETPLACE_CACHE_WARM_COUNTDOWN_SEC);
   const [refreshingListings, setRefreshingListings] = useState(false);
+  /** Page-1 buy window start index; +1 after each successful Buy Now (max 6 → last window is rows 6–9). */
+  const [page1BuyUnlockOffset, setPage1BuyUnlockOffset] = useState(0);
   const [loadingBuy, setLoadingBuy] = useState(null);
   const [buyStep, setBuyStep] = useState(null);
   const [loadingList, setLoadingList] = useState(null);
@@ -351,8 +355,9 @@ export default function Marketplace() {
     }
   };
 
-  const handleBuy = async (tokenId, priceWei, seller = null) => {
+  const handleBuy = async (tokenId, priceWei, seller = null, listingIndex = -1) => {
     if (listingsPage > 1) return;
+    if (listingIndex >= 0 && isListingBuyLocked(listingIndex)) return;
     if (!marketplaceAddressNormalized || !usdtAddressNormalized || !publicClient || !writeContractAsync || !address) {
       setError("Wallet or contracts not ready.");
       return;
@@ -409,6 +414,9 @@ export default function Marketplace() {
       );
       await publicClient.waitForTransactionReceipt({ hash: hashBuy });
       setListings((prev) => prev.filter((l) => String(l.tokenId) !== String(tokenId)));
+      setPage1BuyUnlockOffset((o) =>
+        Math.min(o + 1, LISTINGS_PER_PAGE - MARKETPLACE_PAGE1_BUYABLE_COUNT)
+      );
       if (token) {
         try {
           await fetch(`${API}/marketplace/record-purchase`, {
@@ -622,8 +630,14 @@ export default function Marketplace() {
     }
   };
 
-  /** Only the first page of marketplace listings can be bought; page 2+ show a lock. */
-  const buyLockedOnCurrentPage = listingsPage > 1;
+  /** Page 2+ all locked; page 1 uses a sliding window of 4 Buy Now rows (top 4 first, +1 unlock per buy). */
+  const maxPage1BuyUnlockOffset = LISTINGS_PER_PAGE - MARKETPLACE_PAGE1_BUYABLE_COUNT;
+  const isListingBuyLocked = (indexInDisplay) => {
+    if (listingsPage > 1) return true;
+    if (!HIDE_MARKETPLACE_PAGINATION_UI && listingsPage !== 1) return true;
+    const offset = Math.min(page1BuyUnlockOffset, maxPage1BuyUnlockOffset);
+    return indexInDisplay < offset || indexInDisplay >= offset + MARKETPLACE_PAGE1_BUYABLE_COUNT;
+  };
 
   const showCacheWarmCountdown = sortedListings.length === 0 && warmCountdown > 0;
   const showCacheWarmRefresh = sortedListings.length === 0 && warmCountdown === 0;
@@ -832,8 +846,9 @@ export default function Marketplace() {
           ) : (
             <>
             <div className="profile-hub__grid marketplace-page__grid marketplace-page__grid--grid-5">
-              {displayListings.map((l) => {
+              {displayListings.map((l, listingIndex) => {
                 const isMyListing = currentWallet && (String(l.seller || "").toLowerCase() === currentWallet);
+                const buyLocked = !isMyListing && isListingBuyLocked(listingIndex);
                 return (
                 <div key={l.tokenId} className="profile-hub__nft-card">
                   <div className="profile-hub__nft-card-image-wrap">
@@ -876,13 +891,13 @@ export default function Marketplace() {
                             )}
                           </div>
                         </div>
-                      ) : buyLockedOnCurrentPage ? (
+                      ) : buyLocked ? (
                         <button
                           type="button"
                           className="profile-hub__nft-btn profile-hub__nft-btn--locked"
                           disabled
-                          aria-label="Locked — only page 1 listings can be purchased"
-                          title="Go to page 1 to buy"
+                          aria-label="Locked — buy an available listing above to unlock more"
+                          title="Buy from an unlocked listing to unlock the next slot"
                         >
                           <MarketplaceBuyLockIcon className="profile-hub__nft-lock-icon" />
                         </button>
@@ -890,7 +905,7 @@ export default function Marketplace() {
                         <button
                           type="button"
                           className="profile-hub__nft-btn"
-                          onClick={() => handleBuy(l.tokenId, l.price, l.seller)}
+                          onClick={() => handleBuy(l.tokenId, l.price, l.seller, listingIndex)}
                           disabled={loadingBuy != null}
                         >
                           {loadingBuy === l.tokenId ? (
