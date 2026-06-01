@@ -218,6 +218,30 @@ function listingsApiPollerEnabled() {
   return (process.env.TELEGRAM_LISTINGS_FROM_API || "1").trim() !== "0";
 }
 
+/** How recent a listing must be for API-poller Telegram (catch-up only; indexer sends live Listed). */
+function listedAlertMaxAgeMs() {
+  const raw = (process.env.TELEGRAM_LISTED_ALERT_MAX_AGE_MS ?? "").trim();
+  if (raw === "") return 45 * 60 * 1000;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return Infinity;
+  return n;
+}
+
+function isRecentlyListedForTelegram(listedAtMs) {
+  const maxAge = listedAlertMaxAgeMs();
+  if (maxAge === Infinity) return true;
+  if (!Number.isFinite(listedAtMs) || listedAtMs <= 0) return false;
+  return Date.now() - listedAtMs <= maxAge;
+}
+
+function listedAlertsPerPollMax() {
+  return Math.max(1, Math.min(Number(process.env.TELEGRAM_LISTED_ALERTS_PER_POLL_MAX || 6), 30));
+}
+
+function listedAlertDelayMs() {
+  return Math.max(0, Math.min(Number(process.env.TELEGRAM_LISTED_ALERT_DELAY_MS || 400), 5000));
+}
+
 /**
  * Diff current active marketplace listings against last snapshot; notify for newly appeared tokenIds.
  * First successful poll only seeds the snapshot (no spam). TELEGRAM_LISTINGS_FROM_API=0 disables.
@@ -242,12 +266,18 @@ async function runListingsFromMarketplaceApiOnce() {
   }
 
   const listings = Array.isArray(json?.listings) ? json.listings : [];
+  const warming = json?.warming === true;
+  const rpcFailed = json?.rpcScanFailed === true;
+
   const knownRaw = (await getMetaPg(META_LISTINGS_API)) || {};
   const knownObj =
     knownRaw.knownTokenIds && typeof knownRaw.knownTokenIds === "object" ? knownRaw.knownTokenIds : {};
   const prev = new Set(Object.keys(knownObj));
 
   if (!knownRaw.bootstrapped) {
+    if (listings.length === 0 && (warming || rpcFailed)) {
+      return;
+    }
     const nextKnown = Object.fromEntries(listings.map((l) => [String(l.tokenId), true]));
     await setMetaPg(META_LISTINGS_API, { v: 1, bootstrapped: true, knownTokenIds: nextKnown });
     console.log(
@@ -265,12 +295,11 @@ async function runListingsFromMarketplaceApiOnce() {
     return;
   }
 
-  const nextKnown = {};
-  for (const l of listings) {
-    const tid = l?.tokenId != null ? String(l.tokenId) : "";
-    if (tid) nextKnown[tid] = true;
-  }
+  const nextKnown = Object.fromEntries(
+    listings.map((l) => (l?.tokenId != null ? [String(l.tokenId), true] : [])).filter((x) => x.length === 2)
+  );
 
+  const newcomers = [];
   for (const l of listings) {
     const tid = l?.tokenId != null ? String(l.tokenId) : "";
     if (!tid || prev.has(tid)) continue;
@@ -278,15 +307,38 @@ async function runListingsFromMarketplaceApiOnce() {
     if (!seller.startsWith("0x")) continue;
     const priceWei = l.price != null ? String(l.price) : "0";
     const listedAtMs = Number(l.listedAt);
-    if (!Number.isFinite(listedAtMs) || listedAtMs <= 0) {
-      debugPollerSkip(`listed API token ${tid}`, "no listedAt from API");
+    if (!isRecentlyListedForTelegram(listedAtMs)) {
+      debugPollerSkip(`listed API token ${tid}`, `listedAt=${listedAtMs} (older than alert window)`);
       continue;
     }
-    if (!isPollerEventFresh(listedAtMs)) {
-      debugPollerSkip(`listed API token ${tid}`, `listedAt=${listedAtMs}`);
+    newcomers.push({ tid, seller, priceWei, listedAtMs });
+  }
+
+  newcomers.sort((a, b) => a.listedAtMs - b.listedAtMs);
+
+  const cap = listedAlertsPerPollMax();
+  const delayMs = listedAlertDelayMs();
+  let sent = 0;
+  for (const item of newcomers) {
+    if (sent >= cap) {
+      delete nextKnown[item.tid];
       continue;
     }
-    await notifyActivity("listed", { seller, tokenId: tid, priceWei });
+    await notifyActivity("listed", {
+      seller: item.seller,
+      tokenId: item.tid,
+      priceWei: item.priceWei,
+    });
+    sent++;
+    if (delayMs > 0 && sent < newcomers.length) {
+      await new Promise((r) => setTimeout(r, delayMs));
+    }
+  }
+
+  if (newcomers.length > sent) {
+    console.log(
+      `[telegram] listings API poller: sent ${sent}/${newcomers.length} listed alerts this cycle (cap ${cap}); remainder on next poll`
+    );
   }
 
   await setMetaPg(META_LISTINGS_API, { v: 1, bootstrapped: true, knownTokenIds: nextKnown });

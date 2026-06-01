@@ -4,6 +4,7 @@ import { getMarketplaceAndReservePoolAddress } from "../config/contractsEnv.js";
 import { getSharedMainRpcProvider } from "../config/ethersRpc.js";
 import * as User from "./user.js";
 import * as MetaPg from "./metaPostgres.js";
+import { notifyActivity } from "./telegramNotify.js";
 
 const ABI = [
   "event Sold(uint256 indexed tokenId, address seller, address buyer, uint256 price)",
@@ -275,6 +276,12 @@ async function runMarketplaceActivityIndexerPoll(provider, contract) {
         await upsertListingFromChain(tokenId, { listedAtMs: blockTs[blockNumber] ?? 0 }).catch((e) =>
           console.warn("listings cache upsert:", e?.message || e)
         );
+
+        if (seller && tokenId) {
+          notifyActivity("listed", { seller, tokenId, priceWei }).catch((e) =>
+            console.warn("[telegram] listed alert (indexer):", e?.message || e)
+          );
+        }
       }
     }
     processedUpTo = chunkTo;

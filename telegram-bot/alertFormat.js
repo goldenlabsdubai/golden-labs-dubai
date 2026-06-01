@@ -118,6 +118,12 @@ function poweredByGoldenLabsLine(emoji = "✨") {
   return `${e} <b>Powered by <a href="${escapeHtml(url)}">Golden Labs</a></b>`;
 }
 
+/** First marketplace list / first sale (from backend DB). Mint alerts use kind=mint only. */
+function isFreshNft(fields) {
+  const v = fields?.isFreshNft;
+  return v === true || v === 1 || v === "1" || String(v).toLowerCase() === "true";
+}
+
 /**
  * @param {"user_joined"|"subscription"|"mint"|"listed"|"bought"|"maintenance"|"maintenance_resumed"} kind
  * @param {Record<string, string|null|undefined>} fields
@@ -183,10 +189,15 @@ function formatActivityMessage(kind, fields) {
       const tidRaw = fields.tokenId != null && fields.tokenId !== "" ? String(fields.tokenId) : "";
       const priceLine =
         fields.priceWei != null ? formatUsdtFromWei(String(fields.priceWei)) : "—";
+      const fresh = isFreshNft(fields);
 
-      lines.push("🚨 <b>NEW NFT LISTED</b>");
+      lines.push(fresh ? "🚨 <b>NEW NFT LISTED</b>" : "🚨 <b>NFT LISTED</b>");
       lines.push("");
-      lines.push("🟡 <b>A fresh NFT is now live on Golden Labs marketplace!</b>");
+      lines.push(
+        fresh
+          ? "🟡 <b>A new NFT is now live on Golden Labs marketplace!</b>"
+          : "🟡 <b>An NFT is now live on Golden Labs marketplace!</b>"
+      );
       lines.push("");
       lines.push(`🏪 <b>Seller:</b> ${linkAddress(fields.seller)}`);
       lines.push("");
@@ -208,10 +219,15 @@ function formatActivityMessage(kind, fields) {
       const tidRaw = fields.tokenId != null && fields.tokenId !== "" ? String(fields.tokenId) : "";
       const priceLine =
         fields.priceWei != null ? formatUsdtFromWei(String(fields.priceWei)) : "—";
+      const fresh = isFreshNft(fields);
 
-      lines.push("🔔 <b>NFT Purchase Alert</b>");
+      lines.push(fresh ? "🔔 <b>NEW NFT PURCHASE</b>" : "🔔 <b>NFT Purchase Alert</b>");
       lines.push("");
-      lines.push("🟢 <b>New NFT Successfully Bought!</b>");
+      lines.push(
+        fresh
+          ? "🟢 <b>A new NFT has been purchased on Golden Labs marketplace!</b>"
+          : "🟢 <b>An NFT has been purchased on Golden Labs marketplace!</b>"
+      );
       lines.push("");
       lines.push(`👤 <b>Buyer:</b> ${linkAddress(fields.buyer)}`);
       lines.push(`🏪 <b>Seller:</b> ${linkAddress(fields.seller)}`);

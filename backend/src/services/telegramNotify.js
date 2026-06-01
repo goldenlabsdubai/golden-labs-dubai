@@ -78,6 +78,25 @@ function shouldSendMintAlert(fields) {
   return true;
 }
 
+async function enrichListedOrBoughtFields(kind, fields) {
+  if (!fields || typeof fields !== "object") return fields;
+  if (kind !== "listed" && kind !== "bought") return fields;
+  if (fields.isFreshNft !== undefined && fields.isFreshNft !== null && String(fields.isFreshNft) !== "") {
+    return fields;
+  }
+  const tid = fields.tokenId != null && fields.tokenId !== "" ? String(fields.tokenId) : "";
+  if (!tid) return { ...fields, isFreshNft: "0" };
+  try {
+    const { isFreshNftListing, isFreshNftPurchase } = await import("./nftMarketplaceFreshness.js");
+    const isFresh =
+      kind === "listed" ? await isFreshNftListing(tid) : await isFreshNftPurchase(tid, { txHash: fields.txHash });
+    return { ...fields, isFreshNft: isFresh ? "1" : "0" };
+  } catch (e) {
+    console.warn("[telegram] NFT freshness:", e?.message || e);
+    return { ...fields, isFreshNft: "0" };
+  }
+}
+
 /** Skip duplicate "listed" when both indexer DB row and listings API poller fire for the same listing. */
 const listedAlertDedup = new Map();
 const LISTED_DEDUP_MS = 300_000;
@@ -200,7 +219,13 @@ export async function notifyActivity(kind, fields) {
   if (kind === "maintenance" && !shouldSendMaintenanceAlert(fields)) return;
   if (kind === "maintenance_resumed" && !shouldSendMaintenanceResumedAlert()) return;
   try {
-    await postToTelegramBotBridge({ kind, ...(fields && typeof fields === "object" ? fields : {}) });
+    const payload =
+      kind === "listed" || kind === "bought"
+        ? await enrichListedOrBoughtFields(kind, fields && typeof fields === "object" ? fields : {})
+        : fields && typeof fields === "object"
+          ? fields
+          : {};
+    await postToTelegramBotBridge({ kind, ...payload });
     if ((process.env.TELEGRAM_DEBUG || "").trim() === "1") {
       console.log(`[telegram] forwarded ${kind} → ${base}/alert`);
     }
