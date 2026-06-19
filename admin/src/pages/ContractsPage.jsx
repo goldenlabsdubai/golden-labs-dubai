@@ -23,7 +23,12 @@ const CONTRACTS = {
     ""
   ).trim(),
   referral: (import.meta.env.VITE_REFERRAL_CONTRACT_ADDRESS || "").trim(),
+  usdt: (import.meta.env.VITE_USDT_ADDRESS || "").trim(),
 };
+
+const ERC20_ABI = [
+  { type: "function", name: "balanceOf", stateMutability: "view", inputs: [{ type: "address" }], outputs: [{ type: "uint256" }] },
+];
 
 const SUBSCRIPTION_ABI = [
   { type: "function", name: "subscriptionPrice", stateMutability: "view", inputs: [], outputs: [{ type: "uint256" }] },
@@ -47,6 +52,8 @@ const SUBSCRIPTION_ABI = [
 ];
 
 const REFERRAL_ABI = [
+  { type: "function", name: "owner", stateMutability: "view", inputs: [], outputs: [{ type: "address" }] },
+  { type: "function", name: "usdt", stateMutability: "view", inputs: [], outputs: [{ type: "address" }] },
   { type: "function", name: "referralTotalAmount", stateMutability: "view", inputs: [], outputs: [{ type: "uint256" }] },
   { type: "function", name: "referralWithdrawChunk", stateMutability: "view", inputs: [], outputs: [{ type: "uint256" }] },
   { type: "function", name: "levelAmounts", stateMutability: "view", inputs: [{ type: "uint256" }], outputs: [{ type: "uint256" }] },
@@ -59,6 +66,13 @@ const REFERRAL_ABI = [
     name: "setAllMinDirectReferralRequirements",
     stateMutability: "nonpayable",
     inputs: [{ type: "uint256[10]" }],
+    outputs: [],
+  },
+  {
+    type: "function",
+    name: "withdrawStuckToken",
+    stateMutability: "nonpayable",
+    inputs: [{ type: "address" }, { type: "uint256" }],
     outputs: [],
   },
 ];
@@ -119,6 +133,9 @@ export default function ContractsPage({ connectedWallet }) {
     profitThreshold: "",
     referralTotalAmountOnChain: "",
     referralWithdrawChunkOnChain: "",
+    referralOwner: "",
+    referralUsdtAddress: "",
+    referralUsdtBalance: "",
     levelAmounts: ["", "", "", "", "", "", "", "", "", ""],
     minDirectReferralsOnChain: ["", "", "", "", "", "", "", "", "", ""],
     creatorWallet: "",
@@ -149,6 +166,7 @@ export default function ContractsPage({ connectedWallet }) {
     profitThreshold: "",
     referralTotalAmountOnChain: "",
     referralWithdrawChunk: "",
+    referralStuckWithdrawAmount: "",
     levelAmounts: ["", "", "", "", "", "", "", "", "", ""],
     minDirectReferrals: ["", "", "", "", "", "", "", "", "", ""],
     creatorWallet: "",
@@ -219,6 +237,21 @@ export default function ContractsPage({ connectedWallet }) {
       const levelAmountNums = referralResults.slice(2, 12);
       const minDirectNums = referralResults.slice(12, 22);
 
+      const [referralOwner, referralUsdtOnChain] = await Promise.all([
+        readPublicClient.readContract({ address: CONTRACTS.referral, abi: REFERRAL_ABI, functionName: "owner" }),
+        readPublicClient.readContract({ address: CONTRACTS.referral, abi: REFERRAL_ABI, functionName: "usdt" }),
+      ]);
+      const usdtTokenAddress = isAddress(CONTRACTS.usdt) ? CONTRACTS.usdt : referralUsdtOnChain;
+      let referralUsdtBalanceRaw = 0n;
+      if (isAddress(usdtTokenAddress)) {
+        referralUsdtBalanceRaw = await readPublicClient.readContract({
+          address: usdtTokenAddress,
+          abi: ERC20_ABI,
+          functionName: "balanceOf",
+          args: [CONTRACTS.referral],
+        });
+      }
+
       const [creatorWallet, botAWallet, botBWallet, listPrice, tradingIncomeAmount, referralTotalAmount, creatorAmount, botAAmount, botBAmount, reserveBalance, dynamicMintEnabled, dynamicMintStartThreshold, dynamicMintStopThreshold, mintPrice, maxWalletHoldings, dynamicMintBatchSize] = await Promise.all([
         readPublicClient.readContract({ address: CONTRACTS.marketplace, abi: MARKETPLACE_ABI, functionName: "creatorWallet" }),
         readPublicClient.readContract({ address: CONTRACTS.marketplace, abi: MARKETPLACE_ABI, functionName: "botAWallet" }),
@@ -248,6 +281,9 @@ export default function ContractsPage({ connectedWallet }) {
         profitThreshold: formatUnits(profitThreshold, USDT_DECIMALS),
         referralTotalAmountOnChain: formatUnits(referralTotalAmountOnChain, USDT_DECIMALS),
         referralWithdrawChunkOnChain: formatUnits(referralWithdrawChunkOnChainRaw, USDT_DECIMALS),
+        referralOwner,
+        referralUsdtAddress: usdtTokenAddress,
+        referralUsdtBalance: formatUnits(referralUsdtBalanceRaw, USDT_DECIMALS),
         levelAmounts: levelAmountNums.map((x) => formatUnits(x, USDT_DECIMALS)),
         minDirectReferralsOnChain: minDirectNums.map((x) => String(x)),
         creatorWallet,
@@ -278,6 +314,7 @@ export default function ContractsPage({ connectedWallet }) {
         profitThreshold: nextState.profitThreshold,
         referralTotalAmountOnChain: nextState.referralTotalAmountOnChain,
         referralWithdrawChunk: nextState.referralWithdrawChunkOnChain,
+        referralStuckWithdrawAmount: "",
         levelAmounts: [...nextState.levelAmounts],
         minDirectReferrals: [...nextState.minDirectReferralsOnChain],
         creatorWallet: nextState.creatorWallet,
@@ -662,6 +699,66 @@ export default function ContractsPage({ connectedWallet }) {
           >
             Set L1–L10 min direct requirements
           </button>
+
+          <p className="section__empty" style={{ marginTop: "1.25rem" }}>
+            Referral contract USDT balance: <strong>{state.referralUsdtBalance || "-"}</strong> USDT
+            {state.referralUsdtAddress ? ` (token ${state.referralUsdtAddress})` : ""}
+          </p>
+          <p className="section__empty">
+            <code>withdrawStuckToken</code> sends USDT to the contract <strong>owner()</strong> wallet — not a custom address.
+            Current owner (deployer unless ownership was transferred): <code>{state.referralOwner || "—"}</code>
+          </p>
+          <p className="section__empty">
+            Connect the owner or an on-chain admin wallet. This pulls from the contract&apos;s USDT balance (includes liquidity for user{" "}
+            <code>withdrawEarnings</code> claims — use carefully).
+          </p>
+          <label className="form-field">
+            <span>Referral stuck USDT withdraw amount</span>
+            <input
+              type="text"
+              value={form.referralStuckWithdrawAmount}
+              onChange={(e) => setForm((prev) => ({ ...prev, referralStuckWithdrawAmount: e.target.value }))}
+              placeholder={state.referralUsdtBalance || "0"}
+            />
+          </label>
+          <div className="section__actions">
+            <button
+              type="button"
+              className="btn btn--ghost"
+              disabled={txPending || !state.referralUsdtBalance}
+              onClick={() =>
+                setForm((prev) => ({ ...prev, referralStuckWithdrawAmount: state.referralUsdtBalance || "" }))
+              }
+            >
+              Use full balance
+            </button>
+            <button
+              type="button"
+              className="btn btn--danger"
+              disabled={txPending || !isAddress(state.referralUsdtAddress)}
+              onClick={() => {
+                const token = state.referralUsdtAddress;
+                if (!isAddress(token)) {
+                  setError("USDT token address unavailable (set VITE_USDT_ADDRESS or read from contract)");
+                  return;
+                }
+                const amt = form.referralStuckWithdrawAmount?.trim();
+                if (!amt || Number(amt) <= 0) {
+                  setError("Enter a positive USDT amount");
+                  return;
+                }
+                return runTx({
+                  address: CONTRACTS.referral,
+                  abi: REFERRAL_ABI,
+                  functionName: "withdrawStuckToken",
+                  args: [token, parseUnits(amt, USDT_DECIMALS)],
+                  message: `Referral USDT withdrawn to owner ${state.referralOwner || ""}.`,
+                }).catch((e) => setError(e?.shortMessage || e?.message || "Transaction failed"));
+              }}
+            >
+              Withdraw Referral USDT (→ owner)
+            </button>
+          </div>
         </div>
 
         <div className="contract-card">
